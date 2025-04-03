@@ -8,7 +8,7 @@
   <DefaultLocale>en-US</DefaultLocale>
   <DisplayName DefaultValue="Insert Company Template"/>
   <Description DefaultValue="Pull standard content from SharePoint"/>
-  <IconUrl DefaultValue="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTpNPYBLb6Z4PIJSlr6qXbUy8VZ0w2w4BPPVQ&s"/>
+  <IconUrl DefaultValue="https://jarredksmith.github.io/atg/rocket.png"/>
   <SupportUrl DefaultValue="https://yourdomain.com/support"/>
 
   <Hosts>
