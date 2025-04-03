@@ -15,27 +15,47 @@
       loadTemplates();
     });
 
-    async function loadTemplates() {
-      const list = document.getElementById('templateList');
+async function loadTemplates() {
+  const list = document.getElementById('templateList');
+  const sharepointURL = "https://stacktest.sharepoint.com/sites/TheHomePage/_api/web/GetFolderByServerRelativeUrl('/sites/TheHomePage/Shared Documents/Marketing assets/Branding/Logos')/Files";
 
-      const sharepointURL = "https://stacktest.sharepoint.com/sites/TheHomePage/_api/web/GetFolderByServerRelativeUrl('/sites/TheHomePage/Shared Documents/Marketing assets/Branding/Logos')/Files";
+  try {
+    const response = await fetch(sharepointURL, {
+      headers: {
+        'Accept': 'application/json;odata=verbose'
+      },
+      credentials: 'include'
+    });
 
-
-      const response = await fetch(sharepointURL, {
-        headers: { 'Accept': 'application/json;odata=verbose' },
-        credentials: 'include'
-      });
-
-      const data = await response.json();
-      const files = data.d.results;
-
-      files.forEach(file => {
-        const option = document.createElement('option');
-        option.value = file.ServerRelativeUrl;
-        option.textContent = file.Name;
-        list.appendChild(option);
-      });
+    if (!response.ok) {
+      console.error("Fetch failed:", response.status, response.statusText);
+      list.innerHTML = `<option>Error ${response.status}</option>`;
+      return;
     }
+
+    const data = await response.json();
+    console.log("Fetched data:", data);
+
+    const files = data.d.results;
+
+    if (!files.length) {
+      list.innerHTML = `<option>No files found</option>`;
+      return;
+    }
+
+    files.forEach(file => {
+      const option = document.createElement('option');
+      option.value = file.ServerRelativeUrl;
+      option.textContent = file.Name;
+      list.appendChild(option);
+    });
+
+  } catch (error) {
+    console.error("Error loading templates:", error);
+    list.innerHTML = `<option>Failed to load templates</option>`;
+  }
+}
+
 
     async function insertTemplate() {
       const fileUrl = document.getElementById('templateList').value;
