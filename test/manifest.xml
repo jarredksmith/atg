@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+           xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+           xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides"
+           xsi:type="TaskPaneApp">
+
+  <Id>45b846a3-e210-4ca6-bb03-0a667124b922</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>Your Name</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="Content Block Add-in"/>
+  <Description DefaultValue="Insert predefined containers into your document"/>
+
+  <Hosts>
+    <Host Name="Document" />
+  </Hosts>
+
+  <DefaultSettings>
+    <SourceLocation DefaultValue="https://atg.rf.gd/taskpane.html"/>
+  </DefaultSettings>
+
+  <Permissions>ReadWriteDocument</Permissions>
+
+  <VersionOverrides Version="1.0">
+    <Hosts>
+      <Host xsi:type="Document">
+        <DesktopFormFactor>
+          <Taskpane>
+            <SourceLocation DefaultValue="https://atg.rf.gd/taskpane.html"/>
+            <Title>Insert Blocks</Title>
+            <Width>300</Width>
+          </Taskpane>
+        </DesktopFormFactor>
+      </Host>
+    </Hosts>
+  </VersionOverrides>
+</OfficeApp>
