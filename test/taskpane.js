@@ -46,36 +46,15 @@ function insertEditableProfile() {
   const name = document.getElementById("nameInput").value || "Name";
   const title = document.getElementById("titleInput").value || "Title";
 
-  const ooxml = `
-  <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-    <w:body>
-      <w:tbl>
-        <w:tblPr>
-          <w:tblBorders>
-            <w:top w:val="single" w:sz="8" w:space="0" w:color="000000"/>
-            <w:left w:val="single" w:sz="8" w:space="0" w:color="000000"/>
-            <w:bottom w:val="single" w:sz="8" w:space="0" w:color="000000"/>
-            <w:right w:val="single" w:sz="8" w:space="0" w:color="000000"/>
-            <w:insideH w:val="single" w:sz="8" w:space="0" w:color="000000"/>
-            <w:insideV w:val="single" w:sz="8" w:space="0" w:color="000000"/>
-          </w:tblBorders>
-        </w:tblPr>
-        <w:tr>
-          <w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc>
-          <w:tc><w:p><w:r><w:t>${name}</w:t></w:r></w:p></w:tc>
-        </w:tr>
-        <w:tr>
-          <w:tc><w:p><w:r><w:t>Title</w:t></w:r></w:p></w:tc>
-          <w:tc><w:p><w:r><w:t>${title}</w:t></w:r></w:p></w:tc>
-        </w:tr>
-      </w:tbl>
-      <w:p><w:r><w:t></w:t></w:r></w:p>
-    </w:body>
-  </w:document>
+  const profileHtml = `
+    <div style="border: 1px solid #0078D4; padding: 10px; margin: 10px 0; border-radius: 6px;">
+      <p><strong>Name:</strong> ${name}</p>
+      <p><strong>Title:</strong> ${title}</p>
+    </div>
   `;
 
   Word.run(async (context) => {
-    context.document.body.insertOoxml(ooxml, Word.InsertLocation.end);
+    context.document.body.insertHtml(profileHtml, Word.InsertLocation.end);
     await context.sync();
   });
 }
