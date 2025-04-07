@@ -13,17 +13,18 @@
   <button onclick="insertText()">Insert Pre-written Text</button>
 <button onclick="insertProfileCardFromOOXML()">Insert Profile 1</button>
 <h2>Insert Editable Profile Card</h2>
-<label for="nameInput">Name</label>
-<input type="text" id="nameInput" placeholder="Jane Doe" />
+<label for="profileName">Name</label>
+<input type="text" id="profileName" placeholder="Jane Doe" />
 
-<label for="titleInput">Title</label>
-<input type="text" id="titleInput" placeholder="Environmental Scientist" />
+<label for="profileTitle">Title</label>
+<input type="text" id="profileTitle" placeholder="Environmental Scientist" />
 
-<label>Photo:</label>
-<input type="file" id="photoInput" accept="image/*" />
+<label for="profileBio">Bio</label>
+<textarea id="profileBio" placeholder="Biography goes here..." rows="4"></textarea>
 
-<label for="profileImage">Photo Profile</label>
-<input type="file" id="profileImage" accept="image/*"><br><br>
+<label for="profileImage">Photo</label>
+<input type="file" id="profileImage" accept="image/*" /><br><br>
+
 
 <button onclick="insertEditableProfile2()">Insert Profile</button>
 
