@@ -46,15 +46,24 @@ function insertEditableProfile() {
   const name = document.getElementById("nameInput").value || "Name";
   const title = document.getElementById("titleInput").value || "Title";
 
-  const profileHtml = `
-    <div style="border: 1px solid #0078D4; padding: 10px; margin: 10px 0; border-radius: 6px;">
-      <p><strong>Name:</strong> ${name}</p>
-      <p><strong>Title:</strong> ${title}</p>
-    </div>
-  `;
+  const html =
+    `<p><strong>Name:</strong> ${escapeHtml(name)}</p>` +
+    `<p><strong>Title:</strong> ${escapeHtml(title)}</p>` +
+    `<p><br></p>`;
 
   Word.run(async (context) => {
-    context.document.body.insertHtml(profileHtml, Word.InsertLocation.end);
+    context.document.body.insertHtml(html, Word.InsertLocation.end);
     await context.sync();
   });
 }
+
+// Helper function to escape unsafe HTML characters
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+window.insertEditableProfile = insertEditableProfile;
