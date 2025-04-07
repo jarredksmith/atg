@@ -101,39 +101,56 @@ function escapeHtml(str) {
     .replace(/'/g, "&#039;");
 }
 async function insertEditableProfile2() {
-  const name = document.getElementById("profileName").value || "Name";
-  const title = document.getElementById("profileTitle").value || "Title";
-  const bio = document.getElementById("profileBio").value || "Biography";
-  const imageInput = document.getElementById("profileImage");
+  const name = document.getElementById("nameInput").value || "Name";
+  const title = document.getElementById("titleInput").value || "Title";
+  const bio = document.getElementById("bioInput").value || "Biography";
+  const imageInput = document.getElementById("photoInput");
 
-  let base64Image = '';
+  const reader = new FileReader();
+
+  reader.onload = async function () {
+    const imageDataUrl = reader.result;
+
+    await Word.run(async (context) => {
+      const html = `
+        <div style="background-color: #0072c6; color: white; padding: 20px; display: flex; align-items: center; border-radius: 10px;">
+          <div style="flex: 0 0 150px; display: flex; justify-content: center; align-items: center;">
+            <img src="${imageDataUrl}" alt="Profile Photo" style="width: 120px; height: 120px; border-radius: 50%; border: 2px solid #003f6b;" />
+          </div>
+          <div style="flex: 1; padding-left: 20px;">
+            <h2 style="margin: 0; font-size: 1.5em;">${name}</h2>
+            <p style="margin: 5px 0;"><strong>${title}</strong></p>
+            <p style="margin-top: 10px;">${bio}</p>
+          </div>
+        </div>
+      `;
+
+      context.document.body.insertHtml(html, Word.InsertLocation.end);
+      await context.sync();
+    });
+  };
+
   if (imageInput.files.length > 0) {
-    const file = imageInput.files[0];
-    base64Image = await new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.readAsDataURL(file);
+    reader.readAsDataURL(imageInput.files[0]);
+  } else {
+    // No image uploaded, insert placeholder
+    await Word.run(async (context) => {
+      const html = `
+        <div style="background-color: #0072c6; color: white; padding: 20px; display: flex; align-items: center; border-radius: 10px;">
+          <div style="flex: 0 0 150px; display: flex; justify-content: center; align-items: center;">
+            <div style="width: 120px; height: 120px; border-radius: 50%; background-color: #f0f0f0; border: 2px solid #003f6b;"></div>
+          </div>
+          <div style="flex: 1; padding-left: 20px;">
+            <h2 style="margin: 0; font-size: 1.5em;">${name}</h2>
+            <p style="margin: 5px 0;"><strong>${title}</strong></p>
+            <p style="margin-top: 10px;">${bio}</p>
+          </div>
+        </div>
+      `;
+      context.document.body.insertHtml(html, Word.InsertLocation.end);
+      await context.sync();
     });
   }
-
-  const html = `
-    <div style="background:#0072c6; color:white; padding:24px; border-radius:20px; display:flex; align-items:center; justify-content:space-between;">
-      <div style="flex:1; padding-right:20px;">
-        <h2 contenteditable="true" style="margin:0 0 12px 0;">${name}</h2>
-        <div contenteditable="true" style="margin-bottom:12px;">${title}</div>
-        <div contenteditable="true">${bio}</div>
-      </div>
-      <div style="width:160px; height:160px; background:#f2f2f2; border-radius:50%; overflow:hidden; border:2px solid #003049; flex-shrink:0;">
-        ${base64Image ? `<img src="${base64Image}" style="width:100%; height:100%; object-fit:cover;">` : ""}
-      </div>
-    </div>
-    <p></p>
-  `;
-
-  await Word.run(async (context) => {
-    context.document.body.insertHtml(html, Word.InsertLocation.end);
-    await context.sync();
-  });
 }
 
 window.insertEditableProfile = insertEditableProfile;
