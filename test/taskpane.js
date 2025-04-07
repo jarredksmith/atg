@@ -75,3 +75,167 @@ function insertText() {
     await context.sync();
   });
 }
+function insertBioCard() {
+  Word.run(async (context) => {
+    // Insert a paragraph to ensure we have space
+    const paragraph = context.document.body.insertParagraph("", Word.InsertLocation.end);
+    await context.sync();
+    
+    // Insert a table to control layout (3 rows x 1 column)
+    const table = paragraph.insertTable(4, 1, Word.InsertLocation.after);
+    await context.sync();
+    
+    // Format the table
+    table.width = 320;
+    table.getBorder("All").type = Word.BorderType.single;
+    table.getBorder("All").color = "#CCCCCC";
+    table.style = "Table Grid";
+    table.styleFirstColumn = false;
+    table.styleLastColumn = false;
+    table.styleBandedRows = false;
+    table.styleBandedColumns = false;
+    table.styleLastRow = false;
+    table.styleFirstRow = false;
+    
+    // Get cells for each section
+    const headerCell = table.getCell(0, 0);
+    const nameCell = table.getCell(1, 0);
+    const bioCell = table.getCell(2, 0);
+    const buttonsCell = table.getCell(3, 0);
+    
+    // Format the header/image placeholder cell
+    headerCell.shading.color = "#E9E9E9";
+    headerCell.body.insertParagraph("400 × 150", Word.InsertLocation.start).alignment = Word.Alignment.centered;
+    headerCell.height = 40;
+    
+    // Format the name/title cell
+    nameCell.shading.color = "#1A1A1A";
+    const nameRange = nameCell.body.insertParagraph("Alex Morgan", Word.InsertLocation.start).font;
+    nameRange.color = "white";
+    nameRange.bold = true;
+    nameRange.size = 16;
+    
+    const titleRange = nameCell.body.insertParagraph("UX Designer", Word.InsertLocation.end).font;
+    titleRange.color = "#4A9BFF";
+    titleRange.size = 12;
+    
+    // Format the bio cell
+    bioCell.shading.color = "#1A1A1A";
+    const bioRange = bioCell.body.insertParagraph(
+      "Passionate about creating intuitive and beautiful user experiences. Specializing in responsive web design and user-centered design principles.",
+      Word.InsertLocation.start
+    ).font;
+    bioRange.color = "#CCCCCC";
+    bioRange.size = 11;
+    
+    // Add buttons in the last cell using a nested table
+    const buttonsTable = buttonsCell.body.insertTable(2, 1, Word.InsertLocation.start);
+    buttonsTable.width = 316;
+    buttonsTable.getBorder("All").type = Word.BorderType.single;
+    buttonsTable.getBorder("All").color = "#CCCCCC";
+    
+    // Format the FOLLOW button
+    const followCell = buttonsTable.getCell(0, 0);
+    followCell.getBorder("Bottom").type = Word.BorderType.single;
+    followCell.getBorder("Bottom").color = "#CCCCCC";
+    const followText = followCell.body.insertParagraph("FOLLOW", Word.InsertLocation.start);
+    followText.alignment = Word.Alignment.centered;
+    followText.font.color = "#4A9BFF";
+    followText.font.size = 11;
+    
+    // Format the MORE INFO button
+    const moreInfoCell = buttonsTable.getCell(1, 0);
+    moreInfoCell.shading.color = "#333333";
+    const moreInfoText = moreInfoCell.body.insertParagraph("MORE INFO", Word.InsertLocation.start);
+    moreInfoText.alignment = Word.Alignment.centered;
+    moreInfoText.font.color = "white";
+    moreInfoText.font.size = 11;
+    
+    await context.sync();
+  }).catch(function(error) {
+    console.log("Error: " + error);
+  });
+}
+
+// Alternative approach using shapes and textboxes
+function insertBioCardWithShapes() {
+  Word.run(async (context) => {
+    // Insert a paragraph to ensure we have space
+    const paragraph = context.document.body.insertParagraph("", Word.InsertLocation.end);
+    await context.sync();
+    
+    // Create the main container
+    const contentControl = paragraph.insertContentControl();
+    contentControl.tag = "ProfileCard";
+    contentControl.title = "Profile Card";
+    contentControl.appearance = Word.ContentControlAppearance.boundingBox;
+    contentControl.color = "#CCCCCC";
+    contentControl.width = 320;
+    await context.sync();
+    
+    // Add the placeholder section
+    const placeholderPara = contentControl.insertParagraph("", Word.InsertLocation.start);
+    placeholderPara.insertText("400 × 150", Word.InsertLocation.start);
+    placeholderPara.alignment = Word.Alignment.centered;
+    placeholderPara.shading.color = "#E9E9E9";
+    await context.sync();
+    
+    // Add the name section with dark background
+    const namePara = contentControl.insertParagraph("", Word.InsertLocation.end);
+    namePara.shading.color = "#1A1A1A";
+    const nameText = namePara.insertText("Alex Morgan", Word.InsertLocation.start);
+    nameText.font.color = "white";
+    nameText.font.bold = true;
+    nameText.font.size = 16;
+    await context.sync();
+    
+    // Add the title section
+    const titlePara = contentControl.insertParagraph("", Word.InsertLocation.end);
+    titlePara.shading.color = "#1A1A1A";
+    const titleText = titlePara.insertText("UX Designer", Word.InsertLocation.start);
+    titleText.font.color = "#4A9BFF";
+    titleText.font.size = 12;
+    await context.sync();
+    
+    // Add the bio section
+    const bioPara = contentControl.insertParagraph("", Word.InsertLocation.end);
+    bioPara.shading.color = "#1A1A1A";
+    const bioText = bioPara.insertText(
+      "Passionate about creating intuitive and beautiful user experiences. Specializing in responsive web design and user-centered design principles.",
+      Word.InsertLocation.start
+    );
+    bioText.font.color = "#CCCCCC";
+    bioText.font.size = 11;
+    await context.sync();
+    
+    // Add the FOLLOW button
+    const followPara = contentControl.insertParagraph("", Word.InsertLocation.end);
+    const followCC = followPara.insertContentControl();
+    followCC.title = "Follow Button";
+    followCC.tag = "FollowButton";
+    followCC.appearance = Word.ContentControlAppearance.boundingBox;
+    followCC.color = "#4A9BFF";
+    followCC.insertText("FOLLOW", Word.InsertLocation.start);
+    followPara.alignment = Word.Alignment.centered;
+    followPara.font.color = "#4A9BFF";
+    followPara.font.size = 11;
+    await context.sync();
+    
+    // Add the MORE INFO button
+    const moreInfoPara = contentControl.insertParagraph("", Word.InsertLocation.end);
+    const moreInfoCC = moreInfoPara.insertContentControl();
+    moreInfoCC.title = "More Info Button";
+    moreInfoCC.tag = "MoreInfoButton";
+    moreInfoCC.appearance = Word.ContentControlAppearance.boundingBox;
+    moreInfoCC.color = "#333333";
+    moreInfoCC.insertText("MORE INFO", Word.InsertLocation.start);
+    moreInfoPara.alignment = Word.Alignment.centered;
+    moreInfoPara.font.color = "white";
+    moreInfoPara.font.size = 11;
+    moreInfoPara.shading.color = "#333333";
+    
+    await context.sync();
+  }).catch(function(error) {
+    console.log("Error: " + error);
+  });
+}
