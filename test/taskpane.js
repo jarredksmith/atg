@@ -156,7 +156,133 @@ function insertBioCard() {
     console.log("Error: " + error);
   });
 }
+function insertProfileCardFromOOXML() {
+  Word.run(async (context) => {
+    // Insert a clean profile card using OOXML
+    // This OOXML is simplified from your extracted document
+    context.document.body.insertOoxml(`
+      <pkg:package xmlns:pkg="http://schemas.microsoft.com/office/2006/xmlPackage">
+        <pkg:part pkg:name="/word/document.xml" pkg:contentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml">
+          <pkg:xmlData>
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:body>
+                <!-- Blue rectangle background -->
+                <w:p>
+                  <w:r>
+                    <w:rPr><w:noProof/></w:rPr>
+                    <w:drawing>
+                      <wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="114300" distR="114300" simplePos="0" relativeHeight="251659264" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
+                        <wp:simplePos x="0" y="0"/>
+                        <wp:positionH relativeFrom="column"><wp:posOffset>-228600</wp:posOffset></wp:positionH>
+                        <wp:positionV relativeFrom="paragraph"><wp:posOffset>-234043</wp:posOffset></wp:positionV>
+                        <wp:extent cx="5426075" cy="2198370"/>
+                        <wp:wrapNone/>
+                        <wp:docPr id="1" name="Rectangle"/>
+                        <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                          <a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+                            <wps:wsp xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+                              <wps:spPr>
+                                <a:xfrm><a:off x="0" y="0"/><a:ext cx="5426075" cy="2198370"/></a:xfrm>
+                                <a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 7506"/></a:avLst></a:prstGeom>
+                                <a:solidFill><a:srgbClr val="156082"/></a:solidFill>
+                              </wps:spPr>
+                            </wps:wsp>
+                          </a:graphicData>
+                        </a:graphic>
+                      </wp:anchor>
+                    </w:drawing>
+                  </w:r>
+                </w:p>
+                
+                <!-- Text content box -->
+                <w:p>
+                  <w:r>
+                    <w:rPr><w:noProof/></w:rPr>
+                    <w:drawing>
+                      <wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="45720" distB="45720" distL="114300" distR="114300" simplePos="0" relativeHeight="251661312" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
+                        <wp:simplePos x="0" y="0"/>
+                        <wp:positionH relativeFrom="column"><wp:posOffset>2722</wp:posOffset></wp:positionH>
+                        <wp:positionV relativeFrom="paragraph"><wp:posOffset>363</wp:posOffset></wp:positionV>
+                        <wp:extent cx="2360930" cy="1404620"/>
+                        <wp:wrapSquare wrapText="bothSides"/>
+                        <wp:docPr id="2" name="Text Box"/>
+                        <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+                          <a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+                            <wps:wsp xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+                              <wps:cNvSpPr txBox="1"/>
+                              <wps:spPr>
+                                <a:xfrm><a:off x="0" y="0"/><a:ext cx="2360930" cy="1404620"/></a:xfrm>
+                                <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+                                <a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill>
+                              </wps:spPr>
+                              <wps:txbx>
+                                <w:txbxContent>
+                                  <w:p>
+                                    <w:pPr><w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:pPr>
+                                    <w:r><w:rPr><w:b/><w:sz w:val="32"/></w:rPr><w:t>Alex Morgan</w:t></w:r>
+                                  </w:p>
+                                  <w:p>
+                                    <w:r><w:rPr><w:color w:val="4a9bff"/></w:rPr><w:t>UX Designer</w:t></w:r>
+                                  </w:p>
+                                  <w:p>
+                                    <w:r><w:t>Passionate about creating intuitive and beautiful user experiences. Specializing in responsive web design and user-centered design principles.</w:t></w:r>
+                                  </w:p>
+                                </w:txbxContent>
+                              </wps:txbx>
+                            </wps:wsp>
+                          </a:graphicData>
+                        </a:graphic>
+                      </wp:anchor>
+                    </w:drawing>
+                  </w:r>
+                </w:p>
 
+                <!-- FOLLOW button -->
+                <w:p>
+                  <w:pPr>
+                    <w:jc w:val="center"/>
+                    <w:pBdr>
+                      <w:top w:val="single" w:sz="4" w:space="1" w:color="4a9bff"/>
+                      <w:left w:val="single" w:sz="4" w:space="4" w:color="4a9bff"/>
+                      <w:bottom w:val="single" w:sz="4" w:space="1" w:color="4a9bff"/>
+                      <w:right w:val="single" w:sz="4" w:space="4" w:color="4a9bff"/>
+                    </w:pBdr>
+                  </w:pPr>
+                  <w:r>
+                    <w:rPr><w:color w:val="4a9bff"/></w:rPr>
+                    <w:t>FOLLOW</w:t>
+                  </w:r>
+                </w:p>
+
+                <!-- MORE INFO button -->
+                <w:p>
+                  <w:pPr>
+                    <w:jc w:val="center"/>
+                    <w:pBdr>
+                      <w:top w:val="single" w:sz="4" w:space="1" w:color="333333"/>
+                      <w:left w:val="single" w:sz="4" w:space="4" w:color="333333"/>
+                      <w:bottom w:val="single" w:sz="4" w:space="1" w:color="333333"/>
+                      <w:right w:val="single" w:sz="4" w:space="4" w:color="333333"/>
+                    </w:pBdr>
+                    <w:shd w:val="clear" w:color="auto" w:fill="333333"/>
+                  </w:pPr>
+                  <w:r>
+                    <w:rPr><w:color w:val="FFFFFF"/></w:rPr>
+                    <w:t>MORE INFO</w:t>
+                  </w:r>
+                </w:p>
+              </w:body>
+            </w:document>
+          </pkg:xmlData>
+        </pkg:part>
+      </pkg:package>
+    `, Word.InsertLocation.end);
+
+    await context.sync();
+  }).catch(function(error) {
+    console.log("Error: " + JSON.stringify(error));
+  });
+}
 // Alternative approach using shapes and textboxes
 function insertBioCardWithShapes() {
   Word.run(async (context) => {
