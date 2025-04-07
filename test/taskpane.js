@@ -100,5 +100,40 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }
+async function insertEditableProfile2() {
+  const name = document.getElementById("profileName").value || "Name";
+  const title = document.getElementById("profileTitle").value || "Title";
+  const bio = document.getElementById("profileBio").value || "Biography";
+  const imageInput = document.getElementById("profileImage");
+
+  let base64Image = '';
+  if (imageInput.files.length > 0) {
+    const file = imageInput.files[0];
+    base64Image = await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  const html = `
+    <div style="background:#0072c6; color:white; padding:24px; border-radius:20px; display:flex; align-items:center; justify-content:space-between;">
+      <div style="flex:1; padding-right:20px;">
+        <h2 contenteditable="true" style="margin:0 0 12px 0;">${name}</h2>
+        <div contenteditable="true" style="margin-bottom:12px;">${title}</div>
+        <div contenteditable="true">${bio}</div>
+      </div>
+      <div style="width:160px; height:160px; background:#f2f2f2; border-radius:50%; overflow:hidden; border:2px solid #003049; flex-shrink:0;">
+        ${base64Image ? `<img src="${base64Image}" style="width:100%; height:100%; object-fit:cover;">` : ""}
+      </div>
+    </div>
+    <p></p>
+  `;
+
+  await Word.run(async (context) => {
+    context.document.body.insertHtml(html, Word.InsertLocation.end);
+    await context.sync();
+  });
+}
 
 window.insertEditableProfile = insertEditableProfile;
