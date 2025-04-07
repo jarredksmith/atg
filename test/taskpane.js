@@ -101,10 +101,11 @@ function escapeHtml(str) {
     .replace(/'/g, "&#039;");
 }
 async function insertEditableProfile2() {
-  const name = document.getElementById("nameInput").value || "Name";
-  const title = document.getElementById("titleInput").value || "Title";
-  const bio = document.getElementById("bioInput").value || "Biography";
-  const imageInput = document.getElementById("photoInput");
+const name = document.getElementById("profileName").value;
+const title = document.getElementById("profileTitle").value;
+const bio = document.getElementById("bioInput").value;
+const imageInput = document.getElementById("profileImage");
+
 
   const reader = new FileReader();
 
