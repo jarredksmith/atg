@@ -115,23 +115,23 @@ async function insertEditableProfile2() {
   const imageInput = document.getElementById("profileImage");
 
   const buildHtml = (imageHtml) => `
-    <div class="profile-card">
-      <div>
-        ${imageHtml}
-      </div>
-      <div class="profile-text">
-        <h2>${name}</h2>
-        <p class="title">${title}</p>
-        <p>${bio}</p>
-      </div>
+  <div style="background-color: #0072c6; color: white; padding: 32px 24px; display: flex; align-items: center; border-radius: 16px; gap: 24px; margin: 20px 0; font-family: 'Segoe UI', Calibri, sans-serif;">
+    <div style="flex: 0 0 120px;">${imageHtml}</div>
+    <div style="flex: 1;">
+      <h2 style="margin: 0; font-size: 24px; font-weight: 700;">${name}</h2>
+      <p style="margin: 5px 0 10px; font-size: 18px; font-weight: 500;">${title}</p>
+      <p style="font-size: 16px; line-height: 1.5;">${bio}</p>
     </div>
-  `;
+  </div>
+`;
+
 
   if (imageInput.files.length > 0) {
     const reader = new FileReader();
     reader.onload = async function () {
       const imageDataUrl = reader.result;
-      const imageHtml = `<img src="${imageDataUrl}" alt="Profile Photo" class="profile-image" />`;
+     const imageHtml = `<img src="${imageDataUrl}" alt="Profile Photo" style="width: 120px; height: 120px; border-radius: 50%; border: 1px solid #ccc; object-fit: cover; background-color: #f0f0f0;" />`;
+
 
       await Word.run(async (context) => {
         context.document.body.insertHtml(buildHtml(imageHtml), Word.InsertLocation.end);
@@ -140,7 +140,8 @@ async function insertEditableProfile2() {
     };
     reader.readAsDataURL(imageInput.files[0]);
   } else {
-    const placeholder = `<div class="profile-image"></div>`;
+    const placeholder = `<div style="width: 120px; height: 120px; border-radius: 50%; background-color: #f0f0f0; border: 1px solid #ccc;"></div>`;
+
     await Word.run(async (context) => {
       context.document.body.insertHtml(buildHtml(placeholder), Word.InsertLocation.end);
       await context.sync();
