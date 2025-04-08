@@ -101,56 +101,79 @@ function escapeHtml(str) {
     .replace(/'/g, "&#039;");
 }
 async function insertEditableProfile2() {
-const name = document.getElementById("profileName").value;
-const title = document.getElementById("profileTitle").value;
-const bio = document.getElementById("bioInput").value;
-const imageInput = document.getElementById("profileImage");
+  const name = document.getElementById("profileName").value;
+  const title = document.getElementById("profileTitle").value;
+  const bio = document.getElementById("bioInput").value;
+  const imageInput = document.getElementById("profileImage");
 
+  const buildHtml = (imageHtml) => `
+    <div class="profile-card">
+      <div>
+        ${imageHtml}
+      </div>
+      <div class="profile-text">
+        <h2>${name}</h2>
+        <p class="title">${title}</p>
+        <p>${bio}</p>
+      </div>
+    </div>
+  `;
 
-  const reader = new FileReader();
+  if (imageInput.files.length > 0) {
+    const reader = new FileReader();
+    reader.onload = async function () {
+      const imageDataUrl = reader.result;
+      const imageHtml = `<img src="${imageDataUrl}" alt="Profile Photo" class="profile-image" />`;
 
-  reader.onload = async function () {
-    const imageDataUrl = reader.result;
-
+      await Word.run(async (context) => {
+        context.document.body.insertHtml(buildHtml(imageHtml), Word.InsertLocation.end);
+        await context.sync();
+      });
+    };
+    reader.readAsDataURL(imageInput.files[0]);
+  } else {
+    const placeholder = `<div class="profile-image"></div>`;
     await Word.run(async (context) => {
-      const html = `
-        <div style="background-color: #0072c6; color: white; padding: 20px; display: flex; align-items: center; border-radius: 10px;">
-          <div style="flex: 0 0 150px; display: flex; justify-content: center; align-items: center;">
-            <img src="${imageDataUrl}" alt="Profile Photo" style="width: 120px; height: 120px; border-radius: 50%; border: 2px solid #003f6b;" />
-          </div>
-          <div style="flex: 1; padding-left: 20px;">
-            <h2 style="margin: 0; font-size: 1.5em;">${name}</h2>
-            <p style="margin: 5px 0;"><strong>${title}</strong></p>
-            <p style="margin-top: 10px;">${bio}</p>
-          </div>
-        </div>
-      `;
-
-      context.document.body.insertHtml(html, Word.InsertLocation.end);
+      context.document.body.insertHtml(buildHtml(placeholder), Word.InsertLocation.end);
       await context.sync();
     });
+  }
+}
+
+["profileName", "profileTitle", "bioInput", "profileImage"].forEach((id) => {
+  document.getElementById(id).addEventListener("input", renderPreview);
+});
+document.getElementById("profileImage").addEventListener("change", renderPreview);
+
+function renderPreview() {
+  const name = document.getElementById("profileName").value || "Name";
+  const title = document.getElementById("profileTitle").value || "Title";
+  const bio = document.getElementById("bioInput").value || "Biography goes here...";
+  const imageInput = document.getElementById("profileImage");
+  const previewContainer = document.getElementById("previewCard");
+
+  const render = (imageTag) => {
+    previewContainer.innerHTML = `
+      <div class="profile-card">
+        <div>${imageTag}</div>
+        <div class="profile-text">
+          <h2>${name}</h2>
+          <p class="title">${title}</p>
+          <p>${bio}</p>
+        </div>
+      </div>
+    `;
   };
 
   if (imageInput.files.length > 0) {
+    const reader = new FileReader();
+    reader.onload = function () {
+      const img = `<img src="${reader.result}" class="profile-image" />`;
+      render(img);
+    };
     reader.readAsDataURL(imageInput.files[0]);
   } else {
-    // No image uploaded, insert placeholder
-    await Word.run(async (context) => {
-      const html = `
-        <div style="background-color: #0072c6; color: white; padding: 20px; display: flex; align-items: center; border-radius: 10px;">
-          <div style="flex: 0 0 150px; display: flex; justify-content: center; align-items: center;">
-            <div style="width: 120px; height: 120px; border-radius: 50%; background-color: #f0f0f0; border: 2px solid #003f6b;"></div>
-          </div>
-          <div style="flex: 1; padding-left: 20px;">
-            <h2 style="margin: 0; font-size: 1.5em;">${name}</h2>
-            <p style="margin: 5px 0;"><strong>${title}</strong></p>
-            <p style="margin-top: 10px;">${bio}</p>
-          </div>
-        </div>
-      `;
-      context.document.body.insertHtml(html, Word.InsertLocation.end);
-      await context.sync();
-    });
+    render(`<div class="profile-image"></div>`);
   }
 }
 

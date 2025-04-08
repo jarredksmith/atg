@@ -9,3 +9,39 @@ button {
   font-size: 16px;
   cursor: pointer;
 }
+.profile-card {
+  background-color: #0072c6;
+  color: white;
+  padding: 32px 24px;
+  display: flex;
+  align-items: center;
+  border-radius: 16px;
+  gap: 24px;
+  margin: 20px 0;
+  font-family: "Segoe UI", Calibri, sans-serif;
+}
+
+.profile-image {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  border: 1px solid #ccc;
+  object-fit: cover;
+  background-color: #f0f0f0;
+}
+
+.profile-text h2 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.profile-text p {
+  margin: 5px 0 10px;
+  font-size: 16px;
+  line-height: 1.5;
+}
+.profile-text p.title {
+  font-size: 18px;
+  font-weight: 500;
+}
