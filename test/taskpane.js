@@ -1,5 +1,13 @@
 Office.onReady(() => {
-  // Office is ready
+ 
+  const ids = ["profileName", "profileTitle", "bioInput", "profileImage"];
+  ids.forEach((id) => {
+    const element = document.getElementById(id);
+    if (element) {
+      const eventType = id === "profileImage" ? "change" : "input";
+      element.addEventListener(eventType, renderPreview);
+    }
+  });
 });
 
 function insertCard() {
@@ -140,9 +148,7 @@ async function insertEditableProfile2() {
   }
 }
 
-["profileName", "profileTitle", "bioInput", "profileImage"].forEach((id) => {
-  document.getElementById(id).addEventListener("input", renderPreview);
-});
+
 document.getElementById("profileImage").addEventListener("change", renderPreview);
 
 function renderPreview() {
