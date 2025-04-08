@@ -85,7 +85,15 @@ async function insertEditableProfile2() {
         ctx.fillRect(0, 0, size, size);
         ctx.drawImage(img, 0, 0, size, size);
         const compressedDataUrl = canvas.toDataURL("image/jpeg", 0.8);
-        const imageHtml = `<img src="${compressedDataUrl}" alt="Profile Photo" style="width: 120px; height: 120px; border-radius: 50%; border: 1px solid #ccc; object-fit: cover; background-color: #f0f0f0;" />`;
+        const staticImageUrl = "https://images.squarespace-cdn.com/content/v1/631ba8eed2196a6795698665/3690ca61-6a9d-4c93-a2a5-83a5f2aa1648/2022-08-16-Trinet-0540-Martinez-Juan.jpg"; // replace with your hosted image
+
+        const imageHtml = `
+          <img src="${staticImageUrl}" alt="Profile Photo"
+               style="width: 120px; height: 120px; border-radius: 50%;
+                      border: 1px solid #ccc; object-fit: cover; background-color: #f0f0f0;" />
+        `;
+
+       // const imageHtml = `<img src="${compressedDataUrl}" alt="Profile Photo" style="width: 120px; height: 120px; border-radius: 50%; border: 1px solid #ccc; object-fit: cover; background-color: #f0f0f0;" />`;
 
         await Word.run(async (context) => {
           context.document.body.insertHtml(buildHtml(imageHtml), Word.InsertLocation.end);
