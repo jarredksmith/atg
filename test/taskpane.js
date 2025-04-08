@@ -93,18 +93,14 @@ async function insertEditableProfile2() {
       const base64Image = cropped.split(",")[1];
 
       await Word.run(async (context) => {
-        const paragraph = context.document.body.insertParagraph("", Word.InsertLocation.end);
-        paragraph.select();
-        const range = paragraph.getRange("Start");
         const shape = context.document.shapes.addImage(base64Image);
         shape.width = 120;
         shape.height = 120;
-        shape.left = 0;
-        shape.top = 0;
 
-        const textRange = range.insertHtml(
-          `
-          <div style="background-color: #0072c6; color: white; padding: 32px 24px; display: flex; align-items: center; border-radius: 16px; gap: 24px; font-family: 'Segoe UI', Calibri, sans-serif;">
+        await context.sync();
+
+        const html = `
+          <div style="background-color: #0072c6; color: white; padding: 32px 24px; display: flex; align-items: center; border-radius: 16px; gap: 24px; margin-top: 10px; font-family: 'Segoe UI', Calibri, sans-serif;">
             <div style="width: 120px; height: 120px;"></div>
             <div style="flex: 1;">
               <h2 style="margin: 0; font-size: 24px; font-weight: 700;">${name}</h2>
@@ -112,9 +108,8 @@ async function insertEditableProfile2() {
               <p style="font-size: 16px; line-height: 1.5;">${bio}</p>
             </div>
           </div>
-          `,
-          Word.InsertLocation.replace
-        );
+        `;
+        context.document.body.insertHtml(html, Word.InsertLocation.end);
         await context.sync();
       });
     };
