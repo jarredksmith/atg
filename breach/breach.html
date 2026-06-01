@@ -6841,6 +6841,18 @@ function surfaceTopAt(x, z){
     const dh = _downRay.intersectObjects(dynamicProps, true);
     for(const h of dh){ if(h.point.y > top) top = h.point.y; }
   }
+  // Safety net: if the downward ray slips through a prop (open/awkward model top, thin faces, etc.) the
+  // player would sink through it. Fall back to the bounding-box top of any UPRIGHT prop whose footprint
+  // covers (x,z). Tilted props are skipped so their sloped raycast surface (ramps) is preserved, and
+  // rounded/pointed primitives keep the ray so you don't stand on an invisible box above them.
+  for(const c of colliders){
+    const b = c.userData && c.userData.box; if(!b) continue;
+    const src = c.userData.src;
+    if(src==='sphere' || src==='cone') continue;            // curved/pointed top -> trust the ray
+    const r = c.rotation;
+    if(r && (Math.abs(r.x)>0.05 || Math.abs(r.z)>0.05)) continue;   // tilted (ramp) -> trust the ray
+    if(x>=b.min.x && x<=b.max.x && z>=b.min.z && z<=b.max.z && b.max.y>top) top = b.max.y;
+  }
   return top;
 }
 // Surface height of one specific prop directly under (x,z) — used to tell "standing on it" from
@@ -6969,12 +6981,16 @@ function loop(){
   { const kd = Math.max(0, 1 - 6*dt); player.extVel.x *= kd; player.extVel.z *= kd; }   // knockback fades
 
   // apply vertical movement
+  const prevY = player.pos.y;
   player.pos.y += player.vel.y*dt;
-  // head-bump: stop at the underside of an overhead prop instead of clipping through it
+  // head-bump: stop at the underside of an overhead prop instead of clipping through it. Only triggers
+  // when the head actually crosses the underside this frame, so it can never yank the player downward.
   if(player.vel.y > 0){
     const HEAD = PLAYER_HEIGHT - EYE;   // head sits this far above the eye
     const ceil = ceilingAt(player.pos.x, player.pos.z, player.pos.y - EYE);
-    if(player.pos.y + HEAD > ceil){ player.pos.y = ceil - HEAD; player.vel.y = 0; }   // bonk
+    if(ceil < Infinity && prevY + HEAD <= ceil && player.pos.y + HEAD > ceil){
+      player.pos.y = ceil - HEAD; player.vel.y = 0;   // bonk
+    }
   }
 
   // determine the surface under us and land on it
