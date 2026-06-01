@@ -6481,7 +6481,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 8 · 2026-06-01';
+const BUILD_VERSION = 'build 9 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -6653,6 +6653,23 @@ function createBodyFor(obj){
 // exact oriented collider matching their rotation — so a tilted static box is a real tilted ramp for
 // dynamic props, not a fat upright bounding box. Walls / models / the station fall back to a world-AABB
 // box (fine for upright geometry; a trimesh would be needed for an arbitrary tilted model).
+// Build a Rapier trimesh collider descriptor from a model's actual triangles, in world space.
+function trimeshDescFor(o){
+  o.updateMatrixWorld(true);
+  const verts = [], indices = []; let base = 0; const tv = new THREE.Vector3();
+  o.traverse(m=>{
+    if(!m.isMesh || m.visible===false || !m.geometry) return;
+    const pos = m.geometry.attributes && m.geometry.attributes.position; if(!pos || !pos.count) return;
+    m.updateWorldMatrix(true, false);
+    for(let i=0;i<pos.count;i++){ tv.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld); verts.push(tv.x, tv.y, tv.z); }
+    const idx = m.geometry.index;
+    if(idx){ for(let i=0;i<idx.count;i++) indices.push(base + idx.getX(i)); }
+    else { for(let i=0;i<pos.count;i++) indices.push(base + i); }
+    base += pos.count;
+  });
+  if(verts.length < 9 || indices.length < 3) return null;
+  return RAPIER.ColliderDesc.trimesh(new Float32Array(verts), new Uint32Array(indices));
+}
 function addStaticColliderFor(o){
   if(!physWorld || !o) return;
   if(o.userData && isShapePrimitive(o.userData.src)){
@@ -6665,6 +6682,13 @@ function addStaticColliderFor(o){
       colliderDescFor(info).setTranslation(info.off.x, info.off.y, info.off.z).setFriction(0.9).setRestitution(0.1), rb);
     return;
   }
+  // non-primitive model: a trimesh of the real triangles so sloped/stepped surfaces (ramps, stairs) are
+  // true physics geometry that dynamic props roll down — not a fat upright box they sit on top of.
+  try{
+    const tri = trimeshDescFor(o);
+    if(tri){ const rb = physWorld.createRigidBody(RAPIER.RigidBodyDesc.fixed()); physWorld.createCollider(tri.setFriction(0.9).setRestitution(0.1), rb); return; }
+  }catch(e){ console.warn('[BREACH] trimesh collider failed, falling back to box:', e && e.message); }
+  // fallback: world-AABB cuboid (degenerate/empty geometry)
   if(!o.userData.box){ o.updateMatrixWorld(true); o.userData.box = new THREE.Box3().setFromObject(o, true); }
   o.userData.box.getSize(_psize); o.userData.box.getCenter(_pcenter);
   if(_psize.x<1e-3 || _psize.y<1e-3 || _psize.z<1e-3) return;
