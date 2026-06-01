@@ -5173,13 +5173,19 @@ function loadGLTFCached(url, cb, errcb){
   if(!THREE.GLTFLoader){ errcb && errcb(new Error('GLTFLoader unavailable')); return; }
   new THREE.GLTFLoader().load(proxied(url), (gltf)=>{ gltfCache[url]=gltf; cb(gltf); }, undefined, errcb);   // cache by original url; fetch via proxy if cross-origin
 }
-function finalizeProp(obj, src, t, gltf, slot, animMode, mat){
+// Stable per-prop network id for live multiplayer prop sync. Prefix namespaces by peer so ids never
+// collide across machines: 's' at startup/single-player, 'h' once hosting, 'c<id>' once joined.
+let netIdPrefix = 's';
+let nextNid = 1;
+function genNid(){ return netIdPrefix + '-' + (nextNid++); }
+function finalizeProp(obj, src, t, gltf, slot, animMode, mat, nid){
   obj.position.set(t[0], t[1], t[2]);
   obj.rotation.set(t[3], t[4], t[5]);
   if(t.length >= 9) obj.scale.set(t[6], t[7], t[8]);   // non-uniform (e.g. cover crates)
   else obj.scale.setScalar(t[6]);
   obj.traverse(o=>{ if(o.isMesh){ o.castShadow = true; o.receiveShadow = true; } });
   obj.userData.src = src;
+  obj.userData.nid = nid || genNid();   // assign once; load/net paths pass an existing id to keep peers aligned
   obj.userData.animMode = (animMode === 'trigger') ? 'trigger' : 'loop';
   scene.add(obj);
   refreshPropCollider(obj);
@@ -5198,14 +5204,14 @@ let physWorld = null;
 let physAccum = 0;
 // Spawn one scene object from a descriptor; onReady(obj) fires once it's in the world.
 // mat (optional) = { col, tex, texRepeat:[u,v], emit:{c,i} } for primitive material settings.
-function spawnProp(src, t, onReady, slot, animMode, mat, onError){
+function spawnProp(src, t, onReady, slot, animMode, mat, onError, nid){
   if(isPrimitive(src)){
-    const obj = finalizeProp(PRIMITIVE_BUILDERS[src](), src, t, null, slot, animMode, mat);
+    const obj = finalizeProp(PRIMITIVE_BUILDERS[src](), src, t, null, slot, animMode, mat, nid);
     if(onReady) onReady(obj);
     return;
   }
   loadGLTFCached(src,
-    (gltf)=>{ const obj = finalizeProp(gltf.scene.clone(true), src, t, gltf, slot, animMode, mat); if(onReady) onReady(obj); },
+    (gltf)=>{ const obj = finalizeProp(gltf.scene.clone(true), src, t, gltf, slot, animMode, mat, nid); if(onReady) onReady(obj); },
     (err)=>{ console.warn('Prop load failed for', src, '-', err && err.message); if(onError) onError(err); }
   );
 }
@@ -5221,7 +5227,7 @@ function removeProp(idx){
 function loadHostedProps(){
   const list = (savedLevel && Array.isArray(savedLevel.props)) ? savedLevel.props : SCENE_PROPS;
   propModels.length = list.length;   // reserve slots so async GLB loads can't clobber later push-spawned props
-  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ if(p.dyn){ setPropDynamic(obj, true); if(p.mass!=null) obj.userData.mass=p.mass; } if(p.att) obj.userData.attribution=p.att; }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null)));   // slot=i preserves order
+  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ if(p.dyn){ setPropDynamic(obj, true); if(p.mass!=null) obj.userData.mass=p.mass; } if(p.att) obj.userData.attribution=p.att; }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));   // slot=i preserves order
 }
 loadHostedProps();
 
@@ -5625,6 +5631,7 @@ const NET = {
   coinMeshes:{},       // client only: coinId  -> mesh
   deadChests:{},       // client only: chestId -> true, suppresses a crate we just bought until the host's snapshot drops it
   pendingLevel:null,   // client: host level data, applied at spawn
+  sentProps:new Map(), // live prop sync: nid -> last transform tuple peers have been told about
 };
 // duel-only local state
 let duelDead = false, duelRespawnTimer = 0, duelInvuln = 0, lastDamagedBy = null;
@@ -5716,6 +5723,7 @@ function showDuelResult(winnerId){
 // ---- apply a host-built level on a joining client (props + lights), through the real spawn path ----
 function loadLevelFromNet(level){
   if(!level) return;
+  NET.sentProps.clear();   // rebuild the "what peers already have" baseline from the host's level
   // clear current props
   for(let i=propModels.length-1;i>=0;i--){ if(propModels[i]) removeProp(i); }
   propModels.length = 0;
@@ -5724,7 +5732,7 @@ function loadLevelFromNet(level){
   // rebuild from the host's data
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ if(p.dyn){ setPropDynamic(obj, true); if(p.mass!=null) obj.userData.mass=p.mass; }  if(p.att) obj.userData.attribution=p.att; }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null)));
+    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ if(p.dyn){ setPropDynamic(obj, true); if(p.mass!=null) obj.userData.mass=p.mass; }  if(p.att) obj.userData.attribution=p.att; if(obj.userData.nid && !obj.userData.phys) NET.sentProps.set(obj.userData.nid, propTuple(obj)); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));
   }
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
 }
@@ -5797,6 +5805,56 @@ function serializeWorld(){
 function dynamicById(id){ for(const o of dynamicProps){ if(o.userData.phys && o.userData.phys.id===id) return o; } return null; }
 function broadcastWorld(){ const w=serializeWorld(); for(const id in NET.conns){ try{ NET.conns[id].send(w); }catch(e){} } }
 
+// ---- live prop sync: add / move / delete of STATIC props across an online session ----
+// A reconciler diffs the local prop set against NET.sentProps (what peers already know) and emits
+// the difference. Host broadcasts to all clients; a client sends to the host, which applies and
+// relays to the other clients. Dynamic (physics) props are excluded — they ride the world snapshot.
+function netSendProp(msg){
+  if(NET.mode==='host'){ for(const id in NET.conns){ try{ NET.conns[id].send(msg); }catch(e){} } }
+  else if(NET.mode==='client' && NET.conn && NET.conn.open){ try{ NET.conn.send(msg); }catch(e){} }
+}
+function relayProp(msg, exceptId){ for(const id in NET.conns){ if(+id===exceptId) continue; try{ NET.conns[id].send(msg); }catch(e){} } }
+function seedPropSync(){ NET.sentProps.clear(); for(const o of propModels){ if(o && !o.userData.phys && o.userData.nid) NET.sentProps.set(o.userData.nid, propTuple(o)); } }
+let propSyncTimer = 0;
+function reconcileProps(dt){
+  if(NET.mode==='off') return;
+  propSyncTimer -= dt; if(propSyncTimer > 0) return; propSyncTimer = 0.08;
+  const cur = new Map();
+  for(const o of propModels){ if(!o || o.userData.phys) continue; const nid=o.userData.nid; if(!nid) continue; cur.set(nid, o); }
+  for(const [nid,o] of cur){
+    const t = propTuple(o), prev = NET.sentProps.get(nid);
+    if(!prev){ NET.sentProps.set(nid, t); netSendProp({ t:'pAdd', d:propEntry(o) }); }            // new prop
+    else if(!tupleEq(prev, t)){ NET.sentProps.set(nid, t); netSendProp({ t:'pMov', nid, x:t }); }   // moved/rotated/scaled
+  }
+  for(const nid of Array.from(NET.sentProps.keys())){ if(!cur.has(nid)){ NET.sentProps.delete(nid); netSendProp({ t:'pDel', nid }); } }   // removed
+}
+function netApplyAddProp(d){
+  if(!d || !d.nid || d.dyn || propByNid(d.nid)) return false;   // skip dupes + dynamic
+  NET.sentProps.set(d.nid, (d.t||[]).slice());                  // claim immediately so our reconciler won't echo it
+  spawnProp(d.src, d.t, (obj)=>{ if(d.att) obj.userData.attribution=d.att; netFixSelection(); }, undefined, d.anim, d.mat||null, undefined, d.nid);
+  return true;
+}
+function netApplyDelProp(nid){
+  NET.sentProps.delete(nid);
+  const i = propIndexByNid(nid); if(i<0) return false;
+  removeProp(i); netFixSelection(); return true;
+}
+function netApplyMovProp(nid, x){
+  const o = propByNid(nid); if(!o || !x) return false;
+  o.position.set(x[0],x[1],x[2]); o.rotation.set(x[3],x[4],x[5]); o.scale.set(x[6],x[7],x[8]);
+  refreshPropCollider(o); NET.sentProps.set(nid, x.slice());
+  if(editorOpen && editorActive==='props' && editorTargets.props.obj()===o && !gizmoDrag){ syncPropStateFromObj(); updateFieldDisplays(); }
+  return true;
+}
+// Keep the local selection/indices valid after a remote add/delete reshuffles propModels.
+function netFixSelection(){
+  if(!editorOpen || editorActive!=='props') return;
+  selProps = selProps.filter(o=>propModels.indexOf(o)>=0);
+  const primary = selProps[0];
+  editorTargets.props.idx = primary ? propModels.indexOf(primary) : Math.max(0, Math.min(editorTargets.props.idx, propModels.length-1));
+  if(!gizmoDrag && typeof renderEditorFields==='function') renderEditorFields();
+}
+
 // ---- client: apply a world snapshot ----
 function applyWorld(msg){
   if(msg.wv!=null){ wave=msg.wv; const wn=document.getElementById('waveNum'); if(wn) wn.textContent='WAVE '+wave; }
@@ -5856,6 +5914,7 @@ function netTick(dt){
     }
   }
   netInterpolate(dt);
+  reconcileProps(dt);   // emit any local prop add/move/delete to peers
 }
 
 // ---- message handlers ----
@@ -5869,11 +5928,15 @@ function handleClientMsg(conn, msg){
   else if(msg.t==='push'){ const o=dynamicById(msg.id); if(o) pushDynamic(o, new THREE.Vector3(msg.dir[0],msg.dir[1],msg.dir[2]), msg.s||6, msg.pt?{x:msg.pt[0],y:msg.pt[1],z:msg.pt[2]}:null); }   // a client shot a dynamic prop
   else if(msg.t==='buyChest'){ const ci=chests.findIndex(c=>c.id===msg.id); if(ci>=0){ scene.remove(chests[ci].mesh); chests.splice(ci,1); } }   // a client bought a crate -> remove it for everyone
   else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'anim', i:msg.i}); }catch(e){} } } }   // play + relay to other clients
+  else if(msg.t==='pAdd'){ if(netApplyAddProp(msg.d)) relayProp({t:'pAdd', d:msg.d}, id); }       // a client added a prop -> mirror + relay
+  else if(msg.t==='pDel'){ if(netApplyDelProp(msg.nid)) relayProp({t:'pDel', nid:msg.nid}, id); } // a client deleted a prop
+  else if(msg.t==='pMov'){ if(netApplyMovProp(msg.nid, msg.x)) relayProp({t:'pMov', nid:msg.nid, x:msg.x}, id); } // a client moved a prop
 }
 function handleHostMsg(msg){
   if(msg.t==='welcome'){
     if(NET.joined) return; NET.joined=true;
     NET.myId=msg.id;
+    netIdPrefix='c'+msg.id;   // props this client adds get unique 'c<id>-' ids
     if(msg.mode) NET.gameMode=msg.mode;
     if(msg.killTarget!=null) NET.killTarget=msg.killTarget;
     if(msg.level) NET.pendingLevel=msg.level;
@@ -5887,6 +5950,9 @@ function handleHostMsg(msg){
   else if(msg.t==='score'){ NET.duelScore=msg.s; duelHUD(); }
   else if(msg.t==='duelOver'){ showDuelResult(msg.w); }
   else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o); }   // a trigger animation fired somewhere
+  else if(msg.t==='pAdd'){ netApplyAddProp(msg.d); }    // host/other player added a prop
+  else if(msg.t==='pDel'){ netApplyDelProp(msg.nid); }  // a prop was deleted
+  else if(msg.t==='pMov'){ netApplyMovProp(msg.nid, msg.x); }   // a prop was moved/rotated/scaled
 }
 
 // ---- connection lifecycle ----
@@ -5895,9 +5961,11 @@ function netReset(){
   for(const id in NET.enemyMeshes){ scene.remove(NET.enemyMeshes[id].mesh); }
   for(const id in NET.coinMeshes){ scene.remove(NET.coinMeshes[id]); }
   NET.enemyMeshes={}; NET.coinMeshes={};
+  NET.sentProps.clear();
 }
 function hostStart(code, mode, killTarget){
   NET.mode='host'; NET.myId=0; NET.roomCode=code; NET.nextId=1;
+  netIdPrefix='h'; seedPropSync();   // new props the host adds get 'h-' ids; existing props are already known to joiners via the welcome level
   NET.gameMode = mode || 'coop';
   if(killTarget!=null) NET.killTarget = killTarget;
   NET.duelScore = {0:0};
@@ -6347,7 +6415,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 4 · 2026-06-01';
+const BUILD_VERSION = 'build 5 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7526,6 +7594,21 @@ function propMaterialDesc(o){
   if(o.userData.emit) m.emit = { c:o.userData.emit.c, i:o.userData.emit.i };
   return Object.keys(m).length ? m : null;
 }
+// One prop's serialized descriptor (used by both level save and live prop sync). Carries the network id.
+function propEntry(o){
+  const e={ src:o.userData.src||PROP_MODEL_URL, t:[ (o.userData.physHome?o.userData.physHome.x:o.position.x), (o.userData.physHome?o.userData.physHome.y:o.position.y), (o.userData.physHome?o.userData.physHome.z:o.position.z), o.rotation.x,o.rotation.y,o.rotation.z,o.scale.x,o.scale.y,o.scale.z] };
+  if(o.userData.animMode==='trigger') e.anim='trigger';
+  if(o.userData.phys){ e.dyn=true; if(o.userData.mass!=null) e.mass=o.userData.mass; }
+  const m=propMaterialDesc(o); if(m) e.mat=m;
+  if(o.userData.attribution) e.att=o.userData.attribution;
+  if(o.userData.nid) e.nid=o.userData.nid;
+  return e;
+}
+// live transform tuple + helpers for prop sync
+function propTuple(o){ return [o.position.x,o.position.y,o.position.z, o.rotation.x,o.rotation.y,o.rotation.z, o.scale.x,o.scale.y,o.scale.z]; }
+function tupleEq(a,b){ if(!a||!b) return false; for(let i=0;i<9;i++){ if(Math.abs(a[i]-b[i])>1e-4) return false; } return true; }
+function propByNid(nid){ for(const o of propModels){ if(o && o.userData.nid===nid) return o; } return null; }
+function propIndexByNid(nid){ for(let i=0;i<propModels.length;i++){ const o=propModels[i]; if(o && o.userData.nid===nid) return i; } return -1; }
 function serializeLevel(){
   const lightHex = g=>{ const L=g.userData.light; return (Math.round(L.color.r*255)<<16)|(Math.round(L.color.g*255)<<8)|Math.round(L.color.b*255); };
   return {
@@ -7535,7 +7618,7 @@ function serializeLevel(){
     station: { url: stationModelUrl, state: Object.assign({}, editorTargets.station.state) },
     world:   Object.assign({}, worldCfg),
     chest:   { url: chestModelUrl, scale: chestModelScale },
-    props:   propModels.filter(Boolean).map(o=>{ const e={ src:o.userData.src||PROP_MODEL_URL, t:[ (o.userData.physHome?o.userData.physHome.x:o.position.x), (o.userData.physHome?o.userData.physHome.y:o.position.y), (o.userData.physHome?o.userData.physHome.z:o.position.z), o.rotation.x,o.rotation.y,o.rotation.z,o.scale.x,o.scale.y,o.scale.z] }; if(o.userData.animMode==='trigger') e.anim='trigger'; if(o.userData.phys){ e.dyn=true; if(o.userData.mass!=null) e.mass=o.userData.mass; } const m=propMaterialDesc(o); if(m) e.mat=m; if(o.userData.attribution) e.att=o.userData.attribution; return e; }),
+    props:   propModels.filter(Boolean).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
   };
 }
@@ -7564,7 +7647,7 @@ function restoreLevel(level){
   propModels.length = 0;
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ if(p.dyn){ setPropDynamic(obj, true); if(p.mass!=null) obj.userData.mass=p.mass; }  if(p.att) obj.userData.attribution=p.att; }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null)));
+    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ if(p.dyn){ setPropDynamic(obj, true); if(p.mass!=null) obj.userData.mass=p.mass; }  if(p.att) obj.userData.attribution=p.att; }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));
   }
   // lights
   for(let i=lightModels.length-1;i>=0;i--) removeLight(i);
