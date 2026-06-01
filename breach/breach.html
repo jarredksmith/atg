@@ -5758,7 +5758,7 @@ function loadLevelFromNet(level){
   // rebuild from the host's data
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ if(p.dyn){ setPropDynamic(obj, true); if(p.mass!=null) obj.userData.mass=p.mass; }  if(p.att) obj.userData.attribution=p.att; if(obj.userData.nid && !obj.userData.phys) NET.sentProps.set(obj.userData.nid, propTuple(obj)); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));
+    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ if(p.dyn){ setPropDynamic(obj, true); if(p.mass!=null) obj.userData.mass=p.mass; }  if(p.att) obj.userData.attribution=p.att; if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));
   }
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
 }
@@ -5823,7 +5823,7 @@ function serializeWorld(){
   const E=enemies.map(e=>({ id:e.id, p:[e.mesh.position.x,e.mesh.position.y,e.mesh.position.z] }));
   const C=coins.map(c=>({ id:c.id, p:[c.mesh.position.x,c.mesh.position.z] }));
   // dynamic physics props (position + orientation) so clients see them roll
-  const D = dynamicProps.length ? dynamicProps.map(o=>({ id:o.userData.phys.id, p:[o.position.x,o.position.y,o.position.z], q:[o.quaternion.x,o.quaternion.y,o.quaternion.z,o.quaternion.w] })) : undefined;
+  const D = dynamicProps.length ? dynamicProps.filter(o=>o.userData.nid).map(o=>({ id:o.userData.nid, p:[o.position.x,o.position.y,o.position.z], q:[o.quaternion.x,o.quaternion.y,o.quaternion.z,o.quaternion.w] })) : undefined;
   // loot crates (id, position, item ids) so clients see + can open the same crates
   const K = chests.length ? chests.map(ch=>({ id:ch.id, p:[ch.pos.x,ch.pos.z], it:ch.items.map(i=>i.id) })) : undefined;
   return { t:'world', P, E, C, D, K, wv:wave };
@@ -5840,24 +5840,31 @@ function netSendProp(msg){
   else if(NET.mode==='client' && NET.conn && NET.conn.open){ try{ NET.conn.send(msg); }catch(e){} }
 }
 function relayProp(msg, exceptId){ for(const id in NET.conns){ if(+id===exceptId) continue; try{ NET.conns[id].send(msg); }catch(e){} } }
-function seedPropSync(){ NET.sentProps.clear(); for(const o of propModels){ if(o && !o.userData.phys && o.userData.nid) NET.sentProps.set(o.userData.nid, propTuple(o)); } }
+function seedPropSync(){ NET.sentProps.clear(); for(const o of propModels){ if(o && o.userData.nid) NET.sentProps.set(o.userData.nid, o.userData.phys ? 'dyn' : propTuple(o)); } }
 let propSyncTimer = 0;
 function reconcileProps(dt){
   if(NET.mode==='off') return;
   propSyncTimer -= dt; if(propSyncTimer > 0) return; propSyncTimer = 0.08;
   const cur = new Map();
-  for(const o of propModels){ if(!o || o.userData.phys) continue; const nid=o.userData.nid; if(!nid) continue; cur.set(nid, o); }
+  for(const o of propModels){ if(!o) continue; const nid=o.userData.nid; if(!nid) continue; cur.set(nid, o); }
   for(const [nid,o] of cur){
-    const t = propTuple(o), prev = NET.sentProps.get(nid);
-    if(!prev){ NET.sentProps.set(nid, t); netSendProp({ t:'pAdd', d:propEntry(o) }); }            // new prop
-    else if(!tupleEq(prev, t)){ NET.sentProps.set(nid, t); netSendProp({ t:'pMov', nid, x:t }); }   // moved/rotated/scaled
+    const dyn = !!o.userData.phys;                      // dynamic props: existence synced here, motion via the host's D snapshot
+    const prev = NET.sentProps.get(nid);
+    if(prev===undefined){ NET.sentProps.set(nid, dyn?'dyn':propTuple(o)); netSendProp({ t:'pAdd', d:propEntry(o) }); }
+    else if(dyn && prev!=='dyn'){ NET.sentProps.set(nid,'dyn'); netSendProp({ t:'pDel', nid }); netSendProp({ t:'pAdd', d:propEntry(o) }); }       // became dynamic -> re-create as dynamic
+    else if(!dyn && prev==='dyn'){ const t=propTuple(o); NET.sentProps.set(nid,t); netSendProp({ t:'pDel', nid }); netSendProp({ t:'pAdd', d:propEntry(o) }); }   // became static
+    else if(!dyn){ const t=propTuple(o); if(!tupleEq(prev,t)){ NET.sentProps.set(nid,t); netSendProp({ t:'pMov', nid, x:t }); } }   // static edit
   }
   for(const nid of Array.from(NET.sentProps.keys())){ if(!cur.has(nid)){ NET.sentProps.delete(nid); netSendProp({ t:'pDel', nid }); } }   // removed
 }
 function netApplyAddProp(d){
-  if(!d || !d.nid || d.dyn || propByNid(d.nid)) return false;   // skip dupes + dynamic
-  NET.sentProps.set(d.nid, (d.t||[]).slice());                  // claim immediately so our reconciler won't echo it
-  spawnProp(d.src, d.t, (obj)=>{ if(d.att) obj.userData.attribution=d.att; netFixSelection(); }, undefined, d.anim, d.mat||null, undefined, d.nid);
+  if(!d || !d.nid || propByNid(d.nid)) return false;            // skip dupes
+  NET.sentProps.set(d.nid, d.dyn ? 'dyn' : (d.t||[]).slice());  // claim immediately so our reconciler won't echo it
+  spawnProp(d.src, d.t, (obj)=>{
+    if(d.att) obj.userData.attribution=d.att;
+    if(d.dyn){ setPropDynamic(obj, true); if(d.mass!=null) obj.userData.mass=d.mass; }   // host simulates; clients interpolate it from the D snapshot
+    netFixSelection();
+  }, undefined, d.anim, d.mat||null, undefined, d.nid);
   return true;
 }
 function netApplyDelProp(nid){
@@ -5897,7 +5904,7 @@ function applyWorld(msg){
   for(const id in NET.coinMeshes){ if(!cs.has(+id)){ scene.remove(NET.coinMeshes[id]); delete NET.coinMeshes[id]; } }
   const ec=document.getElementById('enemyCount'); if(ec) ec.textContent='HOSTILES: '+msg.E.length;
   // dynamic physics props: clients place them where the host says (set targets for smoothing)
-  if(msg.D){ for(const d of msg.D){ const o=dynamicById(d.id); if(o){ o.userData._netTarget = d.p; o.quaternion.set(d.q[0],d.q[1],d.q[2],d.q[3]); } } }
+  if(msg.D){ for(const d of msg.D){ const o=propByNid(d.id); if(o){ o.userData._netTarget = d.p; o.quaternion.set(d.q[0],d.q[1],d.q[2],d.q[3]); } } }
   // loot crates: clients mirror the host's crate list (so proximity + opening + buying all work)
   if(NET.mode==='client'){
     const K = msg.K || [];
@@ -5951,7 +5958,7 @@ function handleClientMsg(conn, msg){
   else if(msg.t==='name'){ const rp=ensureRemotePlayer(id, msg.n); rp.name=msg.n; if(rp.mesh.userData.label){ rp.mesh.remove(rp.mesh.userData.label); const l=makeNameSprite(msg.n); l.position.y=2.5; rp.mesh.add(l); rp.mesh.userData.label=l; } }
   else if(msg.t==='pvpHit'){ applyPvpDamage(msg.d, msg.from); }       // a client shot the host
   else if(msg.t==='died'){ registerDuelKill(msg.by, id); }            // a client died; credit the killer
-  else if(msg.t==='push'){ const o=dynamicById(msg.id); if(o) pushDynamic(o, new THREE.Vector3(msg.dir[0],msg.dir[1],msg.dir[2]), msg.s||6, msg.pt?{x:msg.pt[0],y:msg.pt[1],z:msg.pt[2]}:null); }   // a client shot a dynamic prop
+  else if(msg.t==='push'){ const o=propByNid(msg.nid); if(o) pushDynamic(o, new THREE.Vector3(msg.dir[0],msg.dir[1],msg.dir[2]), msg.s||6, msg.pt?{x:msg.pt[0],y:msg.pt[1],z:msg.pt[2]}:null); }   // a client shot a dynamic prop
   else if(msg.t==='buyChest'){ const ci=chests.findIndex(c=>c.id===msg.id); if(ci>=0){ scene.remove(chests[ci].mesh); chests.splice(ci,1); } }   // a client bought a crate -> remove it for everyone
   else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'anim', i:msg.i}); }catch(e){} } } }   // play + relay to other clients
   else if(msg.t==='pAdd'){ if(netApplyAddProp(msg.d)) relayProp({t:'pAdd', d:msg.d}, id); }       // a client added a prop -> mirror + relay
@@ -6481,7 +6488,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 9 · 2026-06-01';
+const BUILD_VERSION = 'build 11 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -6913,7 +6920,7 @@ function shoot(){
         const dir = raycaster.ray.direction.clone().normalize();
         const power = 6 + w.dmg*0.04;
         const hp = hit.point;
-        if(clientMode){ if(NET.conn) try{ NET.conn.send({t:'push', id:dprop.userData.phys.id, dir:[dir.x,dir.y,dir.z], s:power, pt:[hp.x,hp.y,hp.z]}); }catch(e){} }
+        if(clientMode){ if(NET.conn) try{ NET.conn.send({t:'push', nid:dprop.userData.nid, dir:[dir.x,dir.y,dir.z], s:power, pt:[hp.x,hp.y,hp.z]}); }catch(e){} }
         else pushDynamic(dprop, dir, power, hp);
         spark(hit.point, 0xffd166); if(p===0){ showHitmarker(); SFX.hit(); }
         tracer(muzzleWorld, endPoint);
@@ -7118,20 +7125,22 @@ function groundHeightAt(x, z, feetY){
 // you can't clip into a model just because a ray happened to hit a low internal surface.
 function clearAt(x, z, feetY){
   const R = player.radius;
-  // Topmost surface at this column (the safety net returns the box top if the ray slips through). If it's
-  // within a step of the feet, the column ABOVE it is clear by definition (a downward ray hits the highest
-  // point first), so it's walkable: floor, low step, ramp, or a stair tread — this climbs a staircase even
-  // when it is one solid mesh, which a pure bounding-box test cannot.
+  // Where the player would stand at this column. Anything filling the body band is a wall — UNLESS that
+  // collider's own surface at the contact edge is within a step (a ramp/stairs base you can walk onto).
+  // That edge test is what lets you walk straight onto a sloped model from the ground, instead of being
+  // fenced a body-radius away by its axis-aligned bounding box (which spans the model's full height).
   const surf = surfaceTopAt(x, z);
-  if(surf > -Infinity && surf <= feetY + STEP + 1e-4) return true;
-  // Otherwise something rises above step height here. Block only if it fills the body band (a wall); an
-  // obstacle entirely above the head is walk-under clearance.
-  const bandLo = feetY + STEP, bandHi = feetY + PLAYER_HEIGHT;
+  const standY = (surf > -Infinity && surf <= feetY + STEP + 1e-4) ? Math.max(0, surf) : feetY;
+  const bandLo = standY + STEP, bandHi = standY + PLAYER_HEIGHT;
   for(const c of colliders){
     const bs = (c.userData && (c.userData.boxes || (c.userData.box && [c.userData.box]))); if(!bs) continue;
     for(const b of bs){
       if(x < b.min.x - R || x > b.max.x + R || z < b.min.z - R || z > b.max.z + R) continue;   // outside this part's footprint
-      if(b.min.y < bandHi && b.max.y > bandLo) return false;   // solid geometry occupies the body band -> a wall
+      if(!(b.min.y < bandHi && b.max.y > bandLo + 1e-4)) continue;                              // not in the body band (e.g. overhead -> walk under)
+      const cx = Math.max(b.min.x, Math.min(x, b.max.x)), cz = Math.max(b.min.z, Math.min(z, b.max.z));
+      const es = propSurfaceAt(c, cx, cz);                                                       // this collider's surface nearest the player
+      if(es > -Infinity && es <= feetY + STEP + 1e-4) continue;                                  // steppable edge (ramp/stairs base) -> walk on, not a wall
+      return false;                                                                              // a genuine wall
     }
   }
   return true;
@@ -7169,13 +7178,16 @@ function moveHorizontal(x, z, dx, dz, feetY){
   const R = player.radius;
   const stuck = insideSolid(x, z, feetY);   // already embedded -> let the player walk out instead of freezing
   let nx = x, nz = z;
+  // Probe the destination CENTER — clearAt expands obstacles by the body radius internally. Probing a
+  // point R ahead (as before) read the slope a body-radius up a ramp as too tall to step onto, which
+  // fenced you off the ramp until you jumped on.
   if(dx !== 0){
-    const probeX = x + dx + Math.sign(dx)*R;
-    if(stuck || clearAt(probeX, z, feetY)) nx = x + dx;
+    const destX = x + dx;
+    if(stuck || clearAt(destX, z, feetY)) nx = destX;
   }
   if(dz !== 0){
-    const probeZ = z + dz + Math.sign(dz)*R;
-    if(stuck || clearAt(nx, probeZ, feetY)) nz = z + dz;
+    const destZ = z + dz;
+    if(stuck || clearAt(nx, destZ, feetY)) nz = destZ;
   }
   player.pos.x = nx; player.pos.z = nz;
   const lim = ARENA - 1.5;
