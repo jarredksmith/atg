@@ -5165,6 +5165,12 @@ function finalizeProp(obj, src, t, gltf, slot, animMode, mat){
   if(mat && isShapePrimitive(src)) applyStoredMaterial(obj, mat);   // color / texture / emissive
   return obj;
 }
+// Physics state (declared here, before spawnProp, because restoring a saved/synced dynamic prop calls
+// setPropDynamic during the initial scene build — which runs above the Rapier physics section).
+const dynamicProps = [];   // prop meshes flagged dynamic (userData.phys = { id, body })
+let nextDynId = 1;
+let physWorld = null;
+let physAccum = 0;
 // Spawn one scene object from a descriptor; onReady(obj) fires once it's in the world.
 // mat (optional) = { col, tex, texRepeat:[u,v], emit:{c,i} } for primitive material settings.
 function spawnProp(src, t, onReady, slot, animMode, mat){
@@ -5254,6 +5260,7 @@ for(const L of ((savedLevel && Array.isArray(savedLevel.lights)) ? savedLevel.li
 const player = {
   pos: new THREE.Vector3(0,1.7,0),
   vel: new THREE.Vector3(),
+  extVel: new THREE.Vector3(),   // external knockback from physics props (decays); separate from input vel
   onGround: true,
   hp: 100, maxHp: 100,
   radius: 0.8,
@@ -5281,6 +5288,13 @@ addEventListener('keydown', e=>{
   if(editorOpen && e.shiftKey && e.code==='KeyD' && !e.repeat){
     duplicateSelected();
     keys['KeyD']=false;   // don't let the held D also strafe the player
+    e.preventDefault();
+    return;
+  }
+  if(editorOpen && (e.code==='Digit1'||e.code==='Digit2'||e.code==='Digit3')){
+    // 1/2/3 switch the transform gizmo: Move / Rotate / Scale (Scale n/a for lights)
+    const m = e.code==='Digit1' ? 'translate' : (e.code==='Digit2' ? 'rotate' : 'scale');
+    if(!(m==='scale' && editorActive==='lights')){ gizmoMode = m; if(typeof updateGizmo==='function') updateGizmo(); if(typeof renderEditorFields==='function') renderEditorFields(); }
     e.preventDefault();
     return;
   }
@@ -6311,10 +6325,9 @@ addEventListener('contextmenu', e=>{ if(gameOn) e.preventDefault(); });
 // ====================================================================================
 const RAPIER  = window.RAPIER || null;
 const PHYS_OK = !!RAPIER;
-const dynamicProps = [];   // prop meshes flagged dynamic (userData.phys = { id, body })
-let nextDynId = 1;
-let physWorld = null;
-let physAccum = 0;
+// NOTE: dynamicProps / nextDynId / physWorld / physAccum are declared earlier (just above spawnProp)
+// because the initial scene build can call setPropDynamic on a saved/synced dynamic prop before this
+// point — declaring them here would put them in the temporal dead zone at that moment.
 const PHYS_DT = 1/60;          // fixed simulation step
 const PHYS_MAX_SUBSTEPS = 5;
 const _pcenter = new THREE.Vector3(), _psize = new THREE.Vector3(), _poff = new THREE.Vector3(), _piq = new THREE.Quaternion();
@@ -6356,6 +6369,12 @@ function createBodyFor(obj){
       .setRotation({ x:q.x, y:q.y, z:q.z, w:q.w })
       .setLinearDamping(0.2).setAngularDamping(0.45).setCcdEnabled(true));
   const info = propShapeInfo(obj);
+  // footprint used for player<->prop collision: horizontal radius + total height (origin is the base)
+  let fr, fh;
+  if(info.kind==='ball'){ fr=info.r; fh=2*info.r; }
+  else if(info.kind==='cylinder' || info.kind==='cone'){ fr=info.r; fh=2*info.hh; }
+  else { fr=Math.max(info.hx, info.hz); fh=2*info.hy; }
+  obj.userData.physInfo = { radius:fr, height:fh };
   const cd = colliderDescFor(info)
     .setTranslation(info.off.x, info.off.y, info.off.z)
     .setRestitution(0.3).setFriction(0.85)
@@ -6447,6 +6466,43 @@ function resetDynamicProps(){
     if(obj.userData.physHomeQ) obj.quaternion.copy(obj.userData.physHomeQ); else obj.quaternion.identity();
   }
   buildPhysWorld();
+}
+// Player <-> dynamic-prop collision. The static world (walls/ramps/steps) is still handled by the
+// raycast mover; this only adds the dynamic props the player would otherwise walk through. The local
+// player is pushed out of any prop it overlaps and gets knocked by props moving into it; pushing into
+// a prop shoves it (impulse scaled by the prop's Weight, so heavy props barely budge). Host/solo author
+// prop impulses; a co-op client is still blocked by props but doesn't author their motion. Reads each
+// prop's mesh position (correct on host and client) and estimates prop velocity from frame-to-frame
+// movement, so knockback works whether the prop is simulated locally or arriving over the wire.
+function resolvePlayerProps(dt){
+  if(!physWorld || !dynamicProps.length || !gameOn || editorOpen) return;
+  const clientMode = NET.mode==='client';
+  const feetY = player.pos.y - EYE, headY = player.pos.y + 0.2;
+  for(const obj of dynamicProps){
+    const p = obj.userData.phys, info = obj.userData.physInfo; if(!p || !p.body || !info) continue;
+    let prev = obj.userData._prevPP; if(!prev){ prev = obj.userData._prevPP = obj.position.clone(); }
+    const vx = (obj.position.x - prev.x)/Math.max(1e-3, dt), vz = (obj.position.z - prev.z)/Math.max(1e-3, dt);
+    prev.copy(obj.position);
+    const baseY = obj.position.y, topY = baseY + info.height;
+    if(topY < feetY + 0.05 || baseY > headY) continue;   // no vertical overlap with the player
+    let dx = player.pos.x - obj.position.x, dz = player.pos.z - obj.position.z;
+    let dist = Math.hypot(dx, dz);
+    const minD = player.radius + info.radius;
+    if(dist >= minD) continue;
+    if(dist < 1e-3){ dx = Math.cos(player.yaw); dz = Math.sin(player.yaw); dist = 1; }   // degenerate overlap
+    const nx = dx/dist, nz = dz/dist, pen = minD - dist;   // n points prop -> player
+    moveHorizontal(player.pos.x, player.pos.z, nx*pen, nz*pen, feetY);   // separate the player (wall-aware)
+    const approach = vx*nx + vz*nz;                        // prop velocity component toward the player
+    if(approach > 0.5){
+      player.extVel.x += nx*approach*0.8; player.extVel.z += nz*approach*0.8;
+      if(approach > 4) player.extVel.y += Math.min(6, approach*0.4);
+    }
+    if(!clientMode){                                       // player shoves the prop (authoritative)
+      const into = -(player.vel.x*nx + player.vel.z*nz);   // player speed pushing into the prop
+      const shove = Math.max(into, 2.5);
+      p.body.applyImpulse({ x:-nx*shove*0.6, y:0, z:-nz*shove*0.6 }, true);
+    }
+  }
 }
 
 // ====================================================================================
@@ -6792,10 +6848,13 @@ function loop(){
   // jump + gravity
   if((keys['Space']||padJump) && player.onGround){ player.vel.y = JUMP; player.onGround=false; SFX.jump(); }
   player.vel.y -= GRAV*dt;
+  // one-shot vertical knock from physics props (e.g. a fast body launching the player)
+  if(player.extVel.y){ player.vel.y += player.extVel.y; player.onGround=false; player.extVel.y = 0; }
 
-  // apply horizontal movement with step/ramp/wall handling against the mesh heightfield
+  // apply horizontal movement (input + decaying knockback) with step/ramp/wall handling
   const feetY = player.pos.y - EYE;
-  moveHorizontal(player.pos.x, player.pos.z, player.vel.x*dt, player.vel.z*dt, feetY);
+  moveHorizontal(player.pos.x, player.pos.z, (player.vel.x+player.extVel.x)*dt, (player.vel.z+player.extVel.z)*dt, feetY);
+  { const kd = Math.max(0, 1 - 6*dt); player.extVel.x *= kd; player.extVel.z *= kd; }   // knockback fades
 
   // apply vertical movement
   player.pos.y += player.vel.y*dt;
@@ -6950,6 +7009,8 @@ function loop(){
   updateLightBudget();
 
   netTick(dt);   // send/receive networked state + smooth remote entities
+
+  if(!editorOpen) resolvePlayerProps(dt);   // player collides with / gets knocked by dynamic props
 
   drawMinimap();
   if(editorOpen && typeof updateSelectionHighlight==='function') updateSelectionHighlight();
@@ -7339,13 +7400,13 @@ function renderEditorFields(){
     gz.innerHTML = '';
     const selectable = (editorActive==='props' || editorActive==='station' || editorActive==='lights');
     if(selectable){
-      const head = document.createElement('div'); head.className='hint'; head.style.margin='2px 0 3px'; head.innerHTML='<b>Gizmo</b> — drag the handles in the scene';
+      const head = document.createElement('div'); head.className='hint'; head.style.margin='2px 0 3px'; head.innerHTML='<b>Gizmo</b> — drag the handles in the scene · keys <b>1 2 3</b>';
       gz.appendChild(head);
       const row = document.createElement('div'); row.className='row2';
-      const modes = [['translate','Move'],['rotate','Rotate'],['scale','Scale']];
-      for(const [m,label] of modes){
+      const modes = [['translate','Move','1'],['rotate','Rotate','2'],['scale','Scale','3']];
+      for(const [m,label,key] of modes){
         if(m==='scale' && editorActive==='lights') continue;   // lights have no scale
-        const b=document.createElement('button'); b.textContent=label;
+        const b=document.createElement('button'); b.textContent=label+' ('+key+')';
         if(gizmoMode===m){ b.style.background='rgba(56,245,181,0.30)'; b.style.color='#eafff7'; }
         b.onclick=()=>{ gizmoMode=m; updateGizmo(); renderEditorFields(); };
         row.appendChild(b);
