@@ -5295,6 +5295,11 @@ addEventListener('keydown', e=>{
     e.preventDefault(); return;
   }
   if(e.code==='KeyP' && gameOn){ toggleEditor(); return; }   // transform editor
+  if(editorOpen && (e.ctrlKey||e.metaKey) && e.code==='KeyZ' && !e.shiftKey){
+    const tag = (e.target && e.target.tagName) || '';
+    if(tag!=='INPUT' && tag!=='TEXTAREA'){ if(typeof performUndo==='function') performUndo(); e.preventDefault(); }
+    return;
+  }
   if(editorOpen && (e.code==='Delete' || e.code==='Backspace')){
     if(editorActive==='props') deleteSelectedProp();
     else if(editorActive==='lights') deleteSelectedLight();
@@ -6804,6 +6809,7 @@ function startWave(){
 // ---------- Collision helper ----------
 // Returns the ground height (surface the player stands on) given x,z and current feet height.
 const STEP = 0.6; // how high a ledge/slope the player can step or walk up in one move; taller = wall
+const PLAYER_HEIGHT = EYE + 0.2;   // body column height used for overhead-clearance ("walk under") tests
 // ---------- Mesh-following collision (raycast heightfield) ----------
 // Instead of axis-aligned boxes, we cast a ray straight down against the real collider meshes to
 // find the true surface height under any point. This lets rotated/angled meshes act like ramps:
@@ -6847,7 +6853,17 @@ function groundHeightAt(x, z, feetY){
 // Can the player's center occupy (x,z) at this foot height? (floor or a surface within a step)
 function clearAt(x, z, feetY){
   const top = surfaceTopAt(x, z);
-  return top === -Infinity || top <= feetY + STEP;
+  if(top === -Infinity || top <= feetY + STEP) return true;   // floor, or a surface within a step (ramps)
+  // A surface sits above step height here. Allow the move if the player's body column is actually clear,
+  // so you can walk *under* a raised object that has headroom. Block only if static geometry occupies
+  // the band between step height and the player's head.
+  const bandLo = feetY + STEP, bandHi = feetY + PLAYER_HEIGHT, R = player.radius;
+  for(const c of colliders){
+    const b = c.userData && c.userData.box; if(!b) continue;
+    if(x < b.min.x - R || x > b.max.x + R || z < b.min.z - R || z > b.max.z + R) continue;   // outside footprint
+    if(b.min.y < bandHi && b.max.y > bandLo) return false;   // occupies the body band -> a real wall
+  }
+  return true;   // clearance overhead -> walk under
 }
 // Axis-separated move with a body-radius probe ahead, so walls block and you slide along them
 // while ramps/steps within STEP are walked up.
@@ -7289,6 +7305,7 @@ let newPropAnimMode = 'loop';   // 'loop' = auto-play looping; 'trigger' = play 
 function swapSelectedProp(url){
   const i = editorTargets.props.idx;
   const old = propModels[i]; if(!old) return;
+  pushUndoSnapshot();
   const t = [old.position.x, old.position.y, old.position.z, old.rotation.x, old.rotation.y, old.rotation.z, old.scale.x, old.scale.y, old.scale.z];
   const mode = old.userData.animMode || 'loop';
   removeProp(i);
@@ -7296,11 +7313,13 @@ function swapSelectedProp(url){
 }
 // Add a new object (a 'box' primitive or a model URL) in front of the player, using the current default anim mode.
 function addSceneProp(src){
+  pushUndoSnapshot();
   const fwd = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
   const px = player.pos.x + fwd.x*5, pz = player.pos.z + fwd.z*5;
   spawnProp(src, [px, 0, pz, 0, 0, 0, 1], (obj)=>{ editorActive='props'; editorTargets.props.idx = propModels.indexOf(obj); selProps=[obj]; renderEditorFields(); }, undefined, newPropAnimMode);
 }
 function deleteSelectedProp(){
+  pushUndoSnapshot();
   if(isGroupSel()){
     const idxs = selProps.map(o=>propModels.indexOf(o)).filter(i=>i>=0).sort((a,b)=>b-a);
     for(const i of idxs) removeProp(i);   // descending so earlier indices stay valid
@@ -7317,6 +7336,7 @@ function deleteSelectedProp(){
 }
 // Add a point light in front of the player (raised to head height) and select it.
 function addSceneLight(){
+  pushUndoSnapshot();
   const fwd = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
   const px = player.pos.x + fwd.x*5, pz = player.pos.z + fwd.z*5;
   const g = buildLight({ color:0xffe6a0, intensity:8, distance:22, t:[px, 4, pz] });
@@ -7326,6 +7346,7 @@ function addSceneLight(){
 function deleteSelectedLight(){
   const i = editorTargets.lights.idx;
   if(!lightModels[i]) return;
+  pushUndoSnapshot();
   removeLight(i);
   editorTargets.lights.idx = Math.max(0, Math.min(i, lightModels.length-1));
   renderEditorFields();
@@ -7337,6 +7358,7 @@ const DUP_OFFSET = 2;   // world units the copy is shifted (along +X) so it isn'
 function duplicateSelectedProp(){
   const i = editorTargets.props.idx;
   const o = propModels[i]; if(!o) return;
+  pushUndoSnapshot();
   const src = o.userData.src || PROP_MODEL_URL;
   const t = [ o.position.x + DUP_OFFSET, o.position.y, o.position.z,
               o.rotation.x, o.rotation.y, o.rotation.z,
@@ -7346,6 +7368,7 @@ function duplicateSelectedProp(){
 }
 function duplicateSelectedLight(){
   const g = lightModels[editorTargets.lights.idx]; if(!g) return;
+  pushUndoSnapshot();
   const L = g.userData.light;
   const hex = (Math.round(L.color.r*255)<<16)|(Math.round(L.color.g*255)<<8)|Math.round(L.color.b*255);
   const ng = buildLight({ color:hex, intensity:L.intensity, distance:L.distance,
@@ -7384,6 +7407,54 @@ function serializeLevel(){
 }
 function saveLevel(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(serializeLevel())); return true; } catch(e){ return false; } }
 function clearSave(){ try { localStorage.removeItem(SAVE_KEY); return true; } catch(e){ return false; } }
+
+// ---------- Editor undo (Ctrl+Z) ----------
+// Snapshot-based: before each mutating editor action we push a full serialized level. Ctrl+Z restores
+// the most recent snapshot. Simple and robust (no per-command inverse logic); restore rebuilds the
+// props/lights and re-applies gun/aim/station/world/loot settings.
+const editorUndo = [];
+let editorUndoActive = false;
+function pushUndoSnapshot(){
+  if(editorUndoActive || !editorOpen) return;
+  try {
+    const snap = JSON.stringify(serializeLevel());
+    if(editorUndo.length && editorUndo[editorUndo.length-1] === snap) return;   // identical to last -> skip
+    editorUndo.push(snap);
+    if(editorUndo.length > 60) editorUndo.shift();
+  } catch(e){}
+}
+function restoreLevel(level){
+  if(!level) return;
+  // props
+  for(let i=propModels.length-1;i>=0;i--){ if(propModels[i]) removeProp(i); }
+  propModels.length = 0;
+  if(Array.isArray(level.props)){
+    propModels.length = level.props.length;
+    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ if(p.dyn){ setPropDynamic(obj, true); if(p.mass!=null) obj.userData.mass=p.mass; } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null)));
+  }
+  // lights
+  for(let i=lightModels.length-1;i>=0;i--) removeLight(i);
+  if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
+  // gun / aim / station
+  if(level.gun){ if(level.gun.url && level.gun.url!==gunModelUrl) swapGunModel(level.gun.url); Object.assign(editorTargets.gun.state, level.gun.state||{}); editorTargets.gun.apply(); }
+  if(level.aim){ Object.assign(editorTargets.aim.state, level.aim.state||{}); editorTargets.aim.apply(); }
+  if(level.station){ if(level.station.url && level.station.url!==stationModelUrl) swapStationModel(level.station.url); Object.assign(editorTargets.station.state, level.station.state||{}); editorTargets.station.apply(); }
+  // world + loot
+  if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }
+  if(level.chest){ chestModelUrl = level.chest.url||''; chestModelScale = level.chest.scale||1; }
+  selProps.length = 0;
+  editorTargets.props.idx = Math.max(0, Math.min(editorTargets.props.idx, propModels.length-1));
+  if(typeof syncSelToIdx==='function') syncSelToIdx();
+  renderEditorFields();
+}
+function performUndo(){
+  if(!editorUndo.length) return false;
+  const snap = editorUndo.pop();
+  let level; try { level = JSON.parse(snap); } catch(e){ return false; }
+  editorUndoActive = true;
+  try { restoreLevel(level); } finally { editorUndoActive = false; }
+  return true;
+}
 
 function buildEditorPanel(){
   const p = document.createElement('div');
@@ -7457,6 +7528,7 @@ function renderEditorFields(){
       const num=document.createElement('input'); num.type='number'; num.min=min; num.max=max; num.step=step; num.value=+(+worldCfg[key]).toFixed(2); num.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
       const apply=(v)=>{ worldCfg[key]=parseFloat(v)||0; applyWorldCfg(); rng.value=worldCfg[key]; num.value=+(+worldCfg[key]).toFixed(2); };
       rng.oninput=()=>apply(rng.value); num.onchange=()=>apply(num.value);
+      rng.addEventListener('mousedown', ()=>pushUndoSnapshot()); num.addEventListener('focus', ()=>pushUndoSnapshot());
       row.appendChild(sp); row.appendChild(rng); row.appendChild(num); worldHost.appendChild(row);
     };
     const mh=document.createElement('div'); mh.className='hint'; mh.style.margin='2px 0 4px'; mh.innerHTML='<b>Movement</b> — applies live; saved with the level';
@@ -7474,7 +7546,7 @@ function renderEditorFields(){
     const urlRow=document.createElement('div'); urlRow.style.cssText='display:flex;gap:6px;align-items:center;';
     const url=document.createElement('input'); url.type='text'; url.placeholder='https://…/lootbox.glb'; url.value=chestModelUrl; url.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
     const ab=document.createElement('button'); ab.textContent='Apply';
-    ab.onclick=()=>{ swapChestModel(url.value); for(const ch of chests.slice()){ scene.remove(ch.mesh); } chests.length=0; chestTimer=Math.min(chestTimer,2); };
+    ab.onclick=()=>{ pushUndoSnapshot(); swapChestModel(url.value); for(const ch of chests.slice()){ scene.remove(ch.mesh); } chests.length=0; chestTimer=Math.min(chestTimer,2); };
     urlRow.appendChild(url); urlRow.appendChild(ab); worldHost.appendChild(urlRow);
     const sRow=document.createElement('label'); sRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 2px;';
     const sSp=document.createElement('span'); sSp.textContent='Model scale'; sSp.style.minWidth='86px';
@@ -7605,7 +7677,7 @@ function renderEditorFields(){
         animHost.appendChild(phead);
         const plab=document.createElement('label'); plab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;cursor:pointer;';
         const pcb=document.createElement('input'); pcb.type='checkbox'; pcb.checked=!!sel.userData.phys; pcb.style.accentColor='#38f5b5';
-        pcb.onchange=()=>{ setPropDynamic(sel, pcb.checked); renderEditorFields(); };
+        pcb.onchange=()=>{ pushUndoSnapshot(); setPropDynamic(sel, pcb.checked); renderEditorFields(); };
         const pspan=document.createElement('span'); pspan.textContent='Dynamic (reacts to physics)';
         plab.appendChild(pcb); plab.appendChild(pspan); animHost.appendChild(plab);
         if(sel.userData.phys){
@@ -7617,6 +7689,7 @@ function renderEditorFields(){
           const wnum=document.createElement('input'); wnum.type='number'; wnum.min='0.05'; wnum.max='200'; wnum.step='0.1'; wnum.value=sel.userData.mass; wnum.style.cssText='width:62px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
           const applyW=(v)=>{ const m=Math.max(0.05,Math.min(200, parseFloat(v)||1)); wrange.value=Math.min(50,Math.max(0.2,m)); wnum.value=m; setPropMass(sel, m); };
           wrange.oninput=()=>applyW(wrange.value); wnum.onchange=()=>applyW(wnum.value);
+          wrange.addEventListener('mousedown', ()=>pushUndoSnapshot()); wnum.addEventListener('focus', ()=>pushUndoSnapshot());
           wlab.appendChild(wspan); wlab.appendChild(wrange); wlab.appendChild(wnum); animHost.appendChild(wlab);
           const note=document.createElement('div'); note.className='hint'; note.style.marginTop='3px';
           note.textContent = PHYS_OK
@@ -7674,7 +7747,7 @@ function renderEditorFields(){
       const crow=document.createElement('div'); crow.style.cssText='display:flex;align-items:center;gap:8px;';
       const cpick=document.createElement('input'); cpick.type='color'; cpick.value=toHex(selObj.userData.col!=null?selObj.userData.col:PRIM_DEFAULT_COLOR);
       cpick.style.cssText='width:42px;height:26px;padding:0;border:1px solid rgba(56,245,181,0.3);border-radius:4px;background:#05080b;cursor:pointer;';
-      cpick.oninput=()=>{ applyPropColor(selObj, parseInt(cpick.value.slice(1),16)); };
+      cpick.addEventListener('mousedown', ()=>pushUndoSnapshot()); cpick.oninput=()=>{ applyPropColor(selObj, parseInt(cpick.value.slice(1),16)); };
       const cnote=document.createElement('span'); cnote.className='hint'; cnote.textContent=selObj.userData.tex?'(hidden under texture)':'';
       crow.appendChild(cpick); crow.appendChild(cnote); matHost.appendChild(crow);
 
@@ -7684,8 +7757,8 @@ function renderEditorFields(){
       const tinp=document.createElement('input'); tinp.type='text'; tinp.id='edTexInput'; tinp.value=selObj.userData.tex||''; tinp.placeholder='https://…/texture.jpg';
       matHost.appendChild(tinp);
       const trow=document.createElement('div'); trow.className='row2'; trow.style.marginTop='6px';
-      const applyB=document.createElement('button'); applyB.textContent='Apply texture'; applyB.onclick=()=>{ applyPropTexture(selObj, tinp.value.trim()); renderEditorFields(); };
-      const clearB=document.createElement('button'); clearB.textContent='Clear'; clearB.onclick=()=>{ tinp.value=''; applyPropTexture(selObj, ''); renderEditorFields(); };
+      const applyB=document.createElement('button'); applyB.textContent='Apply texture'; applyB.onclick=()=>{ pushUndoSnapshot(); applyPropTexture(selObj, tinp.value.trim()); renderEditorFields(); };
+      const clearB=document.createElement('button'); clearB.textContent='Clear'; clearB.onclick=()=>{ pushUndoSnapshot(); tinp.value=''; applyPropTexture(selObj, ''); renderEditorFields(); };
       trow.appendChild(applyB); trow.appendChild(clearB); matHost.appendChild(trow);
       // tiling U/V
       const rep=selObj.userData.texRepeat||[1,1];
@@ -7694,7 +7767,7 @@ function renderEditorFields(){
       const ru=document.createElement('input'); ru.type='number'; ru.step='0.5'; ru.min='0.1'; ru.value=rep[0]; ru.className='valnum'; ru.style.width='52px';
       const rv=document.createElement('input'); rv.type='number'; rv.step='0.5'; rv.min='0.1'; rv.value=rep[1]; rv.className='valnum'; rv.style.width='52px';
       const setRep=()=>{ applyPropTexRepeat(selObj, Math.max(0.1,+ru.value||1), Math.max(0.1,+rv.value||1)); };
-      ru.oninput=setRep; rv.oninput=setRep;
+      ru.oninput=setRep; rv.oninput=setRep; ru.addEventListener('focus',()=>pushUndoSnapshot()); rv.addEventListener('focus',()=>pushUndoSnapshot());
       const x=document.createElement('span'); x.className='hint'; x.textContent='×';
       rrow.appendChild(rlbl); rrow.appendChild(ru); rrow.appendChild(x); rrow.appendChild(rv); matHost.appendChild(rrow);
 
@@ -7713,9 +7786,9 @@ function renderEditorFields(){
       const ei=document.createElement('input'); ei.type='range'; ei.min='0'; ei.max='10'; ei.step='0.1'; ei.value=emit.i; ei.style.flex='1';
       const eival=document.createElement('input'); eival.type='number'; eival.step='0.1'; eival.value=emit.i; eival.className='valnum'; eival.style.width='52px';
       const setEmit=()=>{ applyPropEmissive(selObj, parseInt(epick.value.slice(1),16), +ei.value); eival.value=(+ei.value).toFixed(1); };
-      epick.oninput=setEmit; ei.oninput=setEmit; eival.oninput=()=>{ ei.value=eival.value; setEmit(); };
+      epick.addEventListener('mousedown',()=>pushUndoSnapshot()); ei.addEventListener('mousedown',()=>pushUndoSnapshot()); epick.oninput=setEmit; ei.oninput=setEmit; eival.oninput=()=>{ ei.value=eival.value; setEmit(); };
       erow.appendChild(epick); erow.appendChild(ei); erow.appendChild(eival); matHost.appendChild(erow);
-      ecb.onchange=()=>{ if(ecb.checked){ applyPropEmissive(selObj, parseInt(epick.value.slice(1),16), +ei.value||4); } else { clearPropEmissive(selObj); } renderEditorFields(); };
+      ecb.onchange=()=>{ pushUndoSnapshot(); if(ecb.checked){ applyPropEmissive(selObj, parseInt(epick.value.slice(1),16), +ei.value||4); } else { clearPropEmissive(selObj); } renderEditorFields(); };
     } else {
       const none=document.createElement('div'); none.className='hint'; none.textContent='Select a shape (box / sphere / cylinder / cone) to edit its color, texture, or light.';
       matHost.appendChild(none);
@@ -7759,6 +7832,8 @@ function renderEditorFields(){
     };
     rng.oninput = ()=>commit(rng.value, true);
     num.oninput = ()=>commit(num.value, false);
+    rng.addEventListener('mousedown', ()=>pushUndoSnapshot());   // one undo entry per field-edit gesture
+    num.addEventListener('focus', ()=>pushUndoSnapshot());
     editorFieldInputs.push({ k:fld.k, rng, num });
     wrap.appendChild(lab); wrap.appendChild(rng);
     host.appendChild(wrap);
@@ -7998,6 +8073,7 @@ function tryGizmoGrab(e){
     gizmoDrag.pivot = pos.clone();
     gizmoDrag.group = selProps.map(o=>({ obj:o, pos:o.position.clone(), quat:o.quaternion.clone(), scale:o.scale.clone() }));
   }
+  pushUndoSnapshot();   // capture state before this drag so Ctrl+Z reverts it
   return true;
 }
 // pixel-ish reference distance from the gizmo center to the pointer (for uniform/center scaling)
