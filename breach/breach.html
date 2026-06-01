@@ -6488,7 +6488,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 11 · 2026-06-01';
+const BUILD_VERSION = 'build 12 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7137,7 +7137,14 @@ function clearAt(x, z, feetY){
     for(const b of bs){
       if(x < b.min.x - R || x > b.max.x + R || z < b.min.z - R || z > b.max.z + R) continue;   // outside this part's footprint
       if(!(b.min.y < bandHi && b.max.y > bandLo + 1e-4)) continue;                              // not in the body band (e.g. overhead -> walk under)
-      const cx = Math.max(b.min.x, Math.min(x, b.max.x)), cz = Math.max(b.min.z, Math.min(z, b.max.z));
+      const cx0 = Math.max(b.min.x, Math.min(x, b.max.x)), cz0 = Math.max(b.min.z, Math.min(z, b.max.z));
+      // Sample the surface just INSIDE the box edge, not on the boundary itself: a downward ray aimed at
+      // the exact bounding-box edge grazes the mesh and often misses (reads -Infinity), which would
+      // falsely treat a ramp/stairs base as a wall. Nudging ~0.25 toward the box center lands the ray on
+      // real geometry near the edge.
+      const bcx = (b.min.x + b.max.x) * 0.5, bcz = (b.min.z + b.max.z) * 0.5;
+      const cx = cx0 + Math.sign(bcx - cx0) * Math.min(0.25, Math.abs(bcx - cx0));
+      const cz = cz0 + Math.sign(bcz - cz0) * Math.min(0.25, Math.abs(bcz - cz0));
       const es = propSurfaceAt(c, cx, cz);                                                       // this collider's surface nearest the player
       if(es > -Infinity && es <= feetY + STEP + 1e-4) continue;                                  // steppable edge (ramp/stairs base) -> walk on, not a wall
       return false;                                                                              // a genuine wall
