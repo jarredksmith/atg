@@ -5039,9 +5039,14 @@ function broadcastAnim(i){
 }
 function refreshPropCollider(obj){
   obj.updateMatrixWorld(true);
-  // precise=true builds the box from real vertices, not each part's transformed local-AABB corners —
-  // so rotated/irregular models get a tight hitbox instead of a loose oversized one.
+  // overall box (selection highlight, proximity, physics shape sizing)
   obj.userData.box = new THREE.Box3().setFromObject(obj, true);
+  // Per-mesh boxes for player collision: a model that bundles a wide flat base + a tall crate shouldn't
+  // block you across the whole base. Each sub-mesh gets its own tight AABB, so a thin floor plate (low,
+  // below the body band) never walls you off, while the crate blocks only at its real narrow footprint.
+  const boxes = [];
+  obj.traverse(o=>{ if(o.isMesh && o.geometry){ const b = new THREE.Box3().setFromObject(o, true); if(isFinite(b.min.x) && isFinite(b.max.x)) boxes.push(b); } });
+  obj.userData.boxes = boxes.length ? boxes : [obj.userData.box];
   obj.userData.climbable = true;
 }
 // A built-in box primitive (used when src === 'box'): a 1×1×1 crate you scale via the transform.
@@ -5301,7 +5306,13 @@ applyWorldCfg();
 let crouching = false, crouchT = 0;
 const CROUCH_DIP = 0.8;     // how far the camera lowers when fully crouched
 const keys = {};
+function typingInField(e){
+  const t = e.target, tag = (t && t.tagName) || '';
+  return tag==='INPUT' || tag==='TEXTAREA' || tag==='SELECT' || (t && t.isContentEditable);
+}
 addEventListener('keydown', e=>{
+  // If a text field has focus, let it handle the key — don't record movement or fire any shortcut.
+  if(typingInField(e)) return;
   keys[e.code]=true;
   if(e.code==='Backquote'){ const el=$('padDebug'); if(el) el.style.display = (el.style.display==='block'?'none':'block'); e.preventDefault(); return; }   // controller diagnostic
   if(e.code==='BracketRight'){   // manually switch which detected gamepad is used
@@ -5353,6 +5364,8 @@ addEventListener('keydown', e=>{
   if(e.code==='Digit3' && owned[2]) switchWeapon(owned[2]);
 });
 addEventListener('keyup', e=>{ keys[e.code]=false; });
+// Focusing a text field clears any held movement keys so the player can't keep sliding while you type.
+addEventListener('focusin', e=>{ if(typingInField(e)){ for(const k in keys) keys[k]=false; } });
 addEventListener('wheel', e=>{
   if(editorOpen){
     if(editorTopView){ topZoom = Math.max(6, Math.min(110, topZoom + e.deltaY*0.04)); e.preventDefault(); }
@@ -6902,12 +6915,12 @@ function surfaceTopAt(x, z){
   // covers (x,z). Tilted props are skipped so their sloped raycast surface (ramps) is preserved, and
   // rounded/pointed primitives keep the ray so you don't stand on an invisible box above them.
   for(const c of colliders){
-    const b = c.userData && c.userData.box; if(!b) continue;
+    const bs = (c.userData && (c.userData.boxes || (c.userData.box && [c.userData.box]))); if(!bs) continue;
     const src = c.userData.src;
     if(src==='sphere' || src==='cone') continue;            // curved/pointed top -> trust the ray
     const r = c.rotation;
     if(r && (Math.abs(r.x)>0.05 || Math.abs(r.z)>0.05)) continue;   // tilted (ramp) -> trust the ray
-    if(x>=b.min.x && x<=b.max.x && z>=b.min.z && z<=b.max.z && b.max.y>top) top = b.max.y;
+    for(const b of bs){ if(x>=b.min.x && x<=b.max.x && z>=b.min.z && z<=b.max.z && b.max.y>top) top = b.max.y; }
   }
   return top;
 }
@@ -6936,9 +6949,11 @@ function clearAt(x, z, feetY){
   // the band between step height and the player's head.
   const bandLo = feetY + STEP, bandHi = feetY + PLAYER_HEIGHT, R = player.radius;
   for(const c of colliders){
-    const b = c.userData && c.userData.box; if(!b) continue;
-    if(x < b.min.x - R || x > b.max.x + R || z < b.min.z - R || z > b.max.z + R) continue;   // outside footprint
-    if(b.min.y < bandHi && b.max.y > bandLo) return false;   // occupies the body band -> a real wall
+    const bs = (c.userData && (c.userData.boxes || (c.userData.box && [c.userData.box]))); if(!bs) continue;
+    for(const b of bs){
+      if(x < b.min.x - R || x > b.max.x + R || z < b.min.z - R || z > b.max.z + R) continue;   // outside this part's footprint
+      if(b.min.y < bandHi && b.max.y > bandLo) return false;   // a part occupies the body band -> a real wall
+    }
   }
   return true;   // clearance overhead -> walk under
 }
@@ -6947,9 +6962,11 @@ function clearAt(x, z, feetY){
 function ceilingAt(x, z, feetY){
   let lowest = Infinity;
   for(const c of colliders){
-    const b = c.userData && c.userData.box; if(!b) continue;
-    if(x < b.min.x || x > b.max.x || z < b.min.z || z > b.max.z) continue;   // center outside footprint
-    if(b.min.y > feetY + STEP && b.min.y < lowest) lowest = b.min.y;          // an overhead underside
+    const bs = (c.userData && (c.userData.boxes || (c.userData.box && [c.userData.box]))); if(!bs) continue;
+    for(const b of bs){
+      if(x < b.min.x || x > b.max.x || z < b.min.z || z > b.max.z) continue;   // center outside this part's footprint
+      if(b.min.y > feetY + STEP && b.min.y < lowest) lowest = b.min.y;          // an overhead underside
+    }
   }
   return lowest;
 }
