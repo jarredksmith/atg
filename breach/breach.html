@@ -5157,7 +5157,11 @@ function isPrimitive(src){ return PRIMITIVE_BUILDERS.hasOwnProperty(src); }
 const gltfCache = {};
 // Optional CORS proxy (a Cloudflare Worker) for loading cross-origin models whose host blocks
 // cross-origin fetches (e.g. Poly Pizza). Same-origin loads are never proxied.
-function ppProxy(){ try{ return (localStorage.getItem('pp_proxy')||'').trim(); }catch(e){ return ''; } }
+// Baked-in defaults so Poly Pizza works out of the box; the editor fields still override these
+// (typing a new value stores it; clearing a field reverts to the default below).
+const PP_DEFAULT_KEY = 'f30b70c7929147a2a7c7f38671f33a87';
+const PP_DEFAULT_PROXY = 'https://polypizza-proxy.jarredksmith.workers.dev';
+function ppProxy(){ try{ return ((localStorage.getItem('pp_proxy')||'').trim()) || PP_DEFAULT_PROXY; }catch(e){ return PP_DEFAULT_PROXY; } }
 function ppSetProxy(u){ try{ localStorage.setItem('pp_proxy', (u||'').trim()); }catch(e){} }
 function proxied(url){
   const base = ppProxy(); if(!base) return url;
@@ -6343,7 +6347,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 3 · 2026-06-01';
+const BUILD_VERSION = 'build 4 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7587,7 +7591,7 @@ function performUndo(){
 }
 
 // ---------- Poly Pizza model browser: search free CC0/CC-BY models and add them as props ----------
-function ppGetKey(){ try{ return localStorage.getItem('pp_api_key')||''; }catch(e){ return ''; } }
+function ppGetKey(){ try{ return (localStorage.getItem('pp_api_key')||'') || PP_DEFAULT_KEY; }catch(e){ return PP_DEFAULT_KEY; } }
 function ppSetKey(k){ try{ localStorage.setItem('pp_api_key', k||''); }catch(e){} }
 let ppLastQuery = '', ppLastResults = [];
 // Defensive parser: Poly Pizza's field names/shapes can vary, so pull the GLB url, thumbnail, title and
