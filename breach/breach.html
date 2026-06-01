@@ -5347,9 +5347,11 @@ addEventListener('wheel', e=>{
 
 // pointer lock look
 let locked = false;
+let lookFresh = false;   // set when pointer lock is (re)acquired -> drop the first mousemove (it can carry a huge catch-up delta)
+const MAX_LOOK_DELTA = 300;   // px per mousemove event; guards against spurious spikes that snap the view
 let editorDragLook = false, editorDragMoved = false, editorDragPan = false;   // editor mouse states
 renderer.domElement.addEventListener('click', ()=>{ if(gameOn && !locked && !shopOpen && !editorOpen) renderer.domElement.requestPointerLock(); });
-document.addEventListener('pointerlockchange', ()=>{ locked = document.pointerLockElement === renderer.domElement; });
+document.addEventListener('pointerlockchange', ()=>{ const was=locked; locked = document.pointerLockElement === renderer.domElement; if(locked && !was) lookFresh = true; });
 document.addEventListener('mousemove', e=>{
   if(editorOpen){
     if(gizmoDrag){ gizmoDragMove(e); editorDragMoved = true; return; }   // dragging an axis handle
@@ -5369,9 +5371,13 @@ document.addEventListener('mousemove', e=>{
     return;
   }
   if(!locked) return;
+  if(lookFresh){ lookFresh = false; return; }   // first event after (re)locking can be a large catch-up jump — ignore it
+  // clamp per-event deltas so a spurious browser/driver spike can't whip the view to a new direction
+  const mx = Math.max(-MAX_LOOK_DELTA, Math.min(MAX_LOOK_DELTA, e.movementX));
+  const my = Math.max(-MAX_LOOK_DELTA, Math.min(MAX_LOOK_DELTA, e.movementY));
   const sens = ads ? ADS_SENS : HIP_SENS;
-  player.yaw   -= e.movementX * sens;
-  player.pitch -= e.movementY * sens;
+  player.yaw   -= mx * sens;
+  player.pitch -= my * sens;
   player.pitch = Math.max(-1.5, Math.min(1.5, player.pitch));
 });
 renderer.domElement.addEventListener('mousedown', e=>{
@@ -6094,13 +6100,14 @@ let nearTarget = null;    // what the player is standing next to
 function checkProximity(){
   if(shopOpen) return;
   nearTarget = null;
+  const duelMode = NET.gameMode==='duel';   // duel has no economy: only animated-prop activation applies
   // station
-  if(station){
+  if(!duelMode && station){
     const d = Math.hypot(player.pos.x-station.pos.x, player.pos.z-station.pos.z);
     if(d < 3.5) nearTarget = { type:'station' };
   }
   // chests (override station if closer)
-  for(const ch of chests){
+  if(!duelMode) for(const ch of chests){
     const d = Math.hypot(player.pos.x-ch.pos.x, player.pos.z-ch.pos.z);
     if(d < 3.5){ nearTarget = { type:'chest', chest:ch }; break; }
   }
@@ -7090,7 +7097,7 @@ function loop(){
   updateBuffs(dt);
   updateGrenades(dt);
   if(!duelMode) updateChests(dt);
-  if(!duelMode) checkProximity();
+  checkProximity();   // runs in all modes; in duel it only considers trigger-animation props
 
   // periodic chest spawning (host / solo, co-op only)
   if(!isClient && !duelMode){
