@@ -6910,17 +6910,19 @@ function surfaceTopAt(x, z){
     const dh = _downRay.intersectObjects(dynamicProps, true);
     for(const h of dh){ if(h.point.y > top) top = h.point.y; }
   }
-  // Safety net: if the downward ray slips through a prop (open/awkward model top, thin faces, etc.) the
-  // player would sink through it. Fall back to the bounding-box top of any UPRIGHT prop whose footprint
-  // covers (x,z). Tilted props are skipped so their sloped raycast surface (ramps) is preserved, and
-  // rounded/pointed primitives keep the ray so you don't stand on an invisible box above them.
-  for(const c of colliders){
-    const bs = (c.userData && (c.userData.boxes || (c.userData.box && [c.userData.box]))); if(!bs) continue;
-    const src = c.userData.src;
-    if(src==='sphere' || src==='cone') continue;            // curved/pointed top -> trust the ray
-    const r = c.rotation;
-    if(r && (Math.abs(r.x)>0.05 || Math.abs(r.z)>0.05)) continue;   // tilted (ramp) -> trust the ray
-    for(const b of bs){ if(x>=b.min.x && x<=b.max.x && z>=b.min.z && z<=b.max.z && b.max.y>top) top = b.max.y; }
+  // Safety net: ONLY when the downward ray found nothing at all (slipped through an open/awkward model
+  // top). In that case fall back to the bounding-box top of an UPRIGHT prop whose footprint covers (x,z).
+  // Gating on a true miss is important: otherwise this would flatten stepped geometry (stairs) and any
+  // model where you stand on a lower part into its overall top, turning it into a wall.
+  if(top === -Infinity){
+    for(const c of colliders){
+      const bs = (c.userData && (c.userData.boxes || (c.userData.box && [c.userData.box]))); if(!bs) continue;
+      const src = c.userData.src;
+      if(src==='sphere' || src==='cone') continue;            // curved/pointed top -> trust the ray
+      const r = c.rotation;
+      if(r && (Math.abs(r.x)>0.05 || Math.abs(r.z)>0.05)) continue;   // tilted (ramp) -> trust the ray
+      for(const b of bs){ if(x>=b.min.x && x<=b.max.x && z>=b.min.z && z<=b.max.z && b.max.y>top) top = b.max.y; }
+    }
   }
   return top;
 }
