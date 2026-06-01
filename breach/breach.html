@@ -6104,12 +6104,21 @@ function checkProximity(){
     const d = Math.hypot(player.pos.x-ch.pos.x, player.pos.z-ch.pos.z);
     if(d < 3.5){ nearTarget = { type:'chest', chest:ch }; break; }
   }
-  // activatable animated props (only if not already next to a station/chest)
+  // activatable animated props (only if not already next to a station/chest). Measure distance to the
+  // prop's footprint (AABB), not its center, so large/solid props you can't walk into still register.
   if(!nearTarget){
-    let best=null, bd=3.2;
+    let best=null, bd=2.2;
     for(const o of propModels){
       if(!o || o.userData.animMode!=='trigger' || !(o.userData.animActions && o.userData.animActions.length)) continue;
-      const d = Math.hypot(player.pos.x-o.position.x, player.pos.z-o.position.z);
+      let d;
+      const b = o.userData.box;
+      if(b){
+        const cx = Math.max(b.min.x, Math.min(player.pos.x, b.max.x));
+        const cz = Math.max(b.min.z, Math.min(player.pos.z, b.max.z));
+        d = Math.hypot(player.pos.x-cx, player.pos.z-cz);   // 0 when standing within the footprint
+      } else {
+        d = Math.hypot(player.pos.x-o.position.x, player.pos.z-o.position.z);
+      }
       if(d < bd){ bd=d; best=o; }
     }
     if(best) nearTarget = { type:'anim', obj:best };
