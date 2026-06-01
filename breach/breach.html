@@ -4942,7 +4942,7 @@ colliders.push(wall(2,H,ARENA*2,  ARENA,H/2,0));
 
 // Precompute static collider bounding boxes once (colliders never move)
 for(const c of colliders){
-  c.userData.box = new THREE.Box3().setFromObject(c);
+  c.userData.box = new THREE.Box3().setFromObject(c, true);
 }
 
 // ---------- Saved level (browser persistence) ----------
@@ -5039,7 +5039,9 @@ function broadcastAnim(i){
 }
 function refreshPropCollider(obj){
   obj.updateMatrixWorld(true);
-  obj.userData.box = new THREE.Box3().setFromObject(obj);
+  // precise=true builds the box from real vertices, not each part's transformed local-AABB corners —
+  // so rotated/irregular models get a tight hitbox instead of a loose oversized one.
+  obj.userData.box = new THREE.Box3().setFromObject(obj, true);
   obj.userData.climbable = true;
 }
 // A built-in box primitive (used when src === 'box'): a 1×1×1 crate you scale via the transform.
@@ -5148,10 +5150,19 @@ const PRIMITIVE_BUILDERS = { box:buildBoxProp, sphere:buildSphereProp, cylinder:
 function isPrimitive(src){ return PRIMITIVE_BUILDERS.hasOwnProperty(src); }
 // Cache loaded glTFs by URL so repeated/added props of the same model don't refetch.
 const gltfCache = {};
+// Optional CORS proxy (a Cloudflare Worker) for loading cross-origin models whose host blocks
+// cross-origin fetches (e.g. Poly Pizza). Same-origin loads are never proxied.
+function ppProxy(){ try{ return (localStorage.getItem('pp_proxy')||'').trim(); }catch(e){ return ''; } }
+function ppSetProxy(u){ try{ localStorage.setItem('pp_proxy', (u||'').trim()); }catch(e){} }
+function proxied(url){
+  const base = ppProxy(); if(!base) return url;
+  try{ if(new URL(url, location.href).origin === location.origin) return url; }catch(e){ return url; }
+  return base + (base.indexOf('?')>=0 ? '&' : '?') + 'url=' + encodeURIComponent(url);
+}
 function loadGLTFCached(url, cb, errcb){
   if(gltfCache[url]){ cb(gltfCache[url]); return; }
   if(!THREE.GLTFLoader){ errcb && errcb(new Error('GLTFLoader unavailable')); return; }
-  new THREE.GLTFLoader().load(url, (gltf)=>{ gltfCache[url]=gltf; cb(gltf); }, undefined, errcb);
+  new THREE.GLTFLoader().load(proxied(url), (gltf)=>{ gltfCache[url]=gltf; cb(gltf); }, undefined, errcb);   // cache by original url; fetch via proxy if cross-origin
 }
 function finalizeProp(obj, src, t, gltf, slot, animMode, mat){
   obj.position.set(t[0], t[1], t[2]);
@@ -6496,7 +6507,7 @@ function addStaticColliderFor(o){
       colliderDescFor(info).setTranslation(info.off.x, info.off.y, info.off.z).setFriction(0.9).setRestitution(0.1), rb);
     return;
   }
-  if(!o.userData.box){ o.updateMatrixWorld(true); o.userData.box = new THREE.Box3().setFromObject(o); }
+  if(!o.userData.box){ o.updateMatrixWorld(true); o.userData.box = new THREE.Box3().setFromObject(o, true); }
   o.userData.box.getSize(_psize); o.userData.box.getCenter(_pcenter);
   if(_psize.x<1e-3 || _psize.y<1e-3 || _psize.z<1e-3) return;
   const rb = physWorld.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(_pcenter.x,_pcenter.y,_pcenter.z));
@@ -7569,8 +7580,8 @@ function ppParseModel(m){
 function ppSearch(query, cb, errcb){
   const key = ppGetKey();
   if(!key){ errcb(new Error('Enter your Poly Pizza API key first')); return; }
-  const url = 'https://api.poly.pizza/v1.1/search/' + encodeURIComponent(query);
-  fetch(url, { headers:{ 'x-auth-token': key } })
+  const apiUrl = 'https://api.poly.pizza/v1.1/search/' + encodeURIComponent(query);
+  fetch(proxied(apiUrl), { headers:{ 'x-auth-token': key } })   // proxied() routes through the Worker if one is set
     .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status + (r.status===401||r.status===403 ? ' — check your API key' : '')); return r.json(); })
     .then(d=>{ const arr = d.results||d.Results||d.models||d.Models||(Array.isArray(d)?d:[]); cb(arr.map(ppParseModel).filter(Boolean)); })
     .catch(errcb);
@@ -7591,6 +7602,16 @@ function renderModelBrowser(host){
   const keyHint = document.createElement('div'); keyHint.className='hint'; keyHint.style.cssText='margin:-2px 0 6px;font-size:10px;opacity:.75';
   keyHint.textContent = 'Free key at poly.pizza/settings/api — stored in this browser only.';
   host.appendChild(keyHint);
+
+  // CORS proxy row (Poly Pizza blocks direct browser calls; a Cloudflare Worker relays them)
+  const proxyRow = document.createElement('div'); proxyRow.className='row2'; proxyRow.style.marginBottom='2px';
+  const proxyInp = document.createElement('input'); proxyInp.type='text'; proxyInp.placeholder='CORS proxy URL (Cloudflare Worker)'; proxyInp.value=ppProxy();
+  proxyInp.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+  proxyInp.oninput=()=>ppSetProxy(proxyInp.value);
+  proxyRow.appendChild(proxyInp); host.appendChild(proxyRow);
+  const proxyHint = document.createElement('div'); proxyHint.className='hint'; proxyHint.style.cssText='margin:-2px 0 6px;font-size:10px;opacity:.75';
+  proxyHint.textContent = "Required — Poly Pizza blocks direct browser calls. Deploy the included polypizza-proxy.js as a free Cloudflare Worker and paste its URL here.";
+  host.appendChild(proxyHint);
 
   // search row
   const sRow = document.createElement('div'); sRow.className='row2'; sRow.style.marginBottom='4px';
@@ -7622,7 +7643,7 @@ function renderModelBrowser(host){
   function doSearch(){
     const term = q.value.trim(); if(!term){ status.textContent='Type something to search.'; return; }
     ppLastQuery = term; status.textContent='Searching…'; grid.innerHTML='';
-    ppSearch(term, (list)=>{ ppLastResults = list; renderResults(list); }, (err)=>{ ppLastResults=[]; status.textContent = 'Search failed: ' + (err && err.message || err); });
+    ppSearch(term, (list)=>{ ppLastResults = list; renderResults(list); }, (err)=>{ ppLastResults=[]; const msg=(err&&err.message)||String(err); status.innerHTML = (!ppProxy() && /failed|load|network/i.test(msg)) ? 'Search blocked by CORS — Poly Pizza needs the proxy. Deploy polypizza-proxy.js as a Cloudflare Worker and paste its URL above.' : ('Search failed: ' + msg); });
   }
   sBtn.onclick = doSearch;
   q.addEventListener('keydown', e=>{ if(e.code==='Enter'){ e.preventDefault(); doSearch(); } });
@@ -7897,6 +7918,11 @@ function renderEditorFields(){
   const urlHost = editorEl.querySelector('#edUrl');
   urlHost.innerHTML = '';
   if(tgt.urlField){
+    if(tgt.addable){
+      const head = document.createElement('div'); head.className='hint'; head.style.margin='8px 0 3px';
+      head.innerHTML = '<b>Add from URL</b> — paste any hosted .glb (your own server, a CDN, etc.)';
+      urlHost.appendChild(head);
+    }
     const lbl = document.createElement('div'); lbl.className='hint'; lbl.style.marginBottom='4px';
     lbl.textContent = 'Model URL (.glb)' + (tgt.addable ? ' — Swap replaces the selected prop' : '');
     urlHost.appendChild(lbl);
@@ -8354,7 +8380,7 @@ function updateSelectionHighlight(){
   if(isGroupSel()){
     if(selBox) selBox.visible = false;
     ensureSelBoxes(selProps.length);
-    selProps.forEach((o,i)=>{ const b=selBoxes[i]; b.setFromObject(o); b.visible=true; });
+    selProps.forEach((o,i)=>{ const b=selBoxes[i]; b.setFromObject(o, true); b.visible=true; });
     for(let i=selProps.length;i<selBoxes.length;i++) selBoxes[i].visible=false;
     updateGizmo();
     return;
