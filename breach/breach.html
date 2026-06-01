@@ -6382,9 +6382,22 @@ function createBodyFor(obj){
   physWorld.createCollider(cd, rb);
   obj.userData.phys.body = rb;
 }
-// Add a fixed (static) box collider from an object's world AABB — floor/walls/static props.
-function addStaticBoxFromObject(o){
+// Add a fixed (static) collider for one object. Shape primitives (box/sphere/cylinder/cone) get an
+// exact oriented collider matching their rotation — so a tilted static box is a real tilted ramp for
+// dynamic props, not a fat upright bounding box. Walls / models / the station fall back to a world-AABB
+// box (fine for upright geometry; a trimesh would be needed for an arbitrary tilted model).
+function addStaticColliderFor(o){
   if(!physWorld || !o) return;
+  if(o.userData && isShapePrimitive(o.userData.src)){
+    o.updateMatrixWorld(true);
+    const info = propShapeInfo(o), q = o.quaternion;
+    const rb = physWorld.createRigidBody(RAPIER.RigidBodyDesc.fixed()
+      .setTranslation(o.position.x, o.position.y, o.position.z)
+      .setRotation({ x:q.x, y:q.y, z:q.z, w:q.w }));
+    physWorld.createCollider(
+      colliderDescFor(info).setTranslation(info.off.x, info.off.y, info.off.z).setFriction(0.9).setRestitution(0.1), rb);
+    return;
+  }
   if(!o.userData.box){ o.updateMatrixWorld(true); o.userData.box = new THREE.Box3().setFromObject(o); }
   o.userData.box.getSize(_psize); o.userData.box.getCenter(_pcenter);
   if(_psize.x<1e-3 || _psize.y<1e-3 || _psize.z<1e-3) return;
@@ -6400,7 +6413,7 @@ function buildPhysWorld(){
   // arena floor: thick fixed slab with its top face at y = 0
   const fb = physWorld.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0,-2,0));
   physWorld.createCollider(RAPIER.ColliderDesc.cuboid(ARENA, 2, ARENA).setFriction(0.9).setRestitution(0.1), fb);
-  for(const c of colliders) addStaticBoxFromObject(c);   // walls + all static props (dynamic props aren't in this list)
+  for(const c of colliders) addStaticColliderFor(c);   // walls + all static props (dynamic props aren't in this list)
   for(const o of dynamicProps) createBodyFor(o);
   physAccum = 0;
 }
@@ -6467,13 +6480,14 @@ function resetDynamicProps(){
   }
   buildPhysWorld();
 }
-// Player <-> dynamic-prop collision. The static world (walls/ramps/steps) is still handled by the
-// raycast mover; this only adds the dynamic props the player would otherwise walk through. The local
-// player is pushed out of any prop it overlaps and gets knocked by props moving into it; pushing into
-// a prop shoves it (impulse scaled by the prop's Weight, so heavy props barely budge). Host/solo author
-// prop impulses; a co-op client is still blocked by props but doesn't author their motion. Reads each
-// prop's mesh position (correct on host and client) and estimates prop velocity from frame-to-frame
-// movement, so knockback works whether the prop is simulated locally or arriving over the wire.
+// Player <-> dynamic-prop forces. The raycast mover (surfaceTopAt now includes dynamic props) already
+// lets the player stand on, walk up, or be blocked by a prop's real surface. This adds what the mover
+// can't: it separates the player from a prop overlapping its *side*, knocks the player when a prop
+// moves into them, and lets the player shove a prop they walk into (impulse scaled by Weight). When
+// the player is standing on / climbing a prop's surface, all of that is skipped so it never fights the
+// climb. Host/solo author prop impulses; a co-op client is still blocked/supported but doesn't author
+// motion. Prop velocity is estimated from mesh movement, so it works whether the prop is simulated
+// locally or arriving over the wire.
 function resolvePlayerProps(dt){
   if(!physWorld || !dynamicProps.length || !gameOn || editorOpen) return;
   const clientMode = NET.mode==='client';
@@ -6484,21 +6498,23 @@ function resolvePlayerProps(dt){
     const vx = (obj.position.x - prev.x)/Math.max(1e-3, dt), vz = (obj.position.z - prev.z)/Math.max(1e-3, dt);
     prev.copy(obj.position);
     const baseY = obj.position.y, topY = baseY + info.height;
-    if(topY < feetY + 0.05 || baseY > headY) continue;   // no vertical overlap with the player
+    if(topY < feetY + 0.05 || baseY > headY) continue;            // no vertical overlap with the player
     let dx = player.pos.x - obj.position.x, dz = player.pos.z - obj.position.z;
     let dist = Math.hypot(dx, dz);
     const minD = player.radius + info.radius;
-    if(dist >= minD) continue;
-    if(dist < 1e-3){ dx = Math.cos(player.yaw); dz = Math.sin(player.yaw); dist = 1; }   // degenerate overlap
-    const nx = dx/dist, nz = dz/dist, pen = minD - dist;   // n points prop -> player
-    moveHorizontal(player.pos.x, player.pos.z, nx*pen, nz*pen, feetY);   // separate the player (wall-aware)
-    const approach = vx*nx + vz*nz;                        // prop velocity component toward the player
+    if(dist > minD + 0.25) continue;                              // not touching
+    const surf = propSurfaceAt(obj, player.pos.x, player.pos.z);  // standing on / climbing this prop?
+    if(surf > -Infinity && feetY <= surf + STEP && feetY >= surf - 0.6) continue;   // yes -> mover has it
+    if(dist < 1e-3){ dx = Math.cos(player.yaw); dz = Math.sin(player.yaw); dist = 1; }
+    const nx = dx/dist, nz = dz/dist;                             // n points prop -> player
+    if(dist < minD) moveHorizontal(player.pos.x, player.pos.z, nx*(minD-dist), nz*(minD-dist), feetY);   // de-penetrate side overlap
+    const approach = vx*nx + vz*nz;                               // prop velocity component toward the player
     if(approach > 0.5){
       player.extVel.x += nx*approach*0.8; player.extVel.z += nz*approach*0.8;
       if(approach > 4) player.extVel.y += Math.min(6, approach*0.4);
     }
-    if(!clientMode){                                       // player shoves the prop (authoritative)
-      const into = -(player.vel.x*nx + player.vel.z*nz);   // player speed pushing into the prop
+    if(!clientMode){                                              // player shoves the prop (authoritative)
+      const into = -(player.vel.x*nx + player.vel.z*nz);
       const shove = Math.max(into, 2.5);
       p.body.applyImpulse({ x:-nx*shove*0.6, y:0, z:-nz*shove*0.6 }, true);
     }
@@ -6757,13 +6773,30 @@ const _downRay = new THREE.Raycaster();
 const _downDir = new THREE.Vector3(0, -1, 0);
 const _downOrigin = new THREE.Vector3();
 function surfaceTopAt(x, z){
-  // highest collider surface directly under (x,z); -Infinity if nothing there
+  // highest collider surface directly under (x,z); -Infinity if nothing there.
+  // Dynamic props are included so the player can stand on / walk up their real (possibly tilted)
+  // surfaces — a tilted dynamic box reads as a ramp, a steep face reads as a wall, just like static
+  // geometry. Their meshes are transformed by the physics step, so the raycast tracks them.
   _downOrigin.set(x, 300, z);
   _downRay.set(_downOrigin, _downDir);
   _downRay.far = 600;
-  const hits = _downRay.intersectObjects(colliders, true);
   let top = -Infinity;
+  const hits = _downRay.intersectObjects(colliders, true);
   for(const h of hits){ if(h.point.y > top) top = h.point.y; }
+  if(dynamicProps.length){
+    const dh = _downRay.intersectObjects(dynamicProps, true);
+    for(const h of dh){ if(h.point.y > top) top = h.point.y; }
+  }
+  return top;
+}
+// Surface height of one specific prop directly under (x,z) — used to tell "standing on it" from
+// "walking into its side" so the player-vs-prop force code doesn't fight the mover while climbing.
+const _oneObj = [null];
+function propSurfaceAt(obj, x, z){
+  _downOrigin.set(x, 300, z); _downRay.set(_downOrigin, _downDir); _downRay.far = 600;
+  _oneObj[0] = obj;
+  const hits = _downRay.intersectObjects(_oneObj, true);
+  let top = -Infinity; for(const h of hits){ if(h.point.y > top) top = h.point.y; }
   return top;
 }
 function groundHeightAt(x, z, feetY){
