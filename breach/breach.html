@@ -5037,15 +5037,23 @@ function broadcastAnim(i){
   if(NET.mode==='host'){ for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'anim', i}); }catch(e){} } }
   else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send({t:'anim', i}); }catch(e){} }
 }
+const _pcV = new THREE.Vector3();
 function refreshPropCollider(obj){
   obj.updateMatrixWorld(true);
   // overall box (selection highlight, proximity, physics shape sizing)
   obj.userData.box = new THREE.Box3().setFromObject(obj, true);
-  // Per-mesh boxes for player collision: a model that bundles a wide flat base + a tall crate shouldn't
-  // block you across the whole base. Each sub-mesh gets its own tight AABB, so a thin floor plate (low,
-  // below the body band) never walls you off, while the crate blocks only at its real narrow footprint.
+  // Per-mesh boxes for player collision. Each mesh's box is built from ITS OWN vertices only — NOT via
+  // setFromObject, which recurses into child meshes and can fuse an offset child into one giant box.
+  // Invisible/helper meshes are skipped. Precise (per-vertex) keeps each box tight to the real geometry.
   const boxes = [];
-  obj.traverse(o=>{ if(o.isMesh && o.geometry){ const b = new THREE.Box3().setFromObject(o, true); if(isFinite(b.min.x) && isFinite(b.max.x)) boxes.push(b); } });
+  obj.traverse(o=>{
+    if(!o.isMesh || o.visible===false || !o.geometry) return;
+    const pos = o.geometry.attributes && o.geometry.attributes.position; if(!pos || !pos.count) return;
+    o.updateWorldMatrix(true, false);
+    const b = new THREE.Box3();
+    for(let i=0;i<pos.count;i++){ _pcV.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld); b.expandByPoint(_pcV); }
+    if(isFinite(b.min.x) && isFinite(b.max.x)) boxes.push(b);
+  });
   obj.userData.boxes = boxes.length ? boxes : [obj.userData.box];
   obj.userData.climbable = true;
 }
@@ -6415,7 +6423,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 5 · 2026-06-01';
+const BUILD_VERSION = 'build 6 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7022,21 +7030,44 @@ function groundHeightAt(x, z, feetY){
   return 0; // arena floor
 }
 // Can the player's center occupy (x,z) at this foot height? (floor or a surface within a step)
+// Can the player's center occupy (x,z) at this foot height? Solid geometry that fills the player's
+// body band is a wall; low steps (box top within a step) and overhead clearance pass. This is driven by
+// the per-mesh boxes (not a downward ray), so arbitrary models are solid the same way primitives are —
+// you can't clip into a model just because a ray happened to hit a low internal surface.
 function clearAt(x, z, feetY){
-  const top = surfaceTopAt(x, z);
-  if(top === -Infinity || top <= feetY + STEP) return true;   // floor, or a surface within a step (ramps)
-  // A surface sits above step height here. Allow the move if the player's body column is actually clear,
-  // so you can walk *under* a raised object that has headroom. Block only if static geometry occupies
-  // the band between step height and the player's head.
-  const bandLo = feetY + STEP, bandHi = feetY + PLAYER_HEIGHT, R = player.radius;
+  const R = player.radius;
+  // Surface directly under the destination (a tread/step you'd stand on). Capped to within a step so a
+  // wall's low ledge can't pretend the whole wall is climbable. The body band is measured from there, so
+  // stepping onto a stair tread doesn't read the tread as a wall — but a tall model ahead still blocks.
+  const surf = surfaceTopAt(x, z);
+  const standY = (surf > -Infinity && surf <= feetY + STEP + 1e-4) ? Math.max(0, surf) : feetY;
+  const bandLo = standY + STEP, bandHi = standY + PLAYER_HEIGHT;
   for(const c of colliders){
     const bs = (c.userData && (c.userData.boxes || (c.userData.box && [c.userData.box]))); if(!bs) continue;
+    const r = c.rotation;
+    const tilted = r && (Math.abs(r.x)>0.05 || Math.abs(r.z)>0.05);   // ramps: AABB fills the band, but the slope may be climbable
     for(const b of bs){
       if(x < b.min.x - R || x > b.max.x + R || z < b.min.z - R || z > b.max.z + R) continue;   // outside this part's footprint
-      if(b.min.y < bandHi && b.max.y > bandLo) return false;   // a part occupies the body band -> a real wall
+      if(!(b.min.y < bandHi && b.max.y > bandLo + 1e-4)) continue;   // top at/below step height (a step) or pure overhead (walk under) — not a wall
+      if(tilted){ const s = propSurfaceAt(c, x, z); if(s > -Infinity && s <= feetY + STEP) continue; }   // climbable ramp surface here
+      return false;   // solid geometry occupies the body band -> a wall
     }
   }
-  return true;   // clearance overhead -> walk under
+  return true;
+}
+// Is the player's CENTER literally inside solid geometry (no radius margin)? Used as an escape hatch so a
+// player who ends up embedded (spawned inside, shoved in) can always walk back out instead of freezing.
+function insideSolid(x, z, feetY){
+  const bandLo = feetY + STEP, bandHi = feetY + PLAYER_HEIGHT;
+  for(const c of colliders){
+    const r = c.rotation; if(r && (Math.abs(r.x)>0.05 || Math.abs(r.z)>0.05)) continue;
+    const bs = (c.userData && (c.userData.boxes || (c.userData.box && [c.userData.box]))); if(!bs) continue;
+    for(const b of bs){
+      if(x < b.min.x || x > b.max.x || z < b.min.z || z > b.max.z) continue;   // center strictly inside footprint
+      if(b.min.y < bandHi && b.max.y > bandLo) return true;
+    }
+  }
+  return false;
 }
 // Lowest underside of any static collider directly above the player's feet at (x,z) — the ceiling
 // the head can't pass through (Infinity if nothing overhead). Used for head-bump on jumps.
@@ -7055,14 +7086,15 @@ function ceilingAt(x, z, feetY){
 // while ramps/steps within STEP are walked up.
 function moveHorizontal(x, z, dx, dz, feetY){
   const R = player.radius;
+  const stuck = insideSolid(x, z, feetY);   // already embedded -> let the player walk out instead of freezing
   let nx = x, nz = z;
   if(dx !== 0){
     const probeX = x + dx + Math.sign(dx)*R;
-    if(clearAt(probeX, z, feetY)) nx = x + dx;
+    if(stuck || clearAt(probeX, z, feetY)) nx = x + dx;
   }
   if(dz !== 0){
     const probeZ = z + dz + Math.sign(dz)*R;
-    if(clearAt(nx, probeZ, feetY)) nz = z + dz;
+    if(stuck || clearAt(nx, probeZ, feetY)) nz = z + dz;
   }
   player.pos.x = nx; player.pos.z = nz;
   const lim = ARENA - 1.5;
