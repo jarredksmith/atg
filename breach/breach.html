@@ -6865,6 +6865,17 @@ function clearAt(x, z, feetY){
   }
   return true;   // clearance overhead -> walk under
 }
+// Lowest underside of any static collider directly above the player's feet at (x,z) — the ceiling
+// the head can't pass through (Infinity if nothing overhead). Used for head-bump on jumps.
+function ceilingAt(x, z, feetY){
+  let lowest = Infinity;
+  for(const c of colliders){
+    const b = c.userData && c.userData.box; if(!b) continue;
+    if(x < b.min.x || x > b.max.x || z < b.min.z || z > b.max.z) continue;   // center outside footprint
+    if(b.min.y > feetY + STEP && b.min.y < lowest) lowest = b.min.y;          // an overhead underside
+  }
+  return lowest;
+}
 // Axis-separated move with a body-radius probe ahead, so walls block and you slide along them
 // while ramps/steps within STEP are walked up.
 function moveHorizontal(x, z, dx, dz, feetY){
@@ -6950,6 +6961,12 @@ function loop(){
 
   // apply vertical movement
   player.pos.y += player.vel.y*dt;
+  // head-bump: stop at the underside of an overhead prop instead of clipping through it
+  if(player.vel.y > 0){
+    const HEAD = PLAYER_HEIGHT - EYE;   // head sits this far above the eye
+    const ceil = ceilingAt(player.pos.x, player.pos.z, player.pos.y - EYE);
+    if(player.pos.y + HEAD > ceil){ player.pos.y = ceil - HEAD; player.vel.y = 0; }   // bonk
+  }
 
   // determine the surface under us and land on it
   const surface = groundHeightAt(player.pos.x, player.pos.z, player.pos.y - EYE);
