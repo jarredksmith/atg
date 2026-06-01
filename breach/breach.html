@@ -7292,19 +7292,27 @@ function swapSelectedProp(url){
   const t = [old.position.x, old.position.y, old.position.z, old.rotation.x, old.rotation.y, old.rotation.z, old.scale.x, old.scale.y, old.scale.z];
   const mode = old.userData.animMode || 'loop';
   removeProp(i);
-  spawnProp(url, t, (obj)=>{ editorActive='props'; editorTargets.props.idx = propModels.indexOf(obj); renderEditorFields(); }, undefined, mode);
+  spawnProp(url, t, (obj)=>{ editorActive='props'; editorTargets.props.idx = propModels.indexOf(obj); selProps=[obj]; renderEditorFields(); }, undefined, mode);
 }
 // Add a new object (a 'box' primitive or a model URL) in front of the player, using the current default anim mode.
 function addSceneProp(src){
   const fwd = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
   const px = player.pos.x + fwd.x*5, pz = player.pos.z + fwd.z*5;
-  spawnProp(src, [px, 0, pz, 0, 0, 0, 1], (obj)=>{ editorActive='props'; editorTargets.props.idx = propModels.indexOf(obj); renderEditorFields(); }, undefined, newPropAnimMode);
+  spawnProp(src, [px, 0, pz, 0, 0, 0, 1], (obj)=>{ editorActive='props'; editorTargets.props.idx = propModels.indexOf(obj); selProps=[obj]; renderEditorFields(); }, undefined, newPropAnimMode);
 }
 function deleteSelectedProp(){
+  if(isGroupSel()){
+    const idxs = selProps.map(o=>propModels.indexOf(o)).filter(i=>i>=0).sort((a,b)=>b-a);
+    for(const i of idxs) removeProp(i);   // descending so earlier indices stay valid
+    selProps.length = 0;
+    editorTargets.props.idx = Math.max(0, Math.min(editorTargets.props.idx, propModels.length-1));
+    renderEditorFields(); return;
+  }
   const i = editorTargets.props.idx;
   if(!propModels[i]) return;
   removeProp(i);
   editorTargets.props.idx = Math.max(0, Math.min(i, propModels.length-1));
+  syncSelToIdx();
   renderEditorFields();
 }
 // Add a point light in front of the player (raised to head height) and select it.
@@ -7334,7 +7342,7 @@ function duplicateSelectedProp(){
               o.rotation.x, o.rotation.y, o.rotation.z,
               o.scale.x, o.scale.y, o.scale.z ];   // 9-tuple keeps non-uniform scale exact
   const wasDyn = !!o.userData.phys;
-  spawnProp(src, t, (obj)=>{ if(wasDyn) setPropDynamic(obj, true); editorActive='props'; editorTargets.props.idx = propModels.indexOf(obj); renderEditorFields(); }, undefined, o.userData.animMode || 'loop', propMaterialDesc(o));
+  spawnProp(src, t, (obj)=>{ if(wasDyn) setPropDynamic(obj, true); editorActive='props'; editorTargets.props.idx = propModels.indexOf(obj); selProps=[obj]; renderEditorFields(); }, undefined, o.userData.animMode || 'loop', propMaterialDesc(o));
 }
 function duplicateSelectedLight(){
   const g = lightModels[editorTargets.lights.idx]; if(!g) return;
@@ -7385,7 +7393,7 @@ function buildEditorPanel(){
     + '<div class="edSecHead"><span class="edCaret">▾</span>'+title+'</div>'
     + '<div class="edSecBody">'+innerHtml+'</div></div>';
   p.innerHTML = '<h3>LEVEL / TRANSFORM EDITOR</h3>'
-    + '<div class="hint">Click any object in the scene to select it. Pick <b>Move / Rotate / Scale</b>, drag the handles, or type values. <b>Shift+D</b> duplicates; <b>Delete</b> removes. Section headers below collapse. Press P to close.</div>'
+    + '<div class="hint">Click any object in the scene to select it. <b>Shift+click</b> props to select several and move/rotate/scale them as a group. Pick <b>Move / Rotate / Scale</b>, drag the handles, or type values. <b>Shift+D</b> duplicates; <b>Delete</b> removes. Section headers below collapse. Press P to close.</div>'
     + '<div class="tabs" id="edTabs"></div>'
     + '<div class="row2" id="edView" style="margin-bottom:8px"></div>'
     + sec('Gizmo', 'gizmo', '<div id="edGizmo"></div>')
@@ -7506,8 +7514,8 @@ function renderEditorFields(){
       const prev = document.createElement('button'); prev.textContent='◀ Prev';
       const lbl  = document.createElement('button'); lbl.textContent=noun+' '+(tgt.idx+1)+' / '+n; lbl.style.flex='1.4'; lbl.disabled=true; lbl.style.opacity='0.85';
       const next = document.createElement('button'); next.textContent='Next ▶';
-      prev.onclick = ()=>{ tgt.idx=(tgt.idx-1+n)%n; renderEditorFields(); };
-      next.onclick = ()=>{ tgt.idx=(tgt.idx+1)%n; renderEditorFields(); };
+      prev.onclick = ()=>{ tgt.idx=(tgt.idx-1+n)%n; if(editorActive==='props') syncSelToIdx(); renderEditorFields(); };
+      next.onclick = ()=>{ tgt.idx=(tgt.idx+1)%n; if(editorActive==='props') syncSelToIdx(); renderEditorFields(); };
       row.appendChild(prev); row.appendChild(lbl); row.appendChild(next);
       picker.appendChild(row);
     }
@@ -7519,7 +7527,7 @@ function renderEditorFields(){
     gz.innerHTML = '';
     const selectable = (editorActive==='props' || editorActive==='station' || editorActive==='lights');
     if(selectable){
-      const head = document.createElement('div'); head.className='hint'; head.style.margin='2px 0 3px'; head.innerHTML='<b>Gizmo</b> — drag the handles in the scene · keys <b>1 2 3</b>';
+      const head = document.createElement('div'); head.className='hint'; head.style.margin='2px 0 3px'; head.innerHTML='<b>Gizmo</b> — drag the handles in the scene · keys <b>1 2 3</b>' + (isGroupSel() ? (' · <b style="color:#38f5b5">'+selProps.length+' selected (group)</b>') : '');
       gz.appendChild(head);
       const row = document.createElement('div'); row.className='row2';
       const modes = [['translate','Move','1'],['rotate','Rotate','2'],['scale','Scale','3']];
@@ -7776,6 +7784,21 @@ let gizmo = null, gizmoDrag = null;
 let gizmoMode = 'translate';        // 'translate' | 'rotate' | 'scale'
 let scaleProportional = true;       // default: uniform scaling; checkbox lets the user go non-uniform
 const AXIS_COL = { x:0xff5566, y:0x66ff88, z:0x5599ff };
+// ---- Multi-selection (shift+click props to select several; >1 transforms as a group) ----
+let selProps = [];        // selected prop meshes; the "primary" is editorTargets.props.idx
+let selBoxes = [];        // pooled BoxHelpers for highlighting the multi-selection
+function isGroupSel(){ return editorOpen && editorActive==='props' && selProps.length>1; }
+const _cen = new THREE.Vector3();
+function selCentroid(){ _cen.set(0,0,0); for(const o of selProps) _cen.add(o.position); return _cen.multiplyScalar(1/Math.max(1,selProps.length)); }
+function syncSelToIdx(){ const o = propModels[editorTargets.props.idx]; selProps = o ? [o] : []; }
+function ensureSelBoxes(n){
+  while(selBoxes.length < n){ const b = new THREE.BoxHelper(scene, 0x38f5b5); b.material.depthTest=false; b.visible=false; scene.add(b); selBoxes.push(b); }
+}
+function syncPropStateFromObj(){
+  const o = editorTargets.props.obj(); if(!o) return; const s = editorTargets.props.state;
+  s.px=o.position.x; s.py=o.position.y; s.pz=o.position.z;
+  s.rx=o.rotation.x*DEG; s.ry=o.rotation.y*DEG; s.rz=o.rotation.z*DEG; s.s=o.scale.x;
+}
 function selectedSceneObject(){
   if(editorActive==='station') return station && station.model;
   if(editorActive==='props') return editorTargets.props.obj();
@@ -7784,6 +7807,7 @@ function selectedSceneObject(){
 }
 // live world position of the selected scene object (or null)
 function getSelPos(){
+  if(isGroupSel()) return selCentroid();
   if(editorActive==='station' && station) return station.group.position;
   if(editorActive==='props'){ const o=editorTargets.props.obj(); return o?o.position:null; }
   if(editorActive==='lights'){ const g=editorTargets.lights.obj(); return g?g.position:null; }
@@ -7970,6 +7994,10 @@ function tryGizmoGrab(e){
     const start = hit.clone().sub(pos);
     gizmoDrag = { kind, axis, normal, center: pos.clone(), startVec: start, startEuler: rot.clone() };
   }
+  if(isGroupSel()){   // group transform: remember every selected prop's start transform + the shared pivot
+    gizmoDrag.pivot = pos.clone();
+    gizmoDrag.group = selProps.map(o=>({ obj:o, pos:o.position.clone(), quat:o.quaternion.clone(), scale:o.scale.clone() }));
+  }
   return true;
 }
 // pixel-ish reference distance from the gizmo center to the pointer (for uniform/center scaling)
@@ -7982,6 +8010,7 @@ function scaleRefDistance(e, pos){
 function gizmoDragMove(e){
   if(!gizmoDrag) return;
   const d = gizmoDrag;
+  if(d.group){ applyGroupDrag(e, d); return; }   // multi-selection: transform the whole group about the pivot
   if(d.kind==='translate'){
     const s = axisParamUnderPointer(e, d.startPos, d.dir);
     setSelPos(d.startPos.clone().addScaledVector(d.dir, s - d.startParam));
@@ -8020,7 +8049,49 @@ function gizmoDragMove(e){
   updateFieldDisplays();
   updateEditorOut();
 }
+// Transform every selected prop about the shared pivot (centroid at grab time).
+const _gdq = new THREE.Quaternion(), _gtmp = new THREE.Vector3();
+function applyGroupDrag(e, d){
+  const pivot = d.pivot;
+  if(d.kind==='translate'){
+    const s = axisParamUnderPointer(e, pivot, d.dir);
+    const off = d.dir.clone().multiplyScalar(s - d.startParam);
+    for(const it of d.group){ it.obj.position.copy(it.pos).add(off); refreshPropCollider(it.obj); }
+  } else if(d.kind==='rotate'){
+    const hit = pointerOnPlane(e, pivot, d.normal); if(!hit) return;
+    const cur = hit.clone().sub(pivot);
+    let ang = Math.atan2(cur.clone().cross(d.startVec).dot(d.normal), cur.dot(d.startVec)); ang = -ang;
+    _gdq.setFromAxisAngle(d.normal, ang);
+    for(const it of d.group){
+      it.obj.position.copy(_gtmp.copy(it.pos).sub(pivot).applyQuaternion(_gdq)).add(pivot);
+      it.obj.quaternion.copy(_gdq).multiply(it.quat);
+      refreshPropCollider(it.obj);
+    }
+  } else if(d.kind==='scale'){
+    let f;
+    if(d.axis==='all') f = Math.max(0.02, scaleRefDistance(e, pivot) / d.refDist);
+    else { const cur = axisParamUnderPointer(e, pivot, d.dir); f = Math.max(0.02, cur / d.startParam); }
+    for(const it of d.group){   // group scaling is uniform, and spreads/contracts the cluster about the pivot
+      it.obj.position.copy(_gtmp.copy(it.pos).sub(pivot).multiplyScalar(f)).add(pivot);
+      it.obj.scale.copy(it.scale).multiplyScalar(f);
+      refreshPropCollider(it.obj);
+    }
+  }
+  syncPropStateFromObj();
+  updateGizmo();
+  updateFieldDisplays();
+  updateEditorOut();
+}
 function updateSelectionHighlight(){
+  if(isGroupSel()){
+    if(selBox) selBox.visible = false;
+    ensureSelBoxes(selProps.length);
+    selProps.forEach((o,i)=>{ const b=selBoxes[i]; b.setFromObject(o); b.visible=true; });
+    for(let i=selProps.length;i<selBoxes.length;i++) selBoxes[i].visible=false;
+    updateGizmo();
+    return;
+  }
+  for(const b of selBoxes) b.visible=false;   // not a group: hide the pooled boxes
   const o = editorOpen ? selectedSceneObject() : null;
   if(!o){ if(selBox) selBox.visible=false; updateGizmo(); return; }
   if(!selBox){ selBox = new THREE.BoxHelper(o, 0x38f5b5); selBox.material.depthTest=false; scene.add(selBox); }
@@ -8052,7 +8123,19 @@ renderer.domElement.addEventListener('click', (e)=>{
     if(li>=0){ picked='lights'; editorTargets.lights.idx=li; break; }
     root = root.parent;
   }
-  if(picked){ editorActive=picked; renderEditorFields(); }
+  if(picked==='props'){
+    const obj = propModels[editorTargets.props.idx];
+    if(e.shiftKey && obj){
+      const at = selProps.indexOf(obj);
+      if(at>=0){ if(selProps.length>1) selProps.splice(at,1); }   // toggle off (keep at least one)
+      else selProps.push(obj);
+      const primary = selProps[selProps.length-1] || obj;
+      editorTargets.props.idx = propModels.indexOf(primary);
+    } else {
+      selProps = obj ? [obj] : [];
+    }
+    editorActive='props'; renderEditorFields();
+  } else if(picked){ selProps.length=0; editorActive=picked; renderEditorFields(); }
 });
 
 function updateEditorOut(){
@@ -8107,6 +8190,7 @@ function toggleEditor(){
     firing=false; ads=false;
     document.exitPointerLock();
     teardownInstancing();   // show individual props so they can be edited/selected
+    if(typeof syncSelToIdx==='function') syncSelToIdx();   // start each editor session with a clean (single) selection
     destroyPhysWorld();     // edit plain meshes; snap dynamic props back to their authored transform
     for(const o of dynamicProps){ if(o.userData.physHome) o.position.copy(o.userData.physHome); if(o.userData.physHomeQ) o.quaternion.copy(o.userData.physHomeQ); }
     for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible = true; }
