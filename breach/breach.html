@@ -6481,7 +6481,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 7 · 2026-06-01';
+const BUILD_VERSION = 'build 8 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7094,21 +7094,20 @@ function groundHeightAt(x, z, feetY){
 // you can't clip into a model just because a ray happened to hit a low internal surface.
 function clearAt(x, z, feetY){
   const R = player.radius;
-  // Surface directly under the destination (a tread/step you'd stand on). Capped to within a step so a
-  // wall's low ledge can't pretend the whole wall is climbable. The body band is measured from there, so
-  // stepping onto a stair tread doesn't read the tread as a wall — but a tall model ahead still blocks.
+  // Topmost surface at this column (the safety net returns the box top if the ray slips through). If it's
+  // within a step of the feet, the column ABOVE it is clear by definition (a downward ray hits the highest
+  // point first), so it's walkable: floor, low step, ramp, or a stair tread — this climbs a staircase even
+  // when it is one solid mesh, which a pure bounding-box test cannot.
   const surf = surfaceTopAt(x, z);
-  const standY = (surf > -Infinity && surf <= feetY + STEP + 1e-4) ? Math.max(0, surf) : feetY;
-  const bandLo = standY + STEP, bandHi = standY + PLAYER_HEIGHT;
+  if(surf > -Infinity && surf <= feetY + STEP + 1e-4) return true;
+  // Otherwise something rises above step height here. Block only if it fills the body band (a wall); an
+  // obstacle entirely above the head is walk-under clearance.
+  const bandLo = feetY + STEP, bandHi = feetY + PLAYER_HEIGHT;
   for(const c of colliders){
     const bs = (c.userData && (c.userData.boxes || (c.userData.box && [c.userData.box]))); if(!bs) continue;
-    const r = c.rotation;
-    const tilted = r && (Math.abs(r.x)>0.05 || Math.abs(r.z)>0.05);   // ramps: AABB fills the band, but the slope may be climbable
     for(const b of bs){
       if(x < b.min.x - R || x > b.max.x + R || z < b.min.z - R || z > b.max.z + R) continue;   // outside this part's footprint
-      if(!(b.min.y < bandHi && b.max.y > bandLo + 1e-4)) continue;   // top at/below step height (a step) or pure overhead (walk under) — not a wall
-      if(tilted){ const s = propSurfaceAt(c, x, z); if(s > -Infinity && s <= feetY + STEP) continue; }   // climbable ramp surface here
-      return false;   // solid geometry occupies the body band -> a wall
+      if(b.min.y < bandHi && b.max.y > bandLo) return false;   // solid geometry occupies the body band -> a wall
     }
   }
   return true;
@@ -8325,6 +8324,7 @@ function setSelPos(v){
     station.group.position.copy(v); station.pos.copy(v);
     if(station.light) station.light.position.set(v.x, 3+v.y, v.z);
     const s=editorTargets.station.state; s.px=v.x; s.py=v.y; s.pz=v.z;
+    refreshStationCollider();
   } else if(editorActive==='props'){
     const o=editorTargets.props.obj(); if(!o) return;
     o.position.copy(v); refreshPropCollider(o);
@@ -8342,10 +8342,14 @@ function getSelRot(){
   if(editorActive==='lights'){ const g=editorTargets.lights.obj(); return g?g.rotation:null; }
   return null;
 }
+// Recompute the station's collision boxes at its current transform — gizmo moves change the group/model
+// directly (not through apply()), so without this the box would stay frozen at the load-time transform.
+function refreshStationCollider(){ if(station && station.model){ station.group.updateMatrixWorld(true); refreshPropCollider(station.model); } }
 function setSelRot(euler){
   if(editorActive==='station' && station){
     station.group.rotation.copy(euler);
     const s=editorTargets.station.state; s.rx=euler.x*DEG; s.ry=euler.y*DEG; s.rz=euler.z*DEG;
+    refreshStationCollider();
   } else if(editorActive==='props'){
     const o=editorTargets.props.obj(); if(!o) return;
     o.rotation.copy(euler); refreshPropCollider(o);
@@ -8366,6 +8370,7 @@ function setSelScale(v){
   if(editorActive==='station' && station && station.model){
     station.model.scale.copy(v);
     editorTargets.station.state.s = v.x;   // station field is uniform
+    refreshStationCollider();
   } else if(editorActive==='props'){
     const o=editorTargets.props.obj(); if(!o) return;
     o.scale.copy(v); refreshPropCollider(o);
