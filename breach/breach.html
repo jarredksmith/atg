@@ -5314,7 +5314,7 @@ addEventListener('keydown', e=>{
   // If a text field has focus, let it handle the key — don't record movement or fire any shortcut.
   if(typingInField(e)) return;
   keys[e.code]=true;
-  if(e.code==='Backquote'){ const el=$('padDebug'); if(el) el.style.display = (el.style.display==='block'?'none':'block'); e.preventDefault(); return; }   // controller diagnostic
+  if(e.code==='Backquote'){ const el=$('padDebug'); if(el){ const show = el.style.display!=='block'; el.style.display = show?'block':'none'; if(show) el.textContent = 'BREACH  ' + BUILD_VERSION + '\nCONTROLLER DEBUG  (` hide · ] switch pad)'; } e.preventDefault(); return; }   // controller diagnostic + build version
   if(e.code==='BracketRight'){   // manually switch which detected gamepad is used
     const ps = navigator.getGamepads ? navigator.getGamepads() : [];
     const idxs = []; for(const p of ps){ if(p) idxs.push(p.index); }
@@ -6054,11 +6054,9 @@ function loadStationModel(){
       }
       g.add(model);
       g.updateMatrixWorld(true);
-      const box = new THREE.Box3().setFromObject(model);
       // drop the temporary collider if still present
       if(station.collider && station.collider !== station.model){ const ci = colliders.indexOf(station.collider); if(ci>=0) colliders.splice(ci,1); if(station.collider.parent) station.collider.parent.remove(station.collider); else scene.remove(station.collider); }
-      model.userData.box = box;
-      model.userData.climbable = true;
+      refreshPropCollider(model);   // precise + per-mesh collision boxes, same treatment as props
       colliders.push(model);
       station.collider = model;
       station.model = model;
@@ -6337,10 +6335,12 @@ function pickGamepad(pads){
   for(const p of pads){ if(!p) continue; const sc=scorePad(p); if(sc>bestScore){ bestScore=sc; best=p; } }
   return (best && bestScore>-1e8) ? best : null;
 }
+// === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
+const BUILD_VERSION = 'build 2 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
-  const lines = ['CONTROLLER DEBUG  (` hide · ] switch pad)'];
+  const lines = ['BREACH  ' + BUILD_VERSION, 'CONTROLLER DEBUG  (` hide · ] switch pad)'];
   let count=0;
   for(let i=0;i<pads.length;i++){ const p=pads[i]; if(!p) continue; count++;
     const mark = (gp && p.index===gp.index) ? '▶' : ' ';
@@ -7308,7 +7308,8 @@ const editorTargets = {
     apply(){ const s=this.state;
       if(station){ station.group.position.set(s.px,s.py,s.pz); station.pos.set(s.px,s.py,s.pz);
         if(station.light) station.light.position.set(s.px,3+s.py,s.pz); }
-      const o=this.obj(); if(o){ o.scale.setScalar(s.s); o.rotation.set(s.rx*RAD, s.ry*RAD, s.rz*RAD); } },
+      const o=this.obj(); if(o){ o.scale.setScalar(s.s); o.rotation.set(s.rx*RAD, s.ry*RAD, s.rz*RAD);
+        station.group.updateMatrixWorld(true); refreshPropCollider(o); } },   // keep collision boxes in sync with the transform
     code(){ const s=this.state;
       return '// ===== Ammo Station =====\n'
         + 'const STATION_MODEL_URL = ' + JSON.stringify(stationModelUrl) + ';\n'
