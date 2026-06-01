@@ -5032,6 +5032,11 @@ function playPropAnimationOnce(obj){
   for(const a of acts){ a.reset(); a.play(); }
   if(SFX && SFX.swap) SFX.swap();   // small mechanical click for feedback
 }
+// Tell peers to play prop #i's trigger animation (so a trigger one player fires is seen by everyone).
+function broadcastAnim(i){
+  if(NET.mode==='host'){ for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'anim', i}); }catch(e){} } }
+  else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send({t:'anim', i}); }catch(e){} }
+}
 function refreshPropCollider(obj){
   obj.updateMatrixWorld(true);
   obj.userData.box = new THREE.Box3().setFromObject(obj);
@@ -5583,11 +5588,13 @@ const NET = {
   players:{},          // remote players visible to me: id -> {mesh, posEye, target, yaw, hp, wep, name}
   enemyMeshes:{},      // client only: enemyId -> {mesh, target}
   coinMeshes:{},       // client only: coinId  -> mesh
+  deadChests:{},       // client only: chestId -> true, suppresses a crate we just bought until the host's snapshot drops it
   pendingLevel:null,   // client: host level data, applied at spawn
 };
 // duel-only local state
 let duelDead = false, duelRespawnTimer = 0, duelInvuln = 0, lastDamagedBy = null;
 const DUEL_SPAWNS = [ {x:-50,z:-50,yaw:Math.PI*0.25}, {x:50,z:50,yaw:Math.PI*1.25}, {x:-50,z:50,yaw:Math.PI*0.75}, {x:50,z:-50,yaw:-Math.PI*0.25} ];
+const DUEL_KILL_CREDITS = 75;   // credits earned per kill in 1v1 (so loot crates + ammo station are usable)
 function duelSpawnFor(id){ return DUEL_SPAWNS[id % DUEL_SPAWNS.length]; }
 function sendToPlayer(id, msg){
   if(NET.mode==='host'){ const c=NET.conns[id]; if(c) try{ c.send(msg); }catch(e){} }
@@ -5652,6 +5659,9 @@ function duelRespawn(){
 function registerDuelKill(killerId, victimId){   // host only
   if(killerId==null || killerId===victimId) return;   // ignore self/unknown (e.g. fell to nothing)
   NET.duelScore[killerId] = (NET.duelScore[killerId]||0) + 1;
+  // award credits so the loot crates + ammo station are usable in 1v1
+  if(killerId===NET.myId){ credits += DUEL_KILL_CREDITS; SFX.coin(); updateHUD(); }
+  else sendToPlayer(killerId, { t:'credit', v:DUEL_KILL_CREDITS });
   broadcastDuelScore();
   if(NET.duelScore[killerId] >= NET.killTarget) broadcastDuelOver(killerId);
 }
@@ -5745,7 +5755,9 @@ function serializeWorld(){
   const C=coins.map(c=>({ id:c.id, p:[c.mesh.position.x,c.mesh.position.z] }));
   // dynamic physics props (position + orientation) so clients see them roll
   const D = dynamicProps.length ? dynamicProps.map(o=>({ id:o.userData.phys.id, p:[o.position.x,o.position.y,o.position.z], q:[o.quaternion.x,o.quaternion.y,o.quaternion.z,o.quaternion.w] })) : undefined;
-  return { t:'world', P, E, C, D, wv:wave };
+  // loot crates (id, position, item ids) so clients see + can open the same crates
+  const K = chests.length ? chests.map(ch=>({ id:ch.id, p:[ch.pos.x,ch.pos.z], it:ch.items.map(i=>i.id) })) : undefined;
+  return { t:'world', P, E, C, D, K, wv:wave };
 }
 function dynamicById(id){ for(const o of dynamicProps){ if(o.userData.phys && o.userData.phys.id===id) return o; } return null; }
 function broadcastWorld(){ const w=serializeWorld(); for(const id in NET.conns){ try{ NET.conns[id].send(w); }catch(e){} } }
@@ -5767,6 +5779,20 @@ function applyWorld(msg){
   const ec=document.getElementById('enemyCount'); if(ec) ec.textContent='HOSTILES: '+msg.E.length;
   // dynamic physics props: clients place them where the host says (set targets for smoothing)
   if(msg.D){ for(const d of msg.D){ const o=dynamicById(d.id); if(o){ o.userData._netTarget = d.p; o.quaternion.set(d.q[0],d.q[1],d.q[2],d.q[3]); } } }
+  // loot crates: clients mirror the host's crate list (so proximity + opening + buying all work)
+  if(NET.mode==='client'){
+    const K = msg.K || [];
+    const ks = new Set();
+    for(const k of K){
+      if(NET.deadChests[k.id]) continue;                       // a crate we just bought — wait for the host to drop it
+      ks.add(k.id);
+      let ch = chests.find(c=>c.id===k.id);
+      if(!ch){ const mesh = buildChestMesh(k.p[0], k.p[1]); ch = { id:k.id, mesh, pos:mesh.position.clone(), items:[], spin:0 }; chests.push(ch); }
+      ch.items = k.it.map(id=>ITEM_POOL.find(it=>it.id===id)).filter(Boolean);   // reconstruct items (with their act fns) by id
+    }
+    for(let i=chests.length-1;i>=0;i--){ if(!ks.has(chests[i].id)){ scene.remove(chests[i].mesh); chests.splice(i,1); } }
+    for(const id in NET.deadChests){ if(!K.some(k=>k.id===+id)) delete NET.deadChests[id]; }   // host dropped it -> forget
+  }
 }
 
 // ---- per-frame smoothing for everything I don't simulate locally ----
@@ -5806,6 +5832,8 @@ function handleClientMsg(conn, msg){
   else if(msg.t==='pvpHit'){ applyPvpDamage(msg.d, msg.from); }       // a client shot the host
   else if(msg.t==='died'){ registerDuelKill(msg.by, id); }            // a client died; credit the killer
   else if(msg.t==='push'){ const o=dynamicById(msg.id); if(o) pushDynamic(o, new THREE.Vector3(msg.dir[0],msg.dir[1],msg.dir[2]), msg.s||6, msg.pt?{x:msg.pt[0],y:msg.pt[1],z:msg.pt[2]}:null); }   // a client shot a dynamic prop
+  else if(msg.t==='buyChest'){ const ci=chests.findIndex(c=>c.id===msg.id); if(ci>=0){ scene.remove(chests[ci].mesh); chests.splice(ci,1); } }   // a client bought a crate -> remove it for everyone
+  else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'anim', i:msg.i}); }catch(e){} } } }   // play + relay to other clients
 }
 function handleHostMsg(msg){
   if(msg.t==='welcome'){
@@ -5823,6 +5851,7 @@ function handleHostMsg(msg){
   else if(msg.t==='pvpHit'){ applyPvpDamage(msg.d, msg.from); }        // the host shot this client
   else if(msg.t==='score'){ NET.duelScore=msg.s; duelHUD(); }
   else if(msg.t==='duelOver'){ showDuelResult(msg.w); }
+  else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o); }   // a trigger animation fired somewhere
 }
 
 // ---- connection lifecycle ----
@@ -6046,12 +6075,11 @@ function buildProceduralChest(){
   lid.position.y = 0.7; g.add(lid);
   return g;
 }
-function spawnChest(){
-  if(chests.length>=2) return; // cap
-  let px, pz;
-  do { px=(Math.random()-0.5)*ARENA*1.4; pz=(Math.random()-0.5)*ARENA*1.4; }
-  while(Math.hypot(px,pz)<10);
-  const mesh = new THREE.Group();              // container: uniform anim + interaction whether procedural or model
+let nextChestId = 1;
+// Build the visual container for a loot crate (model or procedural) at (x,z). Shared by the host's
+// spawnChest and the client's snapshot upsert so both render identically.
+function buildChestMesh(px, pz){
+  const mesh = new THREE.Group();
   mesh.position.set(px, 0.7, pz);
   const beam = new THREE.PointLight(0xffd166, 8, 16); beam.position.y=3; mesh.add(beam);
   if(chestModelUrl){
@@ -6068,12 +6096,20 @@ function spawnChest(){
     mesh.add(buildProceduralChest());
   }
   scene.add(mesh);
+  return mesh;
+}
+function spawnChest(){
+  if(chests.length>=2) return; // cap
+  let px, pz;
+  do { px=(Math.random()-0.5)*ARENA*1.4; pz=(Math.random()-0.5)*ARENA*1.4; }
+  while(Math.hypot(px,pz)<10);
+  const mesh = buildChestMesh(px, pz);
   // 3 random items
   const pool = ITEM_POOL.filter(it => !(it.oneTime && owned.includes(it.id)));
   const picks = [];
   const copy = pool.slice();
   for(let i=0;i<3 && copy.length;i++){ picks.push(copy.splice(Math.floor(Math.random()*copy.length),1)[0]); }
-  chests.push({ mesh, pos:mesh.position.clone(), items:picks, spin:0 });
+  chests.push({ id:nextChestId++, mesh, pos:mesh.position.clone(), items:picks, spin:0 });
 }
 function updateChests(dt){
   for(const ch of chests){ ch.spin += dt; ch.mesh.rotation.y = Math.sin(ch.spin*0.5)*0.1; ch.mesh.position.y = 0.7 + Math.sin(ch.spin*1.5)*0.08; }
@@ -6100,14 +6136,13 @@ let nearTarget = null;    // what the player is standing next to
 function checkProximity(){
   if(shopOpen) return;
   nearTarget = null;
-  const duelMode = NET.gameMode==='duel';   // duel has no economy: only animated-prop activation applies
   // station
-  if(!duelMode && station){
+  if(station){
     const d = Math.hypot(player.pos.x-station.pos.x, player.pos.z-station.pos.z);
     if(d < 3.5) nearTarget = { type:'station' };
   }
   // chests (override station if closer)
-  if(!duelMode) for(const ch of chests){
+  for(const ch of chests){
     const d = Math.hypot(player.pos.x-ch.pos.x, player.pos.z-ch.pos.z);
     if(d < 3.5){ nearTarget = { type:'chest', chest:ch }; break; }
   }
@@ -6158,7 +6193,9 @@ function interact(){
     w.reserve = Math.min(w.reserveMax, w.reserve + w.refillAmt);
     SFX.buy(); updateHUD();
   } else if(nearTarget.type==='anim'){
-    playPropAnimationOnce(nearTarget.obj);
+    const o = nearTarget.obj;
+    playPropAnimationOnce(o);
+    const i = propModels.indexOf(o); if(i>=0) broadcastAnim(i);   // mirror it on every other player
   } else {
     openShop(nearTarget.chest);
   }
@@ -6190,7 +6227,7 @@ function renderShopItems(items){
 function buyFromShop(index){
   if(!shopOpen || !shopMode) return;
   const it = shopMode.items[index];
-  if(!it) return;
+  if(!it || !it.act) return;
   if(credits < it.cost){ SFX.deny(); return; }
   credits -= it.cost;
   it.act();
@@ -6198,6 +6235,7 @@ function buyFromShop(index){
   // consume the chest after one purchase
   const ch = shopMode;
   closeShop();
+  if(NET.mode==='client'){ NET.deadChests[ch.id]=true; try{ NET.conn.send({t:'buyChest', id:ch.id}); }catch(e){} }   // ask the host to remove it for everyone
   scene.remove(ch.mesh);
   const ci = chests.indexOf(ch); if(ci>=0) chests.splice(ci,1);
   updateHUD();
@@ -7096,11 +7134,11 @@ function loop(){
   if(!isClient && !duelMode) updateCoins(dt);   // coins are host-owned; clients see them via snapshots
   updateBuffs(dt);
   updateGrenades(dt);
-  if(!duelMode) updateChests(dt);
+  updateChests(dt);
   checkProximity();   // runs in all modes; in duel it only considers trigger-animation props
 
-  // periodic chest spawning (host / solo, co-op only)
-  if(!isClient && !duelMode){
+  // periodic chest spawning (host / solo, both co-op and duel)
+  if(!isClient){
     chestTimer -= dt;
     if(chestTimer <= 0){ spawnChest(); chestTimer = 30 + Math.random()*20; }
   }
@@ -8351,6 +8389,7 @@ function startGame(){
   WEAPONS.smg.mag=40; WEAPONS.smg.reserve=120;
   WEAPONS.shotgun.mag=6; WEAPONS.shotgun.reserve=24;
   reloading=false; score=0; wave=1; credits=0; grenadeCount=0;
+  if(NET.gameMode==='duel') credits = 150;   // starting stipend so the economy is usable from the first life in 1v1
   buffs.damage=0; buffs.speed=0; buffs.shield=0;
   // reset aim/shake state
   firing=false; ads=false; adsBlend=0; shake=0;
