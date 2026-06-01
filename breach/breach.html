@@ -5314,6 +5314,10 @@ addEventListener('keydown', e=>{
   // If a text field has focus, let it handle the key — don't record movement or fire any shortcut.
   if(typingInField(e)) return;
   keys[e.code]=true;
+  // Crouch is Ctrl, so crouch+WASD lands on browser shortcuts: Ctrl+S (save page), Ctrl+D (bookmark),
+  // Ctrl+A (select all). Swallow those so moving while crouched doesn't trigger them. Ctrl+W (close tab)
+  // is browser-reserved and can't be cancelled here — the beforeunload guard below catches that one.
+  if(e.ctrlKey && (e.code==='KeyW'||e.code==='KeyA'||e.code==='KeyS'||e.code==='KeyD')) e.preventDefault();
   if(e.code==='Backquote'){ const el=$('padDebug'); if(el){ const show = el.style.display!=='block'; el.style.display = show?'block':'none'; if(show) el.textContent = 'BREACH  ' + BUILD_VERSION + '\nCONTROLLER DEBUG  (` hide · ] switch pad)'; } e.preventDefault(); return; }   // controller diagnostic + build version
   if(e.code==='BracketRight'){   // manually switch which detected gamepad is used
     const ps = navigator.getGamepads ? navigator.getGamepads() : [];
@@ -5375,12 +5379,15 @@ addEventListener('wheel', e=>{
 }, {passive:false});
 
 // pointer lock look
-let locked = false;
-let lookFresh = false;   // set when pointer lock is (re)acquired -> drop the first mousemove (it can carry a huge catch-up delta)
+let locked = false;let lookFresh = false;   // set when pointer lock is (re)acquired -> drop the first mousemove (it can carry a huge catch-up delta)
 const MAX_LOOK_DELTA = 300;   // px per mousemove event; guards against spurious spikes that snap the view
 let editorDragLook = false, editorDragMoved = false, editorDragPan = false;   // editor mouse states
 renderer.domElement.addEventListener('click', ()=>{ if(gameOn && !locked && !shopOpen && !editorOpen) renderer.domElement.requestPointerLock(); });
 document.addEventListener('pointerlockchange', ()=>{ const was=locked; locked = document.pointerLockElement === renderer.domElement; if(locked && !was) lookFresh = true; });
+// Ctrl+W (crouch + forward) is the browser's close-tab shortcut and can't be cancelled from a keydown.
+// While actively playing (pointer locked), ask the browser to confirm before unloading so an accidental
+// Ctrl+W shows a "Leave site?" prompt the player can cancel instead of silently losing the session.
+addEventListener('beforeunload', e=>{ if(locked){ e.preventDefault(); e.returnValue=''; } });
 document.addEventListener('mousemove', e=>{
   if(editorOpen){
     if(gizmoDrag){ gizmoDragMove(e); editorDragMoved = true; return; }   // dragging an axis handle
@@ -6336,7 +6343,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 2 · 2026-06-01';
+const BUILD_VERSION = 'build 3 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
