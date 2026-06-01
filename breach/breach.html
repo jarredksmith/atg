@@ -5266,8 +5266,24 @@ const player = {
   radius: 0.8,
   yaw: 0, pitch: 0,
 };
-const EYE = 1.7;            // camera height above the surface the player stands on
-const SPEED = 28, SPRINT = 1.7, JUMP = 13, GRAV = 30;  // higher jump, snappier gravity
+const EYE = 1.7;            // standing camera height above the surface the player stands on
+// ---- World movement settings (editable in the editor's World panel; saved with the level) ----
+const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14 };
+let worldCfg = Object.assign({}, DEFAULT_WORLD, (savedLevel && savedLevel.world) || {});
+let SPEED, SPRINT, JUMP, GRAV, CROUCH_SPEED;   // live values derived from worldCfg
+function applyWorldCfg(){
+  worldCfg.walk   = Math.max(2,  +worldCfg.walk   || DEFAULT_WORLD.walk);
+  worldCfg.run    = Math.max(worldCfg.walk, +worldCfg.run || DEFAULT_WORLD.run);
+  worldCfg.jump   = Math.max(0,  +worldCfg.jump   || DEFAULT_WORLD.jump);
+  worldCfg.grav   = Math.max(1,  +worldCfg.grav   || DEFAULT_WORLD.grav);
+  worldCfg.crouch = Math.max(1,  Math.min(worldCfg.walk, +worldCfg.crouch || DEFAULT_WORLD.crouch));
+  SPEED = worldCfg.walk; SPRINT = worldCfg.run / worldCfg.walk;
+  JUMP = worldCfg.jump; GRAV = worldCfg.grav; CROUCH_SPEED = worldCfg.crouch;
+}
+applyWorldCfg();
+// crouch (hold Ctrl or C): lowers the view and slows movement
+let crouching = false, crouchT = 0;
+const CROUCH_DIP = 0.8;     // how far the camera lowers when fully crouched
 const keys = {};
 addEventListener('keydown', e=>{
   keys[e.code]=true;
@@ -6007,17 +6023,39 @@ function giveWeapon(key){ if(!owned.includes(key)){ owned.push(key); } switchWea
 
 const chestGeo = new THREE.BoxGeometry(1.6, 1.1, 1.1);
 const chestMat = new THREE.MeshStandardMaterial({ color:0x3a2a10, emissive:0xffaa00, emissiveIntensity:0.5, metalness:0.5, roughness:0.5 });
+// Loot box visual: '' = built-in procedural chest; set a GLB URL in the editor's World panel to use a model.
+let chestModelUrl   = (savedLevel && savedLevel.chest && savedLevel.chest.url)   || '';
+let chestModelScale = (savedLevel && savedLevel.chest && savedLevel.chest.scale) || 1;
+function swapChestModel(url){ chestModelUrl = (url||'').trim(); }
+function buildProceduralChest(){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(chestGeo, chestMat); body.castShadow = true; g.add(body);
+  const lid = new THREE.Mesh(new THREE.BoxGeometry(1.7,0.3,1.2),
+    new THREE.MeshStandardMaterial({ color:0xffd166, emissive:0xffd166, emissiveIntensity:0.7 }));
+  lid.position.y = 0.7; g.add(lid);
+  return g;
+}
 function spawnChest(){
   if(chests.length>=2) return; // cap
   let px, pz;
   do { px=(Math.random()-0.5)*ARENA*1.4; pz=(Math.random()-0.5)*ARENA*1.4; }
   while(Math.hypot(px,pz)<10);
-  const mesh = new THREE.Mesh(chestGeo, chestMat);
-  mesh.position.set(px, 0.7, pz); mesh.castShadow=true;
-  const lid = new THREE.Mesh(new THREE.BoxGeometry(1.7,0.3,1.2),
-    new THREE.MeshStandardMaterial({color:0xffd166, emissive:0xffd166, emissiveIntensity:0.7}));
-  lid.position.y=0.7; mesh.add(lid);
+  const mesh = new THREE.Group();              // container: uniform anim + interaction whether procedural or model
+  mesh.position.set(px, 0.7, pz);
   const beam = new THREE.PointLight(0xffd166, 8, 16); beam.position.y=3; mesh.add(beam);
+  if(chestModelUrl){
+    loadGLTFCached(chestModelUrl,
+      (gltf)=>{
+        const model = gltf.scene.clone(true);
+        model.scale.setScalar(chestModelScale || 1);
+        model.traverse(o=>{ if(o.isMesh){ o.castShadow = true; o.receiveShadow = true; } });
+        mesh.add(model);
+        playModelAnimations(model, gltf);
+      },
+      (err)=>{ console.warn('Loot box model load failed, using built-in chest:', err && err.message); mesh.add(buildProceduralChest()); });
+  } else {
+    mesh.add(buildProceduralChest());
+  }
   scene.add(mesh);
   // 3 random items
   const pool = ITEM_POOL.filter(it => !(it.oneTime && owned.includes(it.id)));
@@ -6191,7 +6229,7 @@ let padIndex = null;
 let padForceIndex = null;          // manual override (cycle with ']') when auto-pick guesses wrong
 let padPrev = [];                  // previous pressed-states (edge detection)
 let padFiringPrev = false;
-let padFiring=false, padAds=false, padSprint=false, padJump=false, padMoveX=0, padMoveZ=0;
+let padFiring=false, padAds=false, padSprint=false, padJump=false, padCrouch=false, padMoveX=0, padMoveZ=0;
 const PAD_DEADZONE = 0.18;
 const PAD_LOOK_YAW = 2.8, PAD_LOOK_PITCH = 2.1;   // rad/sec at full right-stick deflection
 addEventListener('gamepadconnected', e=>{ padIndex = e.gamepad.index; const b=$('roomBadge'); /* noop */ const c=$('padNote'); if(c){ c.style.display='block'; } });
@@ -6242,7 +6280,7 @@ function pollGamepad(dt){
   if(gp) padIndex = gp.index;
   updatePadDebug(pads, gp);
   const note=$('padNote'); if(note) note.style.display = gp ? 'block' : 'none';   // reflect real detection, not just the connect event
-  if(!gp){ padMoveX=0; padMoveZ=0; padSprint=false; padFiring=false; padAds=false; padJump=false; return; }
+  if(!gp){ padMoveX=0; padMoveZ=0; padSprint=false; padFiring=false; padAds=false; padJump=false; padCrouch=false; return; }
   const bt = gp.buttons, ax = gp.axes;
   const down = i => !!(bt[i] && bt[i].pressed);
   const aval = i => bt[i] ? bt[i].value : 0;
@@ -6269,6 +6307,7 @@ function pollGamepad(dt){
   padFiring = aval(7) > 0.4 || down(7);   // RT
   padAds    = aval(6) > 0.4 || down(6);   // LT
   padSprint = down(10);                   // L3
+  padCrouch = down(11);                   // R3 — hold to crouch
 
   // Edge-triggered actions
   const edge = i => down(i) && !padPrev[i];
@@ -6874,7 +6913,11 @@ function loop(){
   }
   if(NET.gameMode==='duel' && duelDead){ wish.set(0,0,0); moveScale=0; }   // frozen until respawn
   wish.normalize();
-  const sp = SPEED * ((keys['ShiftLeft']||padSprint)?SPRINT:1) * (buffs.speed>0?1.4:1) * moveScale;
+  crouching = gameOn && !shopOpen && !editorOpen && (keys['ControlLeft']||keys['ControlRight']||keys['KeyC']||padCrouch);
+  crouchT += ((crouching?1:0) - crouchT) * Math.min(1, dt*12);
+  let speedBase = (keys['ShiftLeft']||padSprint) ? SPEED*SPRINT : SPEED;
+  if(crouching) speedBase = CROUCH_SPEED;          // crouch overrides sprint
+  const sp = speedBase * (buffs.speed>0?1.4:1) * moveScale;
   player.vel.x = wish.x * sp;
   player.vel.z = wish.z * sp;
 
@@ -6916,6 +6959,7 @@ function loop(){
     if(editorBrightLight.intensity !== 0) editorBrightLight.intensity = 0;
     gun.visible = true;
     camera.position.copy(player.pos);
+    if(crouchT > 0.001) camera.position.y -= crouchT * CROUCH_DIP;   // crouch lowers the view
 
     // camera shake (decays quickly) — offsets rotation so it reads as a jolt
     if(shake > 0.001){
@@ -7324,6 +7368,8 @@ function serializeLevel(){
     gun:     { url: gunModelUrl,     state: Object.assign({}, editorTargets.gun.state) },
     aim:     { state: Object.assign({}, editorTargets.aim.state) },
     station: { url: stationModelUrl, state: Object.assign({}, editorTargets.station.state) },
+    world:   Object.assign({}, worldCfg),
+    chest:   { url: chestModelUrl, scale: chestModelScale },
     props:   propModels.filter(Boolean).map(o=>{ const e={ src:o.userData.src||PROP_MODEL_URL, t:[ (o.userData.physHome?o.userData.physHome.x:o.position.x), (o.userData.physHome?o.userData.physHome.y:o.position.y), (o.userData.physHome?o.userData.physHome.z:o.position.z), o.rotation.x,o.rotation.y,o.rotation.z,o.scale.x,o.scale.y,o.scale.z] }; if(o.userData.animMode==='trigger') e.anim='trigger'; if(o.userData.phys){ e.dyn=true; if(o.userData.mass!=null) e.mass=o.userData.mass; } const m=propMaterialDesc(o); if(m) e.mat=m; return e; }),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
   };
@@ -7346,6 +7392,7 @@ function buildEditorPanel(){
     + sec('Object &amp; selection', 'object', '<div id="edPicker"></div><div id="edLibrary"></div><div id="edAnim"></div><div id="edUrl"></div>')
     + sec('Material', 'material', '<div id="edMaterial"></div>')
     + sec('Transform', 'transform', '<div id="edFields"></div>')
+    + sec('World &amp; loot', 'world', '<div id="edWorld"></div>')
     + '<div class="row2" style="margin-top:6px"><button id="edReset">Reset target</button><button id="edCopy">Copy code</button></div>'
     + '<div class="row2" style="margin-top:6px"><button id="edSave">💾 Save level</button><button id="edClear">Clear save</button></div>'
     + '<div class="copied" id="edCopied"></div>'
@@ -7390,6 +7437,45 @@ function renderEditorFields(){
   if(!editorEl) return;
   editorEl.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.key===editorActive));
   const tgt = editorTargets[editorActive];
+
+  // ---- World & loot (global settings; independent of the selected object) ----
+  const worldHost = editorEl.querySelector('#edWorld');
+  if(worldHost){
+    worldHost.innerHTML = '';
+    const slider = (label, key, min, max, step, suffix)=>{
+      const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:5px 0;';
+      const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='86px';
+      const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=worldCfg[key]; rng.style.cssText='flex:1;accent-color:#38f5b5;';
+      const num=document.createElement('input'); num.type='number'; num.min=min; num.max=max; num.step=step; num.value=+(+worldCfg[key]).toFixed(2); num.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+      const apply=(v)=>{ worldCfg[key]=parseFloat(v)||0; applyWorldCfg(); rng.value=worldCfg[key]; num.value=+(+worldCfg[key]).toFixed(2); };
+      rng.oninput=()=>apply(rng.value); num.onchange=()=>apply(num.value);
+      row.appendChild(sp); row.appendChild(rng); row.appendChild(num); worldHost.appendChild(row);
+    };
+    const mh=document.createElement('div'); mh.className='hint'; mh.style.margin='2px 0 4px'; mh.innerHTML='<b>Movement</b> — applies live; saved with the level';
+    worldHost.appendChild(mh);
+    slider('Walk speed','walk', 4, 60, 1);
+    slider('Run speed','run', 4, 100, 1);
+    slider('Crouch speed','crouch', 1, 40, 1);
+    slider('Jump','jump', 0, 30, 0.5);
+    slider('Gravity','grav', 5, 80, 1);
+    const gnote=document.createElement('div'); gnote.className='hint'; gnote.style.margin='1px 0 8px'; gnote.textContent='Crouch: hold Ctrl or C (R3 on a controller). Gravity change affects props on next Deploy.';
+    worldHost.appendChild(gnote);
+    // loot box model
+    const lh=document.createElement('div'); lh.className='hint'; lh.style.margin='6px 0 4px'; lh.innerHTML='<b>Loot box</b> — GLB model URL (blank = built-in chest)';
+    worldHost.appendChild(lh);
+    const urlRow=document.createElement('div'); urlRow.style.cssText='display:flex;gap:6px;align-items:center;';
+    const url=document.createElement('input'); url.type='text'; url.placeholder='https://…/lootbox.glb'; url.value=chestModelUrl; url.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+    const ab=document.createElement('button'); ab.textContent='Apply';
+    ab.onclick=()=>{ swapChestModel(url.value); for(const ch of chests.slice()){ scene.remove(ch.mesh); } chests.length=0; chestTimer=Math.min(chestTimer,2); };
+    urlRow.appendChild(url); urlRow.appendChild(ab); worldHost.appendChild(urlRow);
+    const sRow=document.createElement('label'); sRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 2px;';
+    const sSp=document.createElement('span'); sSp.textContent='Model scale'; sSp.style.minWidth='86px';
+    const sNum=document.createElement('input'); sNum.type='number'; sNum.min='0.05'; sNum.max='50'; sNum.step='0.05'; sNum.value=chestModelScale; sNum.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+    sNum.onchange=()=>{ chestModelScale=Math.max(0.05,Math.min(50,parseFloat(sNum.value)||1)); };
+    sRow.appendChild(sSp); sRow.appendChild(sNum); worldHost.appendChild(sRow);
+    const lnote=document.createElement('div'); lnote.className='hint'; lnote.style.marginTop='3px'; lnote.textContent='Apply clears current loot boxes so the next spawn uses the new model.';
+    worldHost.appendChild(lnote);
+  }
 
   // global view toggles (overhead camera, hide enemies)
   const view = editorEl.querySelector('#edView');
