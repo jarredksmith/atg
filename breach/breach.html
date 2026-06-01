@@ -5178,7 +5178,7 @@ let physWorld = null;
 let physAccum = 0;
 // Spawn one scene object from a descriptor; onReady(obj) fires once it's in the world.
 // mat (optional) = { col, tex, texRepeat:[u,v], emit:{c,i} } for primitive material settings.
-function spawnProp(src, t, onReady, slot, animMode, mat){
+function spawnProp(src, t, onReady, slot, animMode, mat, onError){
   if(isPrimitive(src)){
     const obj = finalizeProp(PRIMITIVE_BUILDERS[src](), src, t, null, slot, animMode, mat);
     if(onReady) onReady(obj);
@@ -5186,7 +5186,7 @@ function spawnProp(src, t, onReady, slot, animMode, mat){
   }
   loadGLTFCached(src,
     (gltf)=>{ const obj = finalizeProp(gltf.scene.clone(true), src, t, gltf, slot, animMode, mat); if(onReady) onReady(obj); },
-    (err)=>{ console.warn('Prop load failed for', src, '-', err && err.message); }
+    (err)=>{ console.warn('Prop load failed for', src, '-', err && err.message); if(onError) onError(err); }
   );
 }
 function removeProp(idx){
@@ -5201,7 +5201,7 @@ function removeProp(idx){
 function loadHostedProps(){
   const list = (savedLevel && Array.isArray(savedLevel.props)) ? savedLevel.props : SCENE_PROPS;
   propModels.length = list.length;   // reserve slots so async GLB loads can't clobber later push-spawned props
-  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ if(p.dyn){ setPropDynamic(obj, true); if(p.mass!=null) obj.userData.mass=p.mass; } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null)));   // slot=i preserves order
+  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ if(p.dyn){ setPropDynamic(obj, true); if(p.mass!=null) obj.userData.mass=p.mass; } if(p.att) obj.userData.attribution=p.att; }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null)));   // slot=i preserves order
 }
 loadHostedProps();
 
@@ -5689,7 +5689,7 @@ function loadLevelFromNet(level){
   // rebuild from the host's data
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ if(p.dyn){ setPropDynamic(obj, true); if(p.mass!=null) obj.userData.mass=p.mass; } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null)));
+    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ if(p.dyn){ setPropDynamic(obj, true); if(p.mass!=null) obj.userData.mass=p.mass; }  if(p.att) obj.userData.attribution=p.att; }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null)));
   }
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
 }
@@ -7399,11 +7399,16 @@ function swapSelectedProp(url){
   spawnProp(url, t, (obj)=>{ editorActive='props'; editorTargets.props.idx = propModels.indexOf(obj); selProps=[obj]; renderEditorFields(); }, undefined, mode);
 }
 // Add a new object (a 'box' primitive or a model URL) in front of the player, using the current default anim mode.
-function addSceneProp(src){
+function addSceneProp(src, meta){
+  meta = meta || {};
   pushUndoSnapshot();
   const fwd = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
   const px = player.pos.x + fwd.x*5, pz = player.pos.z + fwd.z*5;
-  spawnProp(src, [px, 0, pz, 0, 0, 0, 1], (obj)=>{ editorActive='props'; editorTargets.props.idx = propModels.indexOf(obj); selProps=[obj]; renderEditorFields(); }, undefined, newPropAnimMode);
+  spawnProp(src, [px, 0, pz, 0, 0, 0, 1], (obj)=>{
+    if(meta.attribution) obj.userData.attribution = meta.attribution;   // credit (CC-BY models)
+    editorActive='props'; editorTargets.props.idx = propModels.indexOf(obj); selProps=[obj]; renderEditorFields();
+    if(meta.onAdded) meta.onAdded(obj);
+  }, undefined, newPropAnimMode, null, meta.onError);
 }
 function deleteSelectedProp(){
   pushUndoSnapshot();
@@ -7488,7 +7493,7 @@ function serializeLevel(){
     station: { url: stationModelUrl, state: Object.assign({}, editorTargets.station.state) },
     world:   Object.assign({}, worldCfg),
     chest:   { url: chestModelUrl, scale: chestModelScale },
-    props:   propModels.filter(Boolean).map(o=>{ const e={ src:o.userData.src||PROP_MODEL_URL, t:[ (o.userData.physHome?o.userData.physHome.x:o.position.x), (o.userData.physHome?o.userData.physHome.y:o.position.y), (o.userData.physHome?o.userData.physHome.z:o.position.z), o.rotation.x,o.rotation.y,o.rotation.z,o.scale.x,o.scale.y,o.scale.z] }; if(o.userData.animMode==='trigger') e.anim='trigger'; if(o.userData.phys){ e.dyn=true; if(o.userData.mass!=null) e.mass=o.userData.mass; } const m=propMaterialDesc(o); if(m) e.mat=m; return e; }),
+    props:   propModels.filter(Boolean).map(o=>{ const e={ src:o.userData.src||PROP_MODEL_URL, t:[ (o.userData.physHome?o.userData.physHome.x:o.position.x), (o.userData.physHome?o.userData.physHome.y:o.position.y), (o.userData.physHome?o.userData.physHome.z:o.position.z), o.rotation.x,o.rotation.y,o.rotation.z,o.scale.x,o.scale.y,o.scale.z] }; if(o.userData.animMode==='trigger') e.anim='trigger'; if(o.userData.phys){ e.dyn=true; if(o.userData.mass!=null) e.mass=o.userData.mass; } const m=propMaterialDesc(o); if(m) e.mat=m; if(o.userData.attribution) e.att=o.userData.attribution; return e; }),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
   };
 }
@@ -7517,7 +7522,7 @@ function restoreLevel(level){
   propModels.length = 0;
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ if(p.dyn){ setPropDynamic(obj, true); if(p.mass!=null) obj.userData.mass=p.mass; } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null)));
+    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ if(p.dyn){ setPropDynamic(obj, true); if(p.mass!=null) obj.userData.mass=p.mass; }  if(p.att) obj.userData.attribution=p.att; }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null)));
   }
   // lights
   for(let i=lightModels.length-1;i>=0;i--) removeLight(i);
@@ -7543,6 +7548,103 @@ function performUndo(){
   return true;
 }
 
+// ---------- Poly Pizza model browser: search free CC0/CC-BY models and add them as props ----------
+function ppGetKey(){ try{ return localStorage.getItem('pp_api_key')||''; }catch(e){ return ''; } }
+function ppSetKey(k){ try{ localStorage.setItem('pp_api_key', k||''); }catch(e){} }
+let ppLastQuery = '', ppLastResults = [];
+// Defensive parser: Poly Pizza's field names/shapes can vary, so pull the GLB url, thumbnail, title and
+// attribution by trying several keys and unwrapping {url}/{URL} objects; skip records with no .glb.
+function ppParseModel(m){
+  if(!m || typeof m!=='object') return null;
+  const str = v => (v && typeof v==='object') ? (v.URL||v.url||v.Url||v.href||v.src) : v;
+  let glb = str(m.Download)||str(m.download)||str(m.GLB)||str(m.glb)||str(m.File)||str(m.file);
+  if(!glb){ for(const k in m){ const v=str(m[k]); if(typeof v==='string' && /\.glb(\?|#|$)/i.test(v)){ glb=v; break; } } }
+  if(!glb) return null;
+  const thumb = str(m.Thumbnail)||str(m.thumbnail)||str(m.Thumb)||str(m.Image)||str(m.image)||str(m.Preview)||'';
+  const title = m.Title||m.title||m.Name||m.name||'Untitled';
+  let attribution = m.Attribution||m.attribution;
+  if(!attribution){ const c=m.Creator||m.creator||{}; const cn=c.Username||c.username||c.Name||c.name; const lic=m.Licence||m.License||m.licence||m.license; attribution = title + (cn?(' by '+cn):'') + (lic?(' ['+lic+']'):'') + ' — via Poly Pizza'; }
+  return { id:m.ID||m.id||m.Id, title, thumb, glb, attribution };
+}
+function ppSearch(query, cb, errcb){
+  const key = ppGetKey();
+  if(!key){ errcb(new Error('Enter your Poly Pizza API key first')); return; }
+  const url = 'https://api.poly.pizza/v1.1/search/' + encodeURIComponent(query);
+  fetch(url, { headers:{ 'x-auth-token': key } })
+    .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status + (r.status===401||r.status===403 ? ' — check your API key' : '')); return r.json(); })
+    .then(d=>{ const arr = d.results||d.Results||d.models||d.Models||(Array.isArray(d)?d:[]); cb(arr.map(ppParseModel).filter(Boolean)); })
+    .catch(errcb);
+}
+// Render the browser into a host element (only on the Props tab). Caches query+results across re-renders.
+function renderModelBrowser(host){
+  host.innerHTML = '';
+  const head = document.createElement('div'); head.className='hint'; head.style.margin='8px 0 4px';
+  head.innerHTML = '<b>Poly Pizza</b> — search thousands of free models, click one to add it. Needs an API key + network.';
+  host.appendChild(head);
+
+  // API key row
+  const keyRow = document.createElement('div'); keyRow.className='row2'; keyRow.style.marginBottom='4px';
+  const keyInp = document.createElement('input'); keyInp.type='text'; keyInp.placeholder='Paste API key'; keyInp.value=ppGetKey();
+  keyInp.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+  keyInp.oninput=()=>ppSetKey(keyInp.value.trim());
+  keyRow.appendChild(keyInp); host.appendChild(keyRow);
+  const keyHint = document.createElement('div'); keyHint.className='hint'; keyHint.style.cssText='margin:-2px 0 6px;font-size:10px;opacity:.75';
+  keyHint.textContent = 'Free key at poly.pizza/settings/api — stored in this browser only.';
+  host.appendChild(keyHint);
+
+  // search row
+  const sRow = document.createElement('div'); sRow.className='row2'; sRow.style.marginBottom='4px';
+  const q = document.createElement('input'); q.type='text'; q.id='ppQuery'; q.placeholder='e.g. tree, barrel, robot'; q.value=ppLastQuery;
+  q.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+  const sBtn = document.createElement('button'); sBtn.textContent='Search';
+  sRow.appendChild(q); sRow.appendChild(sBtn); host.appendChild(sRow);
+
+  const status = document.createElement('div'); status.className='hint'; status.style.margin='2px 0'; host.appendChild(status);
+  const grid = document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:4px;'; host.appendChild(grid);
+
+  function renderResults(list){
+    grid.innerHTML='';
+    if(!list.length){ status.textContent='No models found.'; return; }
+    status.textContent = list.length + ' result' + (list.length>1?'s':'') + ' — click to add';
+    for(const m of list){
+      const card = document.createElement('button');
+      card.style.cssText='display:flex;flex-direction:column;align-items:center;gap:2px;background:#0c1418;border:1px solid #24323a;border-radius:6px;padding:4px;cursor:pointer;overflow:hidden;';
+      card.title = m.attribution;
+      if(m.thumb){ const img=document.createElement('img'); img.src=m.thumb; img.loading='lazy'; img.style.cssText='width:100%;aspect-ratio:1;object-fit:contain;background:#06090b;border-radius:3px;'; card.appendChild(img); }
+      const cap=document.createElement('div'); cap.textContent=m.title; cap.style.cssText='font-size:10px;color:#9fe6cf;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'; card.appendChild(cap);
+      card.onclick=()=>{
+        status.textContent = 'Loading "' + m.title + '"…';
+        addSceneProp(m.glb, { attribution:m.attribution, onAdded:()=>{ status.textContent = 'Added "' + m.title + '". Move/scale it with the gizmo.'; renderModelCredits(); }, onError:()=>{ status.innerHTML = 'Could not load "' + m.title + '" — its host may block cross-origin loading (CORS). Try another, or re-host the .glb alongside your game.'; } });
+      };
+      grid.appendChild(card);
+    }
+  }
+  function doSearch(){
+    const term = q.value.trim(); if(!term){ status.textContent='Type something to search.'; return; }
+    ppLastQuery = term; status.textContent='Searching…'; grid.innerHTML='';
+    ppSearch(term, (list)=>{ ppLastResults = list; renderResults(list); }, (err)=>{ ppLastResults=[]; status.textContent = 'Search failed: ' + (err && err.message || err); });
+  }
+  sBtn.onclick = doSearch;
+  q.addEventListener('keydown', e=>{ if(e.code==='Enter'){ e.preventDefault(); doSearch(); } });
+  if(ppLastResults.length) renderResults(ppLastResults);
+
+  // running credits list (CC-BY models you've placed)
+  const credHost = document.createElement('div'); credHost.id='ppCredits'; host.appendChild(credHost);
+  renderModelCredits();
+  function renderModelCredits(){
+    const atts = [...new Set(propModels.filter(o=>o && o.userData.attribution).map(o=>o.userData.attribution))];
+    credHost.innerHTML='';
+    if(!atts.length) return;
+    const h=document.createElement('div'); h.className='hint'; h.style.margin='8px 0 2px'; h.innerHTML='<b>Model credits</b> (show these when you publish):';
+    credHost.appendChild(h);
+    const ul=document.createElement('div'); ul.style.cssText='font-size:10px;color:#8fb9ad;line-height:1.5;';
+    ul.textContent = atts.join(' · ');
+    credHost.appendChild(ul);
+  }
+  // expose so the add callback can refresh the credits after a successful load
+  renderModelBrowser._refreshCredits = renderModelCredits;
+}
+
 function buildEditorPanel(){
   const p = document.createElement('div');
   p.id = 'editor';
@@ -7555,7 +7657,7 @@ function buildEditorPanel(){
     + '<div class="tabs" id="edTabs"></div>'
     + '<div class="row2" id="edView" style="margin-bottom:8px"></div>'
     + sec('Gizmo', 'gizmo', '<div id="edGizmo"></div>')
-    + sec('Object &amp; selection', 'object', '<div id="edPicker"></div><div id="edLibrary"></div><div id="edAnim"></div><div id="edUrl"></div>')
+    + sec('Object &amp; selection', 'object', '<div id="edPicker"></div><div id="edLibrary"></div><div id="edModels"></div><div id="edAnim"></div><div id="edUrl"></div>')
     + sec('Material', 'material', '<div id="edMaterial"></div>')
     + sec('Transform', 'transform', '<div id="edFields"></div>')
     + sec('World &amp; loot', 'world', '<div id="edWorld"></div>')
@@ -7733,6 +7835,9 @@ function renderEditorFields(){
       lib.appendChild(grid);
     }
   }
+  // Poly Pizza search browser (Props tab only)
+  const modelsHost = editorEl.querySelector('#edModels');
+  if(modelsHost){ modelsHost.innerHTML=''; if(tgt.addable && tgt.urlField) renderModelBrowser(modelsHost); }
 
   // animation behavior toggles (Props tab): default for new props + live switch for the selected animated prop
   const animHost = editorEl.querySelector('#edAnim');
