@@ -6657,7 +6657,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 21 · 2026-06-01';
+const BUILD_VERSION = 'build 22 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7474,7 +7474,7 @@ function loop(){
     if(editorBrightLight.intensity !== 0) editorBrightLight.intensity = 0;
     gun.visible = false;
     if(!flyInit){ flyPos.copy(player.pos); flyInit = true; }   // seed from where the player stands
-    // WASD moves along the view direction, Space/Ctrl rise/fall, Shift sprints — all in world space
+    // WASD moves along the view direction; Space/E rise, Q/Ctrl fall; Shift sprints — all in world space
     const spd = (keys['ShiftLeft']||keys['ShiftRight']?60:26) * dt;
     const cy = Math.cos(player.yaw), sy = Math.sin(player.yaw), cp = Math.cos(player.pitch), sp = Math.sin(player.pitch);
     const fwd = new THREE.Vector3(-sy*cp, sp, -cy*cp);          // camera forward (matches the look basis below)
@@ -7483,8 +7483,12 @@ function loop(){
     if(keys['KeyS']) flyPos.addScaledVector(fwd, -spd);
     if(keys['KeyD']) flyPos.addScaledVector(right, spd);
     if(keys['KeyA']) flyPos.addScaledVector(right, -spd);
-    if(keys['Space']) flyPos.y += spd;
-    if(keys['ControlLeft']||keys['ControlRight']) flyPos.y -= spd;
+    if(keys['Space'] || keys['KeyE']) flyPos.y += spd;
+    // Descend on Q, or Ctrl — but NOT while Ctrl is part of a shortcut combo (Ctrl+Z undo, Ctrl+C, etc.),
+    // otherwise undoing in fly mode also sinks the camera.
+    const ctrlHeld = keys['ControlLeft'] || keys['ControlRight'];
+    const ctrlCombo = ctrlHeld && (keys['KeyZ'] || keys['KeyY']);   // undo / redo — don't sink the camera while undoing
+    if(keys['KeyQ'] || (ctrlHeld && !ctrlCombo)) flyPos.y -= spd;
     camera.position.copy(flyPos);
     camera.rotation.order = 'YXZ';
     camera.rotation.y = player.yaw;
@@ -7880,14 +7884,24 @@ function addSceneLight(){
   const px = player.pos.x + fwd.x*5, pz = player.pos.z + fwd.z*5;
   const g = buildLight({ color:0xffe6a0, intensity:8, distance:22, t:[px, 4, pz] });
   if(g.userData.marker) g.userData.marker.visible = true;
-  editorActive='lights'; editorTargets.lights.idx = lightModels.length-1; renderEditorFields();
+  editorActive='lights'; editorTargets.lights.idx = lightModels.length-1; selLights=[g]; renderEditorFields();
 }
 function deleteSelectedLight(){
+  pushUndoSnapshot();
+  if(isGroupSel()){   // remove every selected light
+    const idxs = selLights.map(g=>lightModels.indexOf(g)).filter(i=>i>=0).sort((a,b)=>b-a);
+    for(const i of idxs) removeLight(i);   // descending so earlier indices stay valid
+    selLights.length = 0;
+    editorTargets.lights.idx = Math.max(0, Math.min(editorTargets.lights.idx, lightModels.length-1));
+    const p=lightModels[editorTargets.lights.idx]; if(p) selLights=[p];
+    renderEditorFields(); return;
+  }
   const i = editorTargets.lights.idx;
   if(!lightModels[i]) return;
-  pushUndoSnapshot();
   removeLight(i);
   editorTargets.lights.idx = Math.max(0, Math.min(i, lightModels.length-1));
+  selLights = selLights.filter(g=>lightModels.indexOf(g)>=0);
+  if(!selLights.length){ const p=lightModels[editorTargets.lights.idx]; selLights = p?[p]:[]; }
   renderEditorFields();
 }
 
@@ -7913,7 +7927,7 @@ function duplicateSelectedLight(){
   const ng = buildLight({ color:hex, intensity:L.intensity, distance:L.distance,
                           t:[g.position.x + DUP_OFFSET, g.position.y, g.position.z] });
   if(ng.userData.marker) ng.userData.marker.visible = true;
-  editorActive='lights'; editorTargets.lights.idx = lightModels.length-1; renderEditorFields();
+  editorActive='lights'; editorTargets.lights.idx = lightModels.length-1; selLights=[ng]; renderEditorFields();
 }
 function duplicateSelected(){
   if(editorActive==='props') duplicateSelectedProp();
@@ -8094,17 +8108,29 @@ function renderModelBrowser(host){
   if(ppLastResults.length) renderResults(ppLastResults);
 
   // running credits list (CC-BY models you've placed)
-  const credHost = document.createElement('div'); credHost.id='ppCredits'; host.appendChild(credHost);
+  const credHost = document.createElement('div'); credHost.id='ppCredits'; credHost.style.marginTop='8px'; host.appendChild(credHost);
   renderModelCredits();
   function renderModelCredits(){
     const atts = [...new Set(propModels.filter(o=>o && o.userData.attribution).map(o=>o.userData.attribution))];
     credHost.innerHTML='';
     if(!atts.length) return;
-    const h=document.createElement('div'); h.className='hint'; h.style.margin='8px 0 2px'; h.innerHTML='<b>Model credits</b> (show these when you publish):';
-    credHost.appendChild(h);
-    const ul=document.createElement('div'); ul.style.cssText='font-size:10px;color:#8fb9ad;line-height:1.5;';
-    ul.textContent = atts.join(' · ');
-    credHost.appendChild(ul);
+    // collapsible, collapsed by default — keeps the panel tidy while still one click from the credits you must show when publishing
+    const sec = document.createElement('div'); sec.className='edSection collapsed';
+    const head = document.createElement('div'); head.className='edSecHead';
+    head.innerHTML = '<span class="edCaret">▾</span>MODEL CREDITS ('+atts.length+')';
+    const body = document.createElement('div'); body.className='edSecBody';
+    const note = document.createElement('div'); note.className='hint'; note.style.margin='0 0 4px'; note.textContent='Show these when you publish:';
+    body.appendChild(note);
+    const ul=document.createElement('div'); ul.style.cssText='font-size:10px;color:#8fb9ad;line-height:1.6;';
+    // linkify any URLs in the attribution text
+    atts.forEach(a=>{
+      const row=document.createElement('div'); row.style.marginBottom='2px';
+      row.innerHTML = a.replace(/(https?:\/\/[^\s)]+)/g, '<a href="$1" target="_blank" rel="noopener" style="color:#7fe6cf;">$1</a>');
+      ul.appendChild(row);
+    });
+    body.appendChild(ul);
+    head.onclick = ()=> sec.classList.toggle('collapsed');
+    sec.appendChild(head); sec.appendChild(body); credHost.appendChild(sec);
   }
   // expose so the add callback can refresh the credits after a successful load
   renderModelBrowser._refreshCredits = renderModelCredits;
@@ -8337,7 +8363,7 @@ function renderEditorFields(){
     gz.innerHTML = '';
     const selectable = (editorActive==='props' || editorActive==='station' || editorActive==='lights');
     if(selectable){
-      const head = document.createElement('div'); head.className='hint'; head.style.margin='2px 0 3px'; head.innerHTML='<b>Gizmo</b> — drag the handles in the scene · keys <b>1 2 3</b>' + (isGroupSel() ? (' · <b style="color:#38f5b5">'+selProps.length+' selected (group)</b>') : '');
+      const head = document.createElement('div'); head.className='hint'; head.style.margin='2px 0 3px'; head.innerHTML='<b>Gizmo</b> — drag the handles in the scene · keys <b>1 2 3</b>' + (isGroupSel() ? (' · <b style="color:#38f5b5">'+activeSel().length+' selected (group)</b>') : '');
       gz.appendChild(head);
       const row = document.createElement('div'); row.className='row2';
       const modes = [['translate','Move','1'],['rotate','Rotate','2'],['scale','Scale','3']];
@@ -8629,10 +8655,12 @@ let scaleProportional = true;       // default: uniform scaling; checkbox lets t
 const AXIS_COL = { x:0xff5566, y:0x66ff88, z:0x5599ff };
 // ---- Multi-selection (shift+click props to select several; >1 transforms as a group) ----
 let selProps = [];        // selected prop meshes; the "primary" is editorTargets.props.idx
+let selLights = [];       // selected light groups; the "primary" is editorTargets.lights.idx
 let selBoxes = [];        // pooled BoxHelpers for highlighting the multi-selection
-function isGroupSel(){ return editorOpen && editorActive==='props' && selProps.length>1; }
+function isGroupSel(){ return editorOpen && ((editorActive==='props' && selProps.length>1) || (editorActive==='lights' && selLights.length>1)); }
+function activeSel(){ return editorActive==='lights' ? selLights : selProps; }   // the active multi-selection list
 const _cen = new THREE.Vector3();
-function selCentroid(){ _cen.set(0,0,0); for(const o of selProps) _cen.add(o.position); return _cen.multiplyScalar(1/Math.max(1,selProps.length)); }
+function selCentroid(){ const list=activeSel(); _cen.set(0,0,0); for(const o of list) _cen.add(o.position); return _cen.multiplyScalar(1/Math.max(1,list.length)); }
 function syncSelToIdx(){ const o = propModels[editorTargets.props.idx]; selProps = o ? [o] : []; }
 function ensureSelBoxes(n){
   while(selBoxes.length < n){ const b = new THREE.BoxHelper(scene, 0x38f5b5); b.material.depthTest=false; b.visible=false; scene.add(b); selBoxes.push(b); }
@@ -8843,9 +8871,10 @@ function tryGizmoGrab(e){
     const start = hit.clone().sub(pos);
     gizmoDrag = { kind, axis, normal, center: pos.clone(), startVec: start, startEuler: rot.clone() };
   }
-  if(isGroupSel()){   // group transform: remember every selected prop's start transform + the shared pivot
+  if(isGroupSel()){   // group transform: remember every selected object's start transform + the shared pivot
     gizmoDrag.pivot = pos.clone();
-    gizmoDrag.group = selProps.map(o=>({ obj:o, pos:o.position.clone(), quat:o.quaternion.clone(), scale:o.scale.clone() }));
+    gizmoDrag.group = activeSel().map(o=>({ obj:o, pos:o.position.clone(), quat:o.quaternion.clone(), scale:o.scale.clone() }));
+    gizmoDrag.lights = (editorActive==='lights');   // lights translate only; no collider refresh
   }
   pushUndoSnapshot();   // capture state before this drag so Ctrl+Z reverts it
   return true;
@@ -8903,41 +8932,46 @@ function gizmoDragMove(e){
 const _gdq = new THREE.Quaternion(), _gtmp = new THREE.Vector3();
 function applyGroupDrag(e, d){
   const pivot = d.pivot;
+  const isL = d.lights;
+  const touch = (o)=>{ if(!isL) refreshPropCollider(o); };   // lights have no collider
   if(d.kind==='translate'){
     const s = axisParamUnderPointer(e, pivot, d.dir);
     const off = d.dir.clone().multiplyScalar(s - d.startParam);
-    for(const it of d.group){ it.obj.position.copy(it.pos).add(off); refreshPropCollider(it.obj); }
+    for(const it of d.group){ it.obj.position.copy(it.pos).add(off); touch(it.obj); }
   } else if(d.kind==='rotate'){
     const hit = pointerOnPlane(e, pivot, d.normal); if(!hit) return;
     const cur = hit.clone().sub(pivot);
     let ang = Math.atan2(cur.clone().cross(d.startVec).dot(d.normal), cur.dot(d.startVec)); ang = -ang;
     _gdq.setFromAxisAngle(d.normal, ang);
     for(const it of d.group){
-      it.obj.position.copy(_gtmp.copy(it.pos).sub(pivot).applyQuaternion(_gdq)).add(pivot);
-      it.obj.quaternion.copy(_gdq).multiply(it.quat);
-      refreshPropCollider(it.obj);
+      it.obj.position.copy(_gtmp.copy(it.pos).sub(pivot).applyQuaternion(_gdq)).add(pivot);   // orbit about the pivot
+      if(!isL) it.obj.quaternion.copy(_gdq).multiply(it.quat);   // a point light has no meaningful orientation
+      touch(it.obj);
     }
   } else if(d.kind==='scale'){
     let f;
     if(d.axis==='all') f = Math.max(0.02, scaleRefDistance(e, pivot) / d.refDist);
     else { const cur = axisParamUnderPointer(e, pivot, d.dir); f = Math.max(0.02, cur / d.startParam); }
-    for(const it of d.group){   // group scaling is uniform, and spreads/contracts the cluster about the pivot
+    for(const it of d.group){   // group scaling spreads/contracts the cluster about the pivot
       it.obj.position.copy(_gtmp.copy(it.pos).sub(pivot).multiplyScalar(f)).add(pivot);
-      it.obj.scale.copy(it.scale).multiplyScalar(f);
-      refreshPropCollider(it.obj);
+      if(!isL) it.obj.scale.copy(it.scale).multiplyScalar(f);   // lights don't scale; just spread their positions
+      touch(it.obj);
     }
   }
-  syncPropStateFromObj();
+  if(isL){ if(editorTargets.lights.sync) editorTargets.lights.sync(); }
+  else syncPropStateFromObj();
   updateGizmo();
   updateFieldDisplays();
   updateEditorOut();
 }
 function updateSelectionHighlight(){
   if(isGroupSel()){
+    const list = activeSel();
+    const boxOf = (o)=> (editorActive==='lights' && o.userData.marker) ? o.userData.marker : o;   // box the visible light marker
     if(selBox) selBox.visible = false;
-    ensureSelBoxes(selProps.length);
-    selProps.forEach((o,i)=>{ const b=selBoxes[i]; b.setFromObject(o, true); b.visible=true; });
-    for(let i=selProps.length;i<selBoxes.length;i++) selBoxes[i].visible=false;
+    ensureSelBoxes(list.length);
+    list.forEach((o,i)=>{ const b=selBoxes[i]; b.setFromObject(boxOf(o), true); b.visible=true; });
+    for(let i=list.length;i<selBoxes.length;i++) selBoxes[i].visible=false;
     updateGizmo();
     return;
   }
@@ -8985,7 +9019,19 @@ renderer.domElement.addEventListener('click', (e)=>{
       selProps = obj ? [obj] : [];
     }
     editorActive='props'; renderEditorFields();
-  } else if(picked){ selProps.length=0; editorActive=picked; renderEditorFields(); }
+  } else if(picked==='lights'){
+    const g = lightModels[editorTargets.lights.idx];
+    if(e.shiftKey && g){
+      const at = selLights.indexOf(g);
+      if(at>=0){ if(selLights.length>1) selLights.splice(at,1); }   // toggle off (keep at least one)
+      else selLights.push(g);
+      const primary = selLights[selLights.length-1] || g;
+      editorTargets.lights.idx = lightModels.indexOf(primary);
+    } else {
+      selLights = g ? [g] : [];
+    }
+    editorActive='lights'; renderEditorFields();
+  } else if(picked){ selProps.length=0; selLights.length=0; editorActive=picked; renderEditorFields(); }
 });
 
 function updateEditorOut(){
