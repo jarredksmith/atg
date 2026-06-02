@@ -4964,36 +4964,60 @@ function updateLightBudget(){
 }
 
 // ---------- Arena ----------
-const ARENA = 70;
+// Arena half-extent. Editable at runtime (saved with the level as worldCfg.arena); rebuildArena()
+// regenerates the floor, grid, and boundary walls, and the player/enemy clamps read it live.
+let ARENA = 70;
 const floorMat = new THREE.MeshStandardMaterial({ color:0x141c22, roughness:.95, metalness:.1 });
-const floor = new THREE.Mesh(new THREE.PlaneGeometry(ARENA*2, ARENA*2), floorMat);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), floorMat);
 floor.rotation.x = -Math.PI/2; floor.receiveShadow = true;
 scene.add(floor);
 
-// grid glow
-const grid = new THREE.GridHelper(ARENA*2, 56, 0x1f4a44, 0x12302c);
-grid.position.y = 0.02; scene.add(grid);
+// grid glow (rebuilt with the arena so its extent + divisions track the size)
+let grid = null;
 
 // walls
 const wallMat = new THREE.MeshStandardMaterial({ color:0x1a242b, roughness:.8, metalness:.2 });
+const colliders = [];
+const H = 8;
+const arenaWalls = [];   // the 4 boundary walls (rebuilt on resize); other colliders (props) are untouched
 function wall(w,h,d,x,y,z){
   const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), wallMat);
   m.position.set(x,y,z); m.castShadow = m.receiveShadow = true; scene.add(m); return m;
 }
-const colliders = [];
-const H = 8;
-colliders.push(wall(ARENA*2,H,2, 0,H/2,-ARENA));
-colliders.push(wall(ARENA*2,H,2, 0,H/2, ARENA));
-colliders.push(wall(2,H,ARENA*2, -ARENA,H/2,0));
-colliders.push(wall(2,H,ARENA*2,  ARENA,H/2,0));
+function rebuildArena(){
+  // floor
+  floor.geometry.dispose();
+  floor.geometry = new THREE.PlaneGeometry(ARENA*2, ARENA*2);
+  // grid
+  if(grid){ scene.remove(grid); grid.geometry.dispose(); }
+  const divs = Math.max(8, Math.round(ARENA*2/2.5));
+  grid = new THREE.GridHelper(ARENA*2, divs, 0x1f4a44, 0x12302c);
+  grid.position.y = 0.02; scene.add(grid);
+  // boundary walls — remove old (from scene + colliders), rebuild at the new extent
+  for(const w of arenaWalls){ scene.remove(w); const ci=colliders.indexOf(w); if(ci>=0) colliders.splice(ci,1); if(w.geometry) w.geometry.dispose(); }
+  arenaWalls.length = 0;
+  const mk = (w,h,d,x,y,z)=>{ const m=wall(w,h,d,x,y,z); arenaWalls.push(m); colliders.push(m); refreshWallCollider(m); };
+  mk(ARENA*2,H,2, 0,H/2,-ARENA);
+  mk(ARENA*2,H,2, 0,H/2, ARENA);
+  mk(2,H,ARENA*2, -ARENA,H/2,0);
+  mk(2,H,ARENA*2,  ARENA,H/2,0);
+}
+// Build/refresh a wall's collision box from its current geometry + transform (walls are axis-aligned boxes).
+function refreshWallCollider(m){
+  m.updateMatrixWorld(true);
+  const b = new THREE.Box3().setFromObject(m);
+  m.userData.box = b; m.userData.boxes = [b]; m.userData.climbable = false; m.userData.src = 'wall';
+}
+rebuildArena();
 
 // The scattered cover crates and glowing pillars used to be built here as fixed scenery. They're now
 // generated as fully-editable props (see generateOriginalScene below, after the prop system is set up)
 // so they can be selected, moved, scaled, deleted, saved and exported like anything else.
 
-// Precompute static collider bounding boxes once (colliders never move)
+// Precompute static collider bounding boxes once (walls already done in rebuildArena; this covers any
+// other static colliders and keeps the per-mesh `boxes` array consistent).
 for(const c of colliders){
-  c.userData.box = new THREE.Box3().setFromObject(c, true);
+  if(!c.userData.boxes){ const b = new THREE.Box3().setFromObject(c, true); c.userData.box = b; c.userData.boxes = [b]; }
 }
 
 // ---------- Saved level (browser persistence) ----------
@@ -5377,8 +5401,53 @@ const player = {
 };
 const EYE = 1.7;            // standing camera height above the surface the player stands on
 // ---- World movement settings (editable in the editor's World panel; saved with the level) ----
-const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0 };
+const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorTex:'', wallColor:0x1a242b, wallTex:'', sky_hdri:'' };
 let worldCfg = Object.assign({}, DEFAULT_WORLD, (savedLevel && savedLevel.world) || {});
+
+// Apply (or clear) a tiling texture on a shared material. Stores the current url on the material under
+// `urlKey` so re-applying the same url is a no-op. Cross-origin textures load via the proxying loader.
+function applySurfaceTexture(mat, url, urlKey, repeat){
+  url = (url||'').trim();
+  if(mat[urlKey] === url){ if(url && mat.map){ mat.map.repeat.set(repeat, repeat); mat.needsUpdate=true; } return; }
+  mat[urlKey] = url;
+  if(!url){ if(mat.map){ mat.map = null; mat.needsUpdate = true; } return; }
+  const tex = loadTextureCached(proxied(url));
+  if(tex){ tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(repeat, repeat); }
+  mat.map = tex; mat.needsUpdate = true;
+}
+
+// Equirectangular sky / image-based lighting. Pass a panorama image URL (jpg/png; many "HDRI" panos are
+// distributed as jpg). Sets it as the scene background AND environment (so models pick up reflections),
+// processed through a PMREM render target for correct lighting. Empty string restores the flat color.
+let _skyHdriUrl = null, _skyPMREM = null, _skyEnvRT = null;
+let _arenaRebuildQueued = false;
+function applySkyHdri(url){
+  url = (url||'').trim();
+  if(_skyHdriUrl === url) return;
+  _skyHdriUrl = url;
+  if(!url){
+    scene.background = new THREE.Color(0x070b10);
+    if(scene.environment){ scene.environment = null; }
+    if(_skyEnvRT){ _skyEnvRT.dispose && _skyEnvRT.dispose(); _skyEnvRT = null; }
+    return;
+  }
+  const loader = new THREE.TextureLoader(); loader.setCrossOrigin('anonymous');
+  loader.load(proxied(url), (tex)=>{
+    if(_skyHdriUrl !== url){ tex.dispose && tex.dispose(); return; }   // a newer url won the race
+    try{
+      tex.mapping = THREE.EquirectangularReflectionMapping;
+      if('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace; else if('encoding' in tex) tex.encoding = 3001;
+      scene.background = tex;
+      if(THREE.PMREMGenerator){
+        if(!_skyPMREM){ _skyPMREM = new THREE.PMREMGenerator(renderer); _skyPMREM.compileEquirectangularShader(); }
+        if(_skyEnvRT){ _skyEnvRT.dispose && _skyEnvRT.dispose(); }
+        _skyEnvRT = _skyPMREM.fromEquirectangular(tex);
+        scene.environment = _skyEnvRT.texture;   // image-based lighting / reflections
+      }
+    }catch(e){ console.warn('Sky HDRI apply failed:', e && e.message); scene.background = tex; }
+  }, undefined, (err)=>{ console.warn('Sky image load failed:', err && err.message); });
+}
+
 let SPEED, SPRINT, JUMP, GRAV, CROUCH_SPEED;   // live values derived from worldCfg
 function applyWorldCfg(){
   worldCfg.walk   = Math.max(2,  +worldCfg.walk   || DEFAULT_WORLD.walk);
@@ -5396,6 +5465,26 @@ function applyWorldCfg(){
   if(typeof worldAmbient!=='undefined') worldAmbient.intensity = worldCfg.ambient;
   SPEED = worldCfg.walk; SPRINT = worldCfg.run / worldCfg.walk;
   JUMP = worldCfg.jump; GRAV = worldCfg.grav; CROUCH_SPEED = worldCfg.crouch;
+  // arena size — rebuild floor/grid/walls only when it changes; coalesce rapid changes (slider drag)
+  // into one rebuild per frame so dragging stays smooth.
+  worldCfg.arena = Math.max(15, Math.min(400, worldCfg.arena == null ? DEFAULT_WORLD.arena : +worldCfg.arena));
+  if(typeof rebuildArena==='function' && Math.abs(ARENA - worldCfg.arena) > 1e-4){
+    ARENA = worldCfg.arena;
+    if(!_arenaRebuildQueued){ _arenaRebuildQueued = true; requestAnimationFrame(()=>{ _arenaRebuildQueued = false; rebuildArena(); }); }
+  }
+  // floor + wall materials (color + optional tiling texture)
+  if(typeof floorMat!=='undefined'){
+    if(worldCfg.floorColor==null) worldCfg.floorColor = DEFAULT_WORLD.floorColor;
+    floorMat.color.setHex(worldCfg.floorColor>>>0);
+    applySurfaceTexture(floorMat, worldCfg.floorTex, '_floorTexUrl', Math.max(2, Math.round(ARENA/4)));
+  }
+  if(typeof wallMat!=='undefined'){
+    if(worldCfg.wallColor==null) worldCfg.wallColor = DEFAULT_WORLD.wallColor;
+    wallMat.color.setHex(worldCfg.wallColor>>>0);
+    applySurfaceTexture(wallMat, worldCfg.wallTex, '_wallTexUrl', Math.max(2, Math.round(ARENA/8)));
+  }
+  // HDRI / equirectangular sky
+  if(typeof applySkyHdri==='function') applySkyHdri(worldCfg.sky_hdri||'');
 }
 applyWorldCfg();
 // crouch (hold Ctrl or C): lowers the view and slows movement
@@ -6657,7 +6746,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 22 · 2026-06-01';
+const BUILD_VERSION = 'build 23 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8280,6 +8369,48 @@ function renderEditorFields(){
     sc.addEventListener('mousedown', ()=>pushUndoSnapshot());
     sc.oninput=()=>{ worldCfg.sunColor = parseInt(sc.value.slice(1),16)||0; applyWorldCfg(); };
     scRow.appendChild(scSp); scRow.appendChild(sc); worldHost.appendChild(scRow);
+
+    // helpers for the surface/sky rows below
+    const hexStr = (n)=> '#'+((n>>>0)&0xffffff).toString(16).padStart(6,'0');
+    const colorRow = (labelText, key)=>{
+      const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;';
+      const sp=document.createElement('span'); sp.textContent=labelText; sp.style.minWidth='86px';
+      const inp=document.createElement('input'); inp.type='color'; inp.value=hexStr(worldCfg[key]); inp.style.cssText='width:48px;height:24px;background:#0c1418;border:1px solid #2a3a42;border-radius:4px;cursor:pointer;';
+      inp.addEventListener('mousedown', ()=>pushUndoSnapshot());
+      inp.oninput=()=>{ worldCfg[key]=parseInt(inp.value.slice(1),16)||0; applyWorldCfg(); };
+      row.appendChild(sp); row.appendChild(inp); worldHost.appendChild(row);
+    };
+    const texRow = (placeholder, key)=>{
+      const row=document.createElement('div'); row.style.cssText='display:flex;gap:6px;align-items:center;margin:2px 0 6px;';
+      const inp=document.createElement('input'); inp.type='text'; inp.placeholder=placeholder; inp.value=worldCfg[key]||''; inp.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+      const ab=document.createElement('button'); ab.textContent='Apply'; ab.style.flex='0 0 auto';
+      const apply=()=>{ pushUndoSnapshot(); worldCfg[key]=inp.value.trim(); applyWorldCfg(); };
+      ab.onclick=apply; inp.addEventListener('keydown', e=>{ if(e.code==='Enter'){ e.preventDefault(); apply(); } });
+      row.appendChild(inp); row.appendChild(ab); worldHost.appendChild(row);
+    };
+
+    // arena size
+    const ah=document.createElement('div'); ah.className='hint'; ah.style.margin='10px 0 4px'; ah.innerHTML='<b>Arena</b> — playable half-size (rebuilds floor + walls live)';
+    worldHost.appendChild(ah);
+    slider('Arena size','arena', 15, 400, 1);
+
+    // sky / HDRI
+    const skh=document.createElement('div'); skh.className='hint'; skh.style.margin='10px 0 4px'; skh.innerHTML='<b>Sky</b> — equirectangular panorama (.jpg/.png/.hdr). Lights reflections too. Blank = flat color.';
+    worldHost.appendChild(skh);
+    texRow('https://…/sky.jpg (equirectangular)', 'sky_hdri');
+
+    // floor material
+    const fh=document.createElement('div'); fh.className='hint'; fh.style.margin='10px 0 4px'; fh.innerHTML='<b>Floor</b> — color + optional tiling texture';
+    worldHost.appendChild(fh);
+    colorRow('Floor color', 'floorColor');
+    texRow('https://…/floor.jpg (tiles)', 'floorTex');
+
+    // wall material
+    const wh2=document.createElement('div'); wh2.className='hint'; wh2.style.margin='6px 0 4px'; wh2.innerHTML='<b>Walls</b> — color + optional tiling texture';
+    worldHost.appendChild(wh2);
+    colorRow('Wall color', 'wallColor');
+    texRow('https://…/wall.jpg (tiles)', 'wallTex');
+
     // loot box model
     const lh=document.createElement('div'); lh.className='hint'; lh.style.margin='6px 0 4px'; lh.innerHTML='<b>Loot box</b> — GLB model URL (blank = built-in chest)';
     worldHost.appendChild(lh);
