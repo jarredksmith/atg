@@ -5475,6 +5475,54 @@ function removeLight(idx){
 }
 for(const L of ((savedLevel && Array.isArray(savedLevel.lights)) ? savedLevel.lights : SCENE_LIGHTS)) buildLight(L);
 
+// ---------- Authored enemy spawns ----------
+// Each spawn is a Group placed in the editor that marks where a hostile appears and how it behaves:
+//   hunt   = chases the player anywhere (the classic behavior)
+//   patrol = wanders inside its patrol radius until it detects a player, then chases; leashes back
+//   hold   = guards its post; only engages when a player enters its detect range, then returns
+// Markers are editor-only visuals (hidden in play). The logical enemy keeps its capsule body — only
+// its target-selection (AI state) and home post change. Saved with the level under `spawns`.
+const spawnMarkers = [];
+const SPAWN_MODE_COLORS = { hunt:0xff4d5e, patrol:0xffd166, hold:0x49b6ff };
+function refreshSpawnRings(g){
+  const rings = g.userData.rings;
+  for(let i=rings.children.length-1;i>=0;i--){ const c=rings.children[i]; rings.remove(c); if(c.geometry) c.geometry.dispose(); if(c.material) c.material.dispose(); }
+  const m = g.userData.mark;
+  const ring = (r, col, op)=>{ if(r<=0.05) return; const geo=new THREE.RingGeometry(Math.max(0.05,r-0.12), r, 56); const mat=new THREE.MeshBasicMaterial({ color:col, transparent:true, opacity:op, side:THREE.DoubleSide, depthWrite:false }); const mesh=new THREE.Mesh(geo, mat); mesh.rotation.x=-Math.PI/2; mesh.position.y=0.03; rings.add(mesh); };
+  if(m.mode==='patrol') ring(m.radius, SPAWN_MODE_COLORS.patrol, 0.55);   // patrol area
+  ring(m.detect, 0x66ccff, 0.30);                                          // detection range
+}
+function buildSpawnMarker(opts){
+  const g = new THREE.Group();
+  const mode = (opts.mode==='patrol'||opts.mode==='hold') ? opts.mode : 'hunt';
+  const mark = { mode, radius:(opts.radius!=null?opts.radius:6), detect:(opts.detect!=null?opts.detect:14), face:(opts.face||0) };
+  g.userData.mark = mark; g.userData.isSpawn = true;
+  const col = SPAWN_MODE_COLORS[mode];
+  const post = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.7, 4), new THREE.MeshBasicMaterial({ color:col, transparent:true, opacity:0.9, depthTest:false }));
+  post.position.y = 0.85; post.rotation.y = Math.PI/4; post.renderOrder = 9000;
+  const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.55, 8), new THREE.MeshBasicMaterial({ color:0xffffff, depthTest:false }));
+  arrow.rotation.x = Math.PI/2; arrow.position.set(0, 0.1, -0.75); arrow.renderOrder = 9001; post.add(arrow);
+  g.add(post); g.userData.post = post;
+  g.userData.rings = new THREE.Group(); g.add(g.userData.rings);
+  refreshSpawnRings(g);
+  g.position.set(opts.t[0], 0, opts.t[1]); g.rotation.y = mark.face;
+  g.visible = false;   // editor-only; shown while the editor is open
+  scene.add(g); spawnMarkers.push(g);
+  return g;
+}
+function setSpawnMarkerMode(g, mode){
+  const m = g.userData.mark; m.mode = (mode==='patrol'||mode==='hold') ? mode : 'hunt';
+  const col = SPAWN_MODE_COLORS[m.mode]; if(g.userData.post) g.userData.post.material.color.setHex(col);
+  refreshSpawnRings(g);
+}
+function removeSpawnMarker(idx){
+  const g = spawnMarkers[idx]; if(!g) return;
+  g.traverse(o=>{ if(o.geometry) o.geometry.dispose(); if(o.material) o.material.dispose && o.material.dispose(); });
+  scene.remove(g); spawnMarkers.splice(idx,1);
+}
+function setSpawnMarkersVisible(v){ for(const g of spawnMarkers) g.visible = v; }
+for(const sp of ((savedLevel && Array.isArray(savedLevel.spawns)) ? savedLevel.spawns : [])) buildSpawnMarker(sp);
+
 // ---------- Player / controls ----------
 const player = {
   pos: new THREE.Vector3(0,1.7,0),
@@ -5663,6 +5711,7 @@ addEventListener('keydown', e=>{
   if(editorOpen && (e.code==='Delete' || e.code==='Backspace')){
     if(editorActive==='props') deleteSelectedProp();
     else if(editorActive==='lights') deleteSelectedLight();
+    else if(editorActive==='spawns') deleteSelectedSpawn();
     e.preventDefault();
     return;
   }
@@ -5965,16 +6014,52 @@ function buildEnemyVisual(body){
     (err)=>{ console.warn('Enemy model load failed, using capsule:', err && err.message); }   // capsule stays
   );
 }
-function spawnEnemy(){
+function spawnEnemy(spawn){
   const mesh = new THREE.Group();   // logical body (capsule-sized); visual is a child
   let px, pz;
-  do { const a=Math.random()*Math.PI*2, r=ARENA*0.6+Math.random()*ARENA*0.3;
-       px=Math.cos(a)*r; pz=Math.sin(a)*r; }
-  while(Math.abs(px)>ARENA-3 || Math.abs(pz)>ARENA-3);
+  if(spawn){ px = spawn.x; pz = spawn.z; }
+  else {
+    do { const a=Math.random()*Math.PI*2, r=ARENA*0.6+Math.random()*ARENA*0.3;
+         px=Math.cos(a)*r; pz=Math.sin(a)*r; }
+    while(Math.abs(px)>ARENA-3 || Math.abs(pz)>ARENA-3);
+  }
   mesh.position.set(px, 1.4, pz);
+  if(spawn && spawn.face) mesh.rotation.y = spawn.face;
   buildEnemyVisual(mesh);
   scene.add(mesh);
-  enemies.push({ id: nextEnemyId++, mesh, hp:30, speed: 6+Math.random()*3, lastHit:0, cooldown:0 });
+  const e = { id: nextEnemyId++, mesh, hp:30, speed: 6+Math.random()*3, lastHit:0, cooldown:0,
+    mode: (spawn && spawn.mode) ? spawn.mode : 'hunt',
+    home: spawn ? { x:px, z:pz } : null,
+    patrolR: (spawn && spawn.patrolR!=null) ? spawn.patrolR : 6,
+    detectR: (spawn && spawn.detectR!=null) ? spawn.detectR : 14,
+    aware:false, lostAt:0, wp:null, wpUntil:0 };
+  enemies.push(e);
+}
+// Decide where one enemy wants to move this frame, based on its behavior mode and whether it can see a
+// player. Pure + deterministic given `now` and (for patrol) Math.random — extracted so it's unit-tested.
+//   returns { tx, tz, chase }  (chase = actively pursuing a detected player; gates attacks + speed)
+function enemyDesiredTarget(en, px, pz, dist, now){
+  const mode = en.mode || 'hunt';
+  if(mode === 'hunt'){ en.aware = true; return { tx:px, tz:pz, chase:true }; }
+  const detect = en.detectR || 14;
+  if(dist <= detect){ en.aware = true; en.lostAt = 0; }
+  else if(en.aware){
+    if(dist > detect*1.6){ if(!en.lostAt) en.lostAt = now; if(now - en.lostAt > 2500) en.aware = false; }
+    else en.lostAt = 0;
+  }
+  if(en.aware) return { tx:px, tz:pz, chase:true };
+  const hx = en.home ? en.home.x : en.mesh.position.x, hz = en.home ? en.home.z : en.mesh.position.z;
+  if(mode === 'patrol'){
+    const here = en.mesh.position;
+    const reached = en.wp && Math.hypot(here.x-en.wp.x, here.z-en.wp.z) < 1.0;
+    if(!en.wp || now > en.wpUntil || reached){
+      const a = Math.random()*Math.PI*2, r = Math.random()*(en.patrolR || 6);
+      en.wp = { x: hx + Math.cos(a)*r, z: hz + Math.sin(a)*r };
+      en.wpUntil = now + 2500 + Math.random()*2500;
+    }
+    return { tx:en.wp.x, tz:en.wp.z, chase:false };
+  }
+  return { tx:hx, tz:hz, chase:false };   // hold: return to / guard the post
 }
 
 // ---------- Coin / currency pickups ----------
@@ -6165,6 +6250,8 @@ function loadLevelFromNet(level){
     level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p);  if(p.att) obj.userData.attribution=p.att; if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));
   }
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
+  for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
+  if(Array.isArray(level.spawns)){ for(const sp of level.spawns){ const g=buildSpawnMarker(sp); g.visible = editorOpen; } }
   if(level.enemy){   // adopt the host's enemy model + collider/offset so clients render the same hostiles
     enemyModelUrl = level.enemy.url||''; enemyModelScale = level.enemy.scale||1; enemyFaceOffset = level.enemy.face||0;
     enemyColliderR = level.enemy.cr||0; enemyYOffset = level.enemy.yoff||0;
@@ -6906,7 +6993,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 32 · 2026-06-02';
+const BUILD_VERSION = 'build 33 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7668,8 +7755,16 @@ function flashDamage(){
 
 // ---------- Wave management ----------
 let spawnTimer = 0, chestTimer = 20;
+let spawnQueue = [];   // pending authored-spawn descriptors for the current wave
 function startWave(){
-  toSpawn = 3 + wave*2;
+  spawnQueue = [];
+  if(spawnMarkers.length){
+    // authored level: one hostile per placed spawn, at its post with its behavior
+    for(const g of spawnMarkers){ const m=g.userData.mark; spawnQueue.push({ x:g.position.x, z:g.position.z, mode:m.mode, patrolR:m.radius, detectR:m.detect, face:m.face }); }
+    toSpawn = spawnQueue.length;
+  } else {
+    toSpawn = 3 + wave*2;   // no authored spawns -> classic escalating random waves
+  }
   $('waveNum').textContent = 'WAVE '+wave;
   updateHUD();
 }
@@ -8013,7 +8108,7 @@ function loop(){
   if(!isClient && !duelMode){
     if(toSpawn>0){
       spawnTimer-=dt;
-      if(spawnTimer<=0){ spawnEnemy(); toSpawn--; spawnTimer=0.6; updateHUD(); }
+      if(spawnTimer<=0){ spawnEnemy(spawnQueue.length ? spawnQueue.shift() : null); toSpawn--; spawnTimer=0.6; updateHUD(); }
     } else if(enemies.length===0){
       wave++; SFX.wave(); startWave();
     }
@@ -8037,17 +8132,21 @@ function loop(){
   if(!isClient && !duelMode){
     const players = allPlayers();
     const _eDir = new THREE.Vector3();
-    // Phase 1 — chase: walk toward the nearest player, but stop just outside melee so they crowd
-    // around the player instead of bulldozing through them.
+    const nowMs = performance.now();
+    // Phase 1 — behavior: hunt chases anywhere; patrol/hold use detection + leash and otherwise patrol
+    // their area or guard their post. Movement aims at the state's target point; chasing stops just
+    // outside melee so they crowd the player instead of bulldozing through.
     for(const en of enemies){
       en.mesh.visible = !hideEn;
       let near=players[0], nd=1e9;
       for(const pl of players){ const d=Math.hypot(pl.pos.x-en.mesh.position.x, pl.pos.z-en.mesh.position.z); if(d<nd){ nd=d; near=pl; } }
       en._near = near; en._dist = nd;
-      if(nd > 1.8){
-        _eDir.set(near.pos.x-en.mesh.position.x, 0, near.pos.z-en.mesh.position.z).normalize();
-        en.mesh.position.addScaledVector(_eDir, en.speed*dt);
-      }
+      const td = enemyDesiredTarget(en, near.pos.x, near.pos.z, nd, nowMs);
+      en._chase = td.chase; en._faceX = td.tx; en._faceZ = td.tz;
+      const dx = td.tx - en.mesh.position.x, dz = td.tz - en.mesh.position.z, d = Math.hypot(dx,dz);
+      const stopAt = td.chase ? 1.8 : 0.5;                 // patrol: stop on the waypoint; chase: just outside melee
+      const spd = td.chase ? en.speed : en.speed*0.5;      // patrol/return at half pace
+      if(d > stopAt){ _eDir.set(dx,0,dz).multiplyScalar(1/d); en.mesh.position.addScaledVector(_eDir, spd*dt); }
     }
     // Phase 2 — separation: shove overlapping enemies apart so they don't stack / clip through each
     // other. Desired spacing is the sum of the two footprints (capped). Runs before obstacle resolve
@@ -8094,10 +8193,11 @@ function loop(){
 
       const near = en._near || players[0];
       en.mesh.position.y = 1.4 + Math.sin(t*4+en.id)*0.08;
-      en.mesh.lookAt(near.pos.x, en.mesh.position.y, near.pos.z);
-      if(enemyModelUrl) en.mesh.rotateY(enemyFaceOffset);   // GLB characters vary in which way they face; nudge to face the player
+      const fx = (en._faceX!=null) ? en._faceX : near.pos.x, fz = (en._faceZ!=null) ? en._faceZ : near.pos.z;
+      en.mesh.lookAt(fx, en.mesh.position.y, fz);   // chasing -> face player; patrolling -> face where it walks
+      if(enemyModelUrl) en.mesh.rotateY(enemyFaceOffset);   // GLB characters vary in which way they face; nudge to face forward
       en.cooldown -= dt;
-      if(en._dist < 2.4 && en.cooldown<=0 && !editorOpen){
+      if(en._chase && en._dist < 2.4 && en.cooldown<=0 && !editorOpen){   // only an aware/chasing enemy attacks
         en.cooldown = 0.8;
         near.hurt(9);   // routes to the local player or, in co-op, the remote one
       }
@@ -8309,6 +8409,28 @@ const editorTargets = {
       return body;
     }
   },
+  spawns: {
+    label: 'Spawns',
+    idx: 0,
+    selectable: true,
+    isSpawns: true,
+    addable: true,
+    noun: 'Spawn',
+    state: { px:0, pz:0, radius:6, detect:14 },
+    fields: [
+      { k:'px',     label:'Pos X',         min:-65, max:65, step:STEP_POS },
+      { k:'pz',     label:'Pos Z',         min:-65, max:65, step:STEP_POS },
+      { k:'radius', label:'Patrol radius', min:0,   max:40, step:0.5 },
+      { k:'detect', label:'Detect range',  min:1,   max:80, step:0.5 },
+    ],
+    count(){ return spawnMarkers.length; },
+    obj(){ return spawnMarkers[this.idx] || null; },
+    sync(){ const g=this.obj(); if(!g) return; const m=g.userData.mark;
+      this.state.px=g.position.x; this.state.pz=g.position.z; this.state.radius=m.radius; this.state.detect=m.detect; },
+    apply(){ const g=this.obj(); if(!g) return; const m=g.userData.mark, s=this.state;
+      g.position.set(s.px, 0, s.pz); m.radius=Math.max(0,s.radius); m.detect=Math.max(1,s.detect); refreshSpawnRings(g); },
+    code(){ return '// ===== Enemy spawns ===== (authored in-editor; saved in the level JSON under "spawns")'; }
+  },
 };
 let editorActive = 'gun';
 let editorEl = null;
@@ -8362,6 +8484,32 @@ function addSceneLight(){
   if(g.userData.marker) g.userData.marker.visible = true;
   editorActive='lights'; editorTargets.lights.idx = lightModels.length-1; selLights=[g]; renderEditorFields();
 }
+// Place an enemy spawn in front of the player and select it.
+function addSceneSpawn(){
+  pushUndoSnapshot();
+  const fwd = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
+  const px = player.pos.x + fwd.x*6, pz = player.pos.z + fwd.z*6;
+  const g = buildSpawnMarker({ t:[px, pz], mode:'patrol', radius:8, detect:16, face:player.yaw });
+  g.visible = true;
+  editorActive='spawns'; editorTargets.spawns.idx = spawnMarkers.length-1; selSpawns=[g]; renderEditorFields();
+}
+function deleteSelectedSpawn(){
+  pushUndoSnapshot();
+  const i = editorTargets.spawns.idx;
+  if(!spawnMarkers[i]) return;
+  removeSpawnMarker(i);
+  editorTargets.spawns.idx = Math.max(0, Math.min(i, spawnMarkers.length-1));
+  const g = spawnMarkers[editorTargets.spawns.idx]; selSpawns = g ? [g] : [];
+  renderEditorFields();
+}
+function duplicateSelectedSpawn(){
+  const g = spawnMarkers[editorTargets.spawns.idx]; if(!g) return;
+  pushUndoSnapshot();
+  const m = g.userData.mark;
+  const ng = buildSpawnMarker({ t:[g.position.x + DUP_OFFSET, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face });
+  ng.visible = true;
+  editorActive='spawns'; editorTargets.spawns.idx = spawnMarkers.length-1; selSpawns=[ng]; renderEditorFields();
+}
 function deleteSelectedLight(){
   pushUndoSnapshot();
   if(isGroupSel()){   // remove every selected light
@@ -8408,6 +8556,7 @@ function duplicateSelectedLight(){
 function duplicateSelected(){
   if(editorActive==='props') duplicateSelectedProp();
   else if(editorActive==='lights') duplicateSelectedLight();
+  else if(editorActive==='spawns') duplicateSelectedSpawn();
 }
 
 // ---------- Save / restore the whole level to the browser ----------
@@ -8456,6 +8605,7 @@ function serializeLevel(){
     enemy:   { url: enemyModelUrl, scale: enemyModelScale, face: enemyFaceOffset, cr: enemyColliderR, yoff: enemyYOffset },
     props:   propModels.filter(Boolean).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
+    spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face }; }),
   };
 }
 function saveLevel(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(serializeLevel())); return true; } catch(e){ return false; } }
@@ -8488,6 +8638,9 @@ function restoreLevel(level){
   // lights
   for(let i=lightModels.length-1;i>=0;i--) removeLight(i);
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
+  // enemy spawns
+  for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
+  if(Array.isArray(level.spawns)){ for(const sp of level.spawns){ const g=buildSpawnMarker(sp); g.visible = editorOpen; } }
   // gun / aim / station
   if(level.gun){ if(level.gun.url && level.gun.url!==gunModelUrl) swapGunModel(level.gun.url); Object.assign(editorTargets.gun.state, level.gun.state||{}); editorTargets.gun.apply(); }
   // per-weapon models + framing
@@ -8924,11 +9077,12 @@ function renderEditorFields(){
   const picker = editorEl.querySelector('#edPicker');
   picker.innerHTML = '';
   if(tgt.selectable){
-    const noun = tgt.isLights ? 'Light' : 'Prop';
+    const noun = tgt.noun || (tgt.isLights ? 'Light' : 'Prop');
     const n = tgt.count();
     if(n===0){
       const note = document.createElement('div'); note.className='hint';
-      note.textContent = tgt.isLights ? 'No lights yet — use “Add light” below.'
+      note.textContent = tgt.isSpawns ? 'No enemy spawns yet — use “Add spawn” below, then move it with the gizmo. Each placed spawn becomes one hostile per wave.'
+        : tgt.isLights ? 'No lights yet — use “Add light” below.'
         : 'No props loaded yet (needs network for models). Use “Add box” below, or adjust once they appear.';
       picker.appendChild(note);
     } else {
@@ -8938,10 +9092,27 @@ function renderEditorFields(){
       const prev = document.createElement('button'); prev.textContent='◀ Prev';
       const lbl  = document.createElement('button'); lbl.textContent=noun+' '+(tgt.idx+1)+' / '+n; lbl.style.flex='1.4'; lbl.disabled=true; lbl.style.opacity='0.85';
       const next = document.createElement('button'); next.textContent='Next ▶';
-      prev.onclick = ()=>{ tgt.idx=(tgt.idx-1+n)%n; if(editorActive==='props') syncSelToIdx(); renderEditorFields(); };
-      next.onclick = ()=>{ tgt.idx=(tgt.idx+1)%n; if(editorActive==='props') syncSelToIdx(); renderEditorFields(); };
+      prev.onclick = ()=>{ tgt.idx=(tgt.idx-1+n)%n; if(editorActive==='props') syncSelToIdx(); else if(editorActive==='spawns'){ const g=tgt.obj(); selSpawns=g?[g]:[]; } renderEditorFields(); };
+      next.onclick = ()=>{ tgt.idx=(tgt.idx+1)%n; if(editorActive==='props') syncSelToIdx(); else if(editorActive==='spawns'){ const g=tgt.obj(); selSpawns=g?[g]:[]; } renderEditorFields(); };
       row.appendChild(prev); row.appendChild(lbl); row.appendChild(next);
       picker.appendChild(row);
+      // behavior mode for the selected spawn
+      if(tgt.isSpawns){
+        const g = tgt.obj();
+        if(g){
+          const lab=document.createElement('div'); lab.className='hint'; lab.style.margin='0 0 3px'; lab.innerHTML='<b>Behavior</b>';
+          picker.appendChild(lab);
+          const mrow=document.createElement('div'); mrow.className='row2';
+          const mk=(key,txt)=>{ const b=document.createElement('button'); b.textContent=txt; if(g.userData.mark.mode===key){ b.style.background='rgba(56,245,181,0.30)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); setSpawnMarkerMode(g,key); renderEditorFields(); }; return b; };
+          mrow.appendChild(mk('hold','🛡 Hold')); mrow.appendChild(mk('patrol','🚶 Patrol')); mrow.appendChild(mk('hunt','🎯 Hunt'));
+          picker.appendChild(mrow);
+          const mh=document.createElement('div'); mh.className='hint'; mh.style.margin='3px 0 0';
+          mh.textContent = g.userData.mark.mode==='hunt' ? 'Hunt: chases the player across the whole arena (Patrol radius ignored).'
+            : g.userData.mark.mode==='patrol' ? 'Patrol: wanders inside its patrol radius, chases when a player enters Detect range, then leashes back.'
+            : 'Hold: guards this post; engages only when a player enters Detect range, then returns.';
+          picker.appendChild(mh);
+        }
+      }
     }
   }
 
@@ -9249,13 +9420,23 @@ function renderEditorFields(){
     row.appendChild(add);
     urlHost.appendChild(row);
   }
+  if(tgt.isSpawns){
+    const row = document.createElement('div'); row.className='row2'; row.style.marginBottom='4px';
+    const add = document.createElement('button'); add.textContent='➕ Add spawn';
+    add.onclick = ()=>{ addSceneSpawn(); };
+    row.appendChild(add);
+    urlHost.appendChild(row);
+    const note=document.createElement('div'); note.className='hint'; note.style.margin='2px 0 0';
+    note.textContent='Enemy appearance (model/scale/collider) lives in the Enemies section. With spawns placed, waves use them instead of random spawns.';
+    urlHost.appendChild(note);
+  }
   if(tgt.addable){
     const row2 = document.createElement('div'); row2.className='row2'; row2.style.marginTop='6px';
     const dup = document.createElement('button'); dup.textContent='Duplicate (⇧D)';
     dup.onclick = ()=>{ duplicateSelected(); };
     const del = document.createElement('button'); del.textContent='Delete selected';
     del.style.background='rgba(245,80,94,0.18)'; del.style.borderColor='rgba(245,80,94,0.45)';
-    del.onclick = ()=>{ if(tgt.isLights) deleteSelectedLight(); else deleteSelectedProp(); };
+    del.onclick = ()=>{ if(tgt.isSpawns) deleteSelectedSpawn(); else if(tgt.isLights) deleteSelectedLight(); else deleteSelectedProp(); };
     row2.appendChild(dup); row2.appendChild(del);
     urlHost.appendChild(row2);
   }
@@ -9310,6 +9491,7 @@ const AXIS_COL = { x:0xff5566, y:0x66ff88, z:0x5599ff };
 // ---- Multi-selection (shift+click props to select several; >1 transforms as a group) ----
 let selProps = [];        // selected prop meshes; the "primary" is editorTargets.props.idx
 let selLights = [];       // selected light groups; the "primary" is editorTargets.lights.idx
+let selSpawns = [];       // selected spawn markers; the "primary" is editorTargets.spawns.idx
 let selBoxes = [];        // pooled BoxHelpers for highlighting the multi-selection
 function isGroupSel(){ return editorOpen && ((editorActive==='props' && selProps.length>1) || (editorActive==='lights' && selLights.length>1)); }
 function activeSel(){ return editorActive==='lights' ? selLights : selProps; }   // the active multi-selection list
@@ -9328,6 +9510,7 @@ function selectedSceneObject(){
   if(editorActive==='station') return station && station.model;
   if(editorActive==='props') return editorTargets.props.obj();
   if(editorActive==='lights'){ const g=editorTargets.lights.obj(); return g && g.userData.marker; }
+  if(editorActive==='spawns'){ const g=editorTargets.spawns.obj(); return g && g.userData.post; }
   return null;   // gun / aim have no selectable scene mesh
 }
 // live world position of the selected scene object (or null)
@@ -9336,6 +9519,7 @@ function getSelPos(){
   if(editorActive==='station' && station) return station.group.position;
   if(editorActive==='props'){ const o=editorTargets.props.obj(); return o?o.position:null; }
   if(editorActive==='lights'){ const g=editorTargets.lights.obj(); return g?g.position:null; }
+  if(editorActive==='spawns'){ const g=editorTargets.spawns.obj(); return g?g.position:null; }
   return null;
 }
 // move the selected object to a world position and sync its editor state + collider
@@ -9353,6 +9537,10 @@ function setSelPos(v){
     const g=editorTargets.lights.obj(); if(!g) return;
     g.position.copy(v);
     const s=editorTargets.lights.state; s.px=v.x; s.py=v.y; s.pz=v.z;
+  } else if(editorActive==='spawns'){
+    const g=editorTargets.spawns.obj(); if(!g) return;
+    g.position.set(v.x, 0, v.z);   // spawns live on the floor
+    const s=editorTargets.spawns.state; s.px=v.x; s.pz=v.z;
   }
 }
 // --- rotation (Euler, radians) of the selected object, for the rotate gizmo ---
@@ -9360,6 +9548,7 @@ function getSelRot(){
   if(editorActive==='station' && station) return station.group.rotation;
   if(editorActive==='props'){ const o=editorTargets.props.obj(); return o?o.rotation:null; }
   if(editorActive==='lights'){ const g=editorTargets.lights.obj(); return g?g.rotation:null; }
+  if(editorActive==='spawns'){ const g=editorTargets.spawns.obj(); return g?g.rotation:null; }
   return null;
 }
 // Recompute the station's collision boxes at its current transform — gizmo moves change the group/model
@@ -9378,6 +9567,9 @@ function setSelRot(euler){
     const g=editorTargets.lights.obj(); if(!g) return;
     g.rotation.copy(euler);
     const s=editorTargets.lights.state; s.rx=euler.x*DEG; s.ry=euler.y*DEG; s.rz=euler.z*DEG;
+  } else if(editorActive==='spawns'){
+    const g=editorTargets.spawns.obj(); if(!g) return;
+    g.rotation.set(0, euler.y, 0); g.userData.mark.face = euler.y;   // spawns only yaw (facing)
   }
 }
 // --- scale (Vector3) of the selected object, for the scale gizmo; lights have no meaningful scale ---
@@ -9453,15 +9645,15 @@ function buildGizmo(){
 function updateGizmo(){
   if(!gizmo) gizmo = buildGizmo();
   const gr = gizmo.userData.groups;
-  const movable = editorOpen && (editorActive==='props' || editorActive==='station' || editorActive==='lights');
+  const movable = editorOpen && (editorActive==='props' || editorActive==='station' || editorActive==='lights' || editorActive==='spawns');
   const pos = movable ? getSelPos() : null;
   if(!pos){ gr.translate.visible=gr.scale.visible=gr.rotate.visible=false; gizmo.visible = false; return; }
   gizmo.position.copy(pos);
   if(activeCam()===camera){ const d = camera.position.distanceTo(pos); gizmo.scale.setScalar(Math.max(0.4, d*0.06)); }
   else { gizmo.scale.setScalar(Math.max(0.6, topZoom*0.03)); }
-  // lights have no scale; force translate/rotate only for them
+  // lights + spawns have no scale; force translate/rotate only for them
   let mode = gizmoMode;
-  if(editorActive==='lights' && mode==='scale') mode='translate';
+  if((editorActive==='lights'||editorActive==='spawns') && mode==='scale') mode='translate';
   gr.translate.visible = (mode==='translate');
   gr.scale.visible = (mode==='scale');
   gr.rotate.visible = (mode==='rotate');
@@ -9649,6 +9841,7 @@ renderer.domElement.addEventListener('click', (e)=>{
   if(station && station.model) targets.push(station.model);
   for(const p of propModels){ if(p) targets.push(p); }
   for(const g of lightModels){ if(g.userData.marker) targets.push(g.userData.marker); }
+  for(const g of spawnMarkers){ if(g.visible) targets.push(g); }
   if(!targets.length) return;
   const hits = raycaster.intersectObjects(targets, true);
   if(!hits.length) return;
@@ -9659,6 +9852,8 @@ renderer.domElement.addEventListener('click', (e)=>{
     if(pi>=0){ picked='props'; editorTargets.props.idx=pi; break; }
     const li = lightModels.findIndex(g=>g===root || g.userData.marker===root);
     if(li>=0){ picked='lights'; editorTargets.lights.idx=li; break; }
+    const si = spawnMarkers.indexOf(root);
+    if(si>=0){ picked='spawns'; editorTargets.spawns.idx=si; selSpawns=[spawnMarkers[si]]; break; }
     root = root.parent;
   }
   if(picked==='props'){
@@ -9744,6 +9939,7 @@ function toggleEditor(){
     destroyPhysWorld();     // edit plain meshes; snap dynamic props back to their authored transform
     for(const o of dynamicProps){ if(o.userData.physHome) o.position.copy(o.userData.physHome); if(o.userData.physHomeQ) o.quaternion.copy(o.userData.physHomeQ); }
     for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible = true; }
+    if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(true);
     const mm=$('minimap'); if(mm) mm.style.display='none';        // declutter combat HUD while editing
     const wp=$('wavePanel'); if(wp) wp.style.display='none';
     renderEditorFields();
@@ -9752,6 +9948,7 @@ function toggleEditor(){
     editorAimPreview = false;
     if(selBox) selBox.visible = false;
     for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible = false; }
+    if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false);
     for(const en of enemies){ en.mesh.visible = true; }   // un-hide enemies when leaving the editor
     const mm=$('minimap'); if(mm) mm.style.display='';
     const wp=$('wavePanel'); if(wp) wp.style.display='';
@@ -9780,7 +9977,7 @@ function startGame(){
   buffs.damage=0; buffs.speed=0; buffs.shield=0;
   // reset aim/shake state
   firing=false; ads=false; adsBlend=0; shake=0;
-  editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
+  editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
   camera.fov = (worldCfg && worldCfg.fov) || BASE_FOV; camera.updateProjectionMatrix(); camera.rotation.z = 0;
   // clear entities
   enemies.slice().forEach(e=>{ scene.remove(e.mesh); if(e.mesh.userData.mixer){ const mi=mixers.indexOf(e.mesh.userData.mixer); if(mi>=0) mixers.splice(mi,1); } }); enemies.length=0;
@@ -9817,7 +10014,7 @@ function startGame(){
 function endGame(){
   gameOn=false; gameOver=true; document.exitPointerLock();
   firing=false; ads=false; shopOpen=false;
-  editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
+  editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
   $('shop').classList.add('hidden');
   $('prompt').style.display='none';
   const ov=$('overlay'); ov.classList.remove('hidden');
