@@ -172,6 +172,13 @@
     transition: transform .1s, box-shadow .2s; text-transform: uppercase;
   }
   #startBtn:hover { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(56,245,181,.4); }
+  #editBtn {
+    margin-top: 14px; pointer-events:auto; cursor:pointer;
+    font-family:'Chakra Petch'; font-size:13px; font-weight:600; letter-spacing:2px;
+    color:#9fe6cf; background:transparent; border:1px solid #2a6e5c; padding:10px 26px;
+    border-radius:7px; transition: border-color .2s, color .2s; text-transform:uppercase;
+  }
+  #editBtn:hover { border-color:#38f5b5; color:#eafff7; }
   #controls { margin-top: 30px; color:#5a7d72; font-size: 12px; letter-spacing:2px; line-height:1.9; }
   #mpBox { margin-top: 26px; display:flex; flex-direction:column; align-items:center; gap:8px; }
   .mpRow { display:flex; gap:8px; align-items:center; justify-content:center; }
@@ -285,6 +292,7 @@
   <h1>BREACH</h1>
   <div class="sub">// TACTICAL INCURSION PROTOCOL</div>
   <button id="startBtn">Deploy</button>
+  <button id="editBtn">🛠 Build / edit level</button>
   <div id="controls">
     <b>WASD</b> move &nbsp;·&nbsp; <b>MOUSE</b> look &nbsp;·&nbsp; <b>L-CLICK</b> fire &nbsp;·&nbsp; <b>R-CLICK</b> aim &nbsp;·&nbsp; <b>SHIFT</b> sprint &nbsp;·&nbsp; <b>SPACE</b> jump<br>
     <b>R</b> reload &nbsp;·&nbsp; <b>G</b> throw grenade &nbsp;·&nbsp; <b>E</b> use station / open cache &nbsp;·&nbsp; <b>1·2·3</b> / <b>scroll</b> weapons<br>
@@ -6993,7 +7001,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 33 · 2026-06-02';
+const BUILD_VERSION = 'build 34 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8104,8 +8112,8 @@ function loop(){
     duelHUD();
   }
 
-  // wave spawning (host / solo, co-op only — never in a duel)
-  if(!isClient && !duelMode){
+  // wave spawning (host / solo, co-op only — never in a duel, and paused while the editor is open)
+  if(!isClient && !duelMode && !editorOpen){
     if(toSpawn>0){
       spawnTimer-=dt;
       if(spawnTimer<=0){ spawnEnemy(spawnQueue.length ? spawnQueue.shift() : null); toSpawn--; spawnTimer=0.6; updateHUD(); }
@@ -8121,8 +8129,8 @@ function loop(){
   updateChests(dt);
   checkProximity();   // runs in all modes; in duel it only considers trigger-animation props
 
-  // periodic chest spawning (host / solo, both co-op and duel)
-  if(!isClient){
+  // periodic chest spawning (host / solo, both co-op and duel) — paused while editing
+  if(!isClient && !editorOpen){
     chestTimer -= dt;
     if(chestTimer <= 0){ spawnChest(); chestTimer = 30 + Math.random()*20; }
   }
@@ -10053,9 +10061,20 @@ function startJoin(){
 }
 function bindMenu(){
   const sb=document.getElementById('startBtn'); if(sb) sb.onclick=startGame;
+  const eb=document.getElementById('editBtn'); if(eb) eb.onclick=enterEditor;
   const h=document.getElementById('mpHost'); if(h) h.onclick=startHost;
   const d=document.getElementById('mpDuel'); if(d) d.onclick=startDuel;
   const j=document.getElementById('mpJoin'); if(j) j.onclick=startJoin;
+}
+// Open the editor straight from the menu to build a level WITHOUT starting combat. Waves stay
+// suspended (wave 0) while the editor is open; closing it (P) begins wave 1. Solo only.
+function enterEditor(){
+  NET.mode='off'; NET.gameMode='coop';
+  startGame();                  // full world/scene init (station, props, HUD)
+  wave = 0; toSpawn = 0; spawnQueue = [];   // hold combat until the build session ends
+  enemies.slice().forEach(e=>{ scene.remove(e.mesh); if(e.mesh.userData.mixer){ const mi=mixers.indexOf(e.mesh.userData.mixer); if(mi>=0) mixers.splice(mi,1); } }); enemies.length=0;
+  if(!editorOpen) toggleEditor();
+  const note=$('edCopied'); if(note){ note.textContent='Build mode — place props, lights & enemy spawns, then press P to start wave 1.'; }
 }
 bindMenu();
 };
