@@ -5505,7 +5505,9 @@ function buildSpawnMarker(opts){
   const mode = (opts.mode==='patrol'||opts.mode==='hold') ? opts.mode : 'hunt';
   const mark = { mode, radius:(opts.radius!=null?opts.radius:6), detect:(opts.detect!=null?opts.detect:14), face:(opts.face||0),
     route: (opts.route||[]).map(p=>Array.isArray(p)?{x:p[0],z:p[1]}:{x:p.x,z:p.z}),   // ordered patrol waypoints (world XZ)
-    routeLoop: opts.loop!==false };                                                    // loop (cycle) vs ping-pong (reverse at ends)
+    routeLoop: opts.loop!==false,                                                      // loop (cycle) vs ping-pong (reverse at ends)
+    type: (opts.type && ['grunt','runner','brute'].includes(opts.type)) ? opts.type : 'grunt',
+    wave: (opts.wave!=null) ? (opts.wave|0) : 0 };                                      // 0 = every wave; else only that wave (pre-built mode)
   g.userData.mark = mark; g.userData.isSpawn = true;
   const col = SPAWN_MODE_COLORS[mode];
   const post = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.7, 4), new THREE.MeshBasicMaterial({ color:col, transparent:true, opacity:0.9, depthTest:false }));
@@ -5552,6 +5554,43 @@ function removeSpawnMarker(idx){
 }
 function setSpawnMarkersVisible(v){ for(const g of spawnMarkers){ g.visible = v; if(g.userData.routeViz) g.userData.routeViz.visible = v; } }
 for(const sp of ((savedLevel && Array.isArray(savedLevel.spawns)) ? savedLevel.spawns : [])) buildSpawnMarker(sp);
+
+// ---------- Enemy archetypes + wave/game config ----------
+// Stat-based "types": same body, different HP / speed / size / damage / tint. (Per-type custom MODELS
+// are a later slice; this gives variety without a multi-GLB manager.)
+const ENEMY_TYPES = {
+  grunt:  { name:'Grunt',  hp:30, speedMin:6,   speedMax:9,  scale:1.0, tint:0xff2d55, dmg:9 },
+  runner: { name:'Runner', hp:16, speedMin:11,  speedMax:13, scale:0.8, tint:0xffd166, dmg:6 },
+  brute:  { name:'Brute',  hp:90, speedMin:3.5, speedMax:5,  scale:1.5, tint:0x9b6cff, dmg:18 },
+};
+const ENEMY_TYPE_KEYS = ['grunt','runner','brute'];
+// Weighted random type — later waves bias toward tougher hostiles.
+function pickEnemyType(waveNum, rng){
+  rng = rng || Math.random; const r = rng();
+  if(waveNum>=5){ return r<0.45 ? 'grunt' : (r<0.80 ? 'runner' : 'brute'); }
+  if(waveNum>=3){ return r<0.60 ? 'grunt' : (r<0.90 ? 'runner' : 'brute'); }
+  return r<0.80 ? 'grunt' : (r<0.97 ? 'runner' : 'brute');
+}
+// Random-mode wave: N hostiles scattered around the arena edge, mixed types.
+function randomWaveDescriptors(waveNum, arena, rng){
+  rng = rng || Math.random;
+  const n = 3 + waveNum*2, out = [];
+  for(let i=0;i<n;i++){
+    let px=0, pz=0, guard=0;
+    do { const a=rng()*Math.PI*2, rr=arena*0.6+rng()*arena*0.3; px=Math.cos(a)*rr; pz=Math.sin(a)*rr; guard++; }
+    while((Math.abs(px)>arena-3 || Math.abs(pz)>arena-3) && guard<8);
+    out.push({ x:px, z:pz, mode:'hunt', type: pickEnemyType(waveNum, rng) });
+  }
+  return out;
+}
+// Should a spawn marker appear on this wave? wave 0 = every wave (back-compat default); else exact match.
+function spawnAppearsOnWave(mark, waveNum){ const w = mark.wave||0; return w===0 || w===waveNum; }
+function descFromMarker(g){ const m=g.userData.mark; return { x:g.position.x, z:g.position.z, mode:m.mode, patrolR:m.radius, detectR:m.detect, face:m.face, route:m.route.map(p=>({x:p.x,z:p.z})), routeLoop:m.routeLoop, type:m.type||'grunt' }; }
+// Mode defaults preserve old levels: markers present -> pre-built (markers were wave 0 = every wave); else random.
+let gameCfg = {
+  mode: (savedLevel && savedLevel.game && savedLevel.game.mode) || (spawnMarkers.length ? 'prebuilt' : 'random'),
+  winWaves: (savedLevel && savedLevel.game && savedLevel.game.winWaves!=null) ? savedLevel.game.winWaves : 0,   // 0 = endless
+};
 
 // ---------- Player / controls ----------
 const player = {
@@ -6007,12 +6046,13 @@ function buildEnemyVisual(body){
   // clear any previous visual
   if(body.userData.visual){ if(body.userData.mixer){ const mi=mixers.indexOf(body.userData.mixer); if(mi>=0) mixers.splice(mi,1); body.userData.mixer=null; } body.remove(body.userData.visual); body.userData.visual=null; }
   const useCapsule = ()=>{
-    const mat = new THREE.MeshStandardMaterial({ color:0x4a1020, emissive:0xff2d55, emissiveIntensity:.6, roughness:.6 });
-    const cap = new THREE.Mesh(enemyGeo, mat); cap.castShadow = true;
+    const ty = ENEMY_TYPES[body.userData.enemyType] || ENEMY_TYPES.grunt;
+    const mat = new THREE.MeshStandardMaterial({ color:0x4a1020, emissive:ty.tint, emissiveIntensity:.6, roughness:.6 });
+    const cap = new THREE.Mesh(enemyGeo, mat); cap.castShadow = true; cap.scale.setScalar(ty.scale);
     const eye = new THREE.Mesh(new THREE.SphereGeometry(.18,8,8), new THREE.MeshBasicMaterial({color:0xffd166}));
     eye.position.set(0, 0.7, -0.55);   // slightly forward so you can read facing
     cap.add(eye);
-    body.add(cap); body.userData.visual = cap; body.userData.modelY = 0; body.userData.footprint = enemyColliderR > 0 ? enemyColliderR : 0.9;
+    body.add(cap); body.userData.visual = cap; body.userData.modelY = 0; body.userData.footprint = enemyColliderR > 0 ? enemyColliderR : 0.9*ty.scale;
   };
   if(!enemyModelUrl){ useCapsule(); return; }
   useCapsule();   // show the capsule immediately; replace it when the GLB arrives
@@ -6021,7 +6061,8 @@ function buildEnemyVisual(body){
       // drop the placeholder capsule
       if(body.userData.visual){ body.remove(body.userData.visual); body.userData.visual=null; }
       const model = THREE.cloneSkinned(gltf.scene);
-      model.scale.setScalar(enemyModelScale || 1);
+      const ty = ENEMY_TYPES[body.userData.enemyType] || ENEMY_TYPES.grunt;
+      model.scale.setScalar((enemyModelScale || 1) * ty.scale);
       model.traverse(o=>{ if(o.isMesh){ o.castShadow = true; o.receiveShadow = false; if(o.frustumCulled!==undefined) o.frustumCulled = false; } });   // skinned meshes can be culled wrongly by their bind-pose bounds
       body.add(model);
       // Measure AFTER parenting + a matrix refresh so the bounding box is correct (esp. for skinned meshes),
@@ -6055,9 +6096,12 @@ function spawnEnemy(spawn){
   }
   mesh.position.set(px, 1.4, pz);
   if(spawn && spawn.face) mesh.rotation.y = spawn.face;
+  const typeKey = (spawn && spawn.type && ENEMY_TYPES[spawn.type]) ? spawn.type : 'grunt';
+  const ty = ENEMY_TYPES[typeKey];
+  mesh.userData.enemyType = typeKey;   // read by buildEnemyVisual for per-type scale + tint
   buildEnemyVisual(mesh);
   scene.add(mesh);
-  const e = { id: nextEnemyId++, mesh, hp:30, speed: 6+Math.random()*3, lastHit:0, cooldown:0,
+  const e = { id: nextEnemyId++, mesh, hp:ty.hp, maxHp:ty.hp, speed: ty.speedMin + Math.random()*(ty.speedMax-ty.speedMin), dmg:ty.dmg, type:typeKey, lastHit:0, cooldown:0,
     mode: (spawn && spawn.mode) ? spawn.mode : 'hunt',
     home: spawn ? { x:px, z:pz } : null,
     patrolR: (spawn && spawn.patrolR!=null) ? spawn.patrolR : 6,
@@ -6305,6 +6349,7 @@ function loadLevelFromNet(level){
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns){ const g=buildSpawnMarker(sp); g.visible = editorOpen; } }
+  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; }
   if(level.enemy){   // adopt the host's enemy model + collider/offset so clients render the same hostiles
     enemyModelUrl = level.enemy.url||''; enemyModelScale = level.enemy.scale||1; enemyFaceOffset = level.enemy.face||0;
     enemyColliderR = level.enemy.cr||0; enemyYOffset = level.enemy.yoff||0;
@@ -7046,7 +7091,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 36 · 2026-06-02';
+const BUILD_VERSION = 'build 37 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7811,14 +7856,14 @@ let spawnTimer = 0, chestTimer = 20;
 let spawnQueue = [];   // pending authored-spawn descriptors for the current wave
 function startWave(){
   spawnQueue = [];
-  if(spawnMarkers.length){
-    // authored level: one hostile per placed spawn, at its post with its behavior
-    for(const g of spawnMarkers){ const m=g.userData.mark; spawnQueue.push({ x:g.position.x, z:g.position.z, mode:m.mode, patrolR:m.radius, detectR:m.detect, face:m.face, route:m.route.map(p=>({x:p.x,z:p.z})), routeLoop:m.routeLoop }); }
+  if(gameCfg.mode === 'prebuilt'){
+    for(const g of spawnMarkers){ if(spawnAppearsOnWave(g.userData.mark, wave)) spawnQueue.push(descFromMarker(g)); }
     toSpawn = spawnQueue.length;
   } else {
-    toSpawn = 3 + wave*2;   // no authored spawns -> classic escalating random waves
+    for(const d of randomWaveDescriptors(wave, ARENA, Math.random)) spawnQueue.push(d);
+    toSpawn = spawnQueue.length;
   }
-  $('waveNum').textContent = 'WAVE '+wave;
+  $('waveNum').textContent = (gameCfg.winWaves>0) ? ('WAVE '+wave+' / '+gameCfg.winWaves) : ('WAVE '+wave);
   updateHUD();
 }
 
@@ -8163,7 +8208,8 @@ function loop(){
       spawnTimer-=dt;
       if(spawnTimer<=0){ spawnEnemy(spawnQueue.length ? spawnQueue.shift() : null); toSpawn--; spawnTimer=0.6; updateHUD(); }
     } else if(enemies.length===0){
-      wave++; SFX.wave(); startWave();
+      if(gameCfg.winWaves>0 && wave>=gameCfg.winWaves){ if(typeof gameWon==='function') gameWon(); }
+      else { wave++; SFX.wave(); startWave(); }
     }
   }
 
@@ -8257,7 +8303,7 @@ function loop(){
       en.cooldown -= dt;
       if(en._chase && en._dist < (en._reach || 2.4) && en.cooldown<=0 && !editorOpen){   // aware/chasing enemy in reach attacks
         en.cooldown = 0.8;
-        near.hurt(9);   // routes to the local player or, in co-op, the remote one
+        near.hurt(en.dmg || 9);   // routes to the local player or, in co-op, the remote one
       }
     }
   }
@@ -8663,7 +8709,8 @@ function serializeLevel(){
     enemy:   { url: enemyModelUrl, scale: enemyModelScale, face: enemyFaceOffset, cr: enemyColliderR, yoff: enemyYOffset },
     props:   propModels.filter(Boolean).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
-    spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop }; }),
+    spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
+    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves },
   };
 }
 function saveLevel(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(serializeLevel())); return true; } catch(e){ return false; } }
@@ -8699,6 +8746,7 @@ function restoreLevel(level){
   // enemy spawns
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns){ const g=buildSpawnMarker(sp); g.visible = editorOpen; } }
+  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; }
   // gun / aim / station
   if(level.gun){ if(level.gun.url && level.gun.url!==gunModelUrl) swapGunModel(level.gun.url); Object.assign(editorTargets.gun.state, level.gun.state||{}); editorTargets.gun.apply(); }
   // per-weapon models + framing
@@ -8848,6 +8896,7 @@ function buildEditorPanel(){
     + sec('Transform', 'transform', '<div id="edFields"></div>')
     + sec('World', 'world', '<div id="edWorld"></div>')
     + sec('Enemies', 'enemies', '<div id="edEnemies"></div>')
+    + sec('Game / waves', 'game', '<div id="edGame"></div>')
     + sec('Loot', 'loot', '<div id="edLoot"></div>')
     + sec('Level file', 'levelfile',
         '<div class="row2"><button id="edSave">💾 Save</button><button id="edClear">Clear save</button></div>'
@@ -8945,10 +8994,12 @@ function renderEditorFields(){
   // ---- World / Enemies / Loot (global settings; independent of the selected object) ----
   const worldHost   = editorEl.querySelector('#edWorld');
   const enemyHost   = editorEl.querySelector('#edEnemies');
+  const gameHost    = editorEl.querySelector('#edGame');
   const lootHost    = editorEl.querySelector('#edLoot');
   if(worldHost){
     worldHost.innerHTML = '';
     if(enemyHost) enemyHost.innerHTML = '';
+    if(gameHost) gameHost.innerHTML = '';
     if(lootHost) lootHost.innerHTML = '';
     // helpers take an explicit host so they can populate any of the three sections
     const slider = (host, label, key, min, max, step)=>{
@@ -9103,6 +9154,23 @@ function renderEditorFields(){
     eyRow.appendChild(eySp); eyRow.appendChild(eyR); eyRow.appendChild(eyN); eHost.appendChild(eyRow);
     hint(eHost, '', '3px 0 0').textContent = 'If the model faces away while chasing, change Facing. Collider radius 0 = auto-fit; raise it if a wide model clips, lower it if it stops too far away. Vertical offset raises (+) or lowers (−) a model that hovers or sinks. Apply re-skins enemies already in the arena.';
 
+    // ===== GAME / WAVES section =====
+    const gHost = gameHost || worldHost;
+    hint(gHost, '<b>Wave mode</b>', '2px 0 4px');
+    const gmRow=document.createElement('div'); gmRow.className='row2';
+    const gmBtn=(key,txt)=>{ const b=document.createElement('button'); b.textContent=txt; if(gameCfg.mode===key){ b.style.background='rgba(56,245,181,0.30)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); gameCfg.mode=key; renderEditorFields(); }; return b; };
+    gmRow.appendChild(gmBtn('random','🎲 Random')); gmRow.appendChild(gmBtn('prebuilt','🗺 Pre-built'));
+    gHost.appendChild(gmRow);
+    hint(gHost, '', '3px 0 6px').textContent = (gameCfg.mode==='prebuilt')
+      ? 'Pre-built: each wave spawns the enemy markers assigned to it (set “Appears on wave” per spawn on the Spawns tab; 0 = every wave).'
+      : 'Random: each wave auto-spawns scattered, mixed-type hostiles that scale with the wave number.';
+    const wwLab=document.createElement('label'); wwLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;';
+    const wwSp=document.createElement('span'); wwSp.textContent='Win after N waves'; wwSp.style.minWidth='118px';
+    const wwN=document.createElement('input'); wwN.type='number'; wwN.min='0'; wwN.max='99'; wwN.step='1'; wwN.value=gameCfg.winWaves; wwN.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+    wwN.onchange=()=>{ gameCfg.winWaves=Math.max(0,Math.min(99,parseInt(wwN.value,10)||0)); renderEditorFields(); };
+    wwLab.appendChild(wwSp); wwLab.appendChild(wwN); gHost.appendChild(wwLab);
+    hint(gHost, '', '2px 0 0').textContent = (gameCfg.winWaves>0) ? ('Clear '+gameCfg.winWaves+' wave'+(gameCfg.winWaves===1?'':'s')+' to win (MISSION COMPLETE).') : '0 = endless survival.';
+
     // ===== LOOT section =====
     const lHost = lootHost || worldHost;
     hint(lHost, '<b>Loot box</b> — GLB model URL (blank = built-in chest)', '2px 0 4px');
@@ -9170,7 +9238,26 @@ function renderEditorFields(){
             : g.userData.mark.mode==='patrol' ? 'Patrol: wanders inside its patrol radius, chases when a player enters Detect range, then leashes back.'
             : 'Hold: guards this post; engages only when a player enters Detect range, then returns.';
           picker.appendChild(mh);
-          // ---- Waypoint route (patrol only) ----
+          // ---- Enemy type (archetype) ----
+          const tlab=document.createElement('div'); tlab.className='hint'; tlab.style.margin='8px 0 3px'; tlab.innerHTML='<b>Enemy type</b>';
+          picker.appendChild(tlab);
+          const trow=document.createElement('div'); trow.className='row2';
+          const tk=(key)=>{ const b=document.createElement('button'); b.textContent=ENEMY_TYPES[key].name; if((g.userData.mark.type||'grunt')===key){ b.style.background='rgba(56,245,181,0.30)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); g.userData.mark.type=key; renderEditorFields(); }; return b; };
+          trow.appendChild(tk('grunt')); trow.appendChild(tk('runner')); trow.appendChild(tk('brute'));
+          picker.appendChild(trow);
+          const tt=ENEMY_TYPES[g.userData.mark.type||'grunt'];
+          const th=document.createElement('div'); th.className='hint'; th.style.margin='3px 0 0';
+          th.textContent = tt.name+': '+tt.hp+' HP · speed '+(tt.speedMin===tt.speedMax?tt.speedMin:(tt.speedMin+'–'+tt.speedMax))+' · '+tt.dmg+' dmg'; picker.appendChild(th);
+          // ---- Wave assignment (pre-built mode only) ----
+          if(gameCfg.mode==='prebuilt'){
+            const wlab=document.createElement('label'); wlab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:8px 0 2px;';
+            const wsp=document.createElement('span'); wsp.textContent='Appears on wave'; wsp.style.minWidth='110px';
+            const wn=document.createElement('input'); wn.type='number'; wn.min='0'; wn.max='99'; wn.step='1'; wn.value=g.userData.mark.wave||0; wn.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+            wn.onchange=()=>{ pushUndoSnapshot(); g.userData.mark.wave=Math.max(0,Math.min(99,parseInt(wn.value,10)||0)); renderEditorFields(); };
+            wlab.appendChild(wsp); wlab.appendChild(wn); picker.appendChild(wlab);
+            const wh=document.createElement('div'); wh.className='hint'; wh.style.margin='2px 0 0';
+            wh.textContent = (g.userData.mark.wave>0) ? ('Spawns only on wave '+g.userData.mark.wave+'.') : '0 = spawns on every wave.'; picker.appendChild(wh);
+          }
           if(g.userData.mark.mode==='patrol'){
             const m = g.userData.mark;
             const rlab=document.createElement('div'); rlab.className='hint'; rlab.style.margin='8px 0 3px';
@@ -10109,6 +10196,21 @@ function startGame(){
   resetDynamicProps();        // dynamic objects return to their authored spots each deploy
   teardownInstancing(); buildInstancing();   // (re)collapse repeated static shapes for play
   renderer.domElement.requestPointerLock();
+}
+function gameWon(){
+  if(!gameOn) return;
+  gameOn=false; gameOver=true; document.exitPointerLock();
+  firing=false; ads=false; shopOpen=false;
+  if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false);
+  $('shop').classList.add('hidden');
+  const pr=$('prompt'); if(pr) pr.style.display='none';
+  const ov=$('overlay'); ov.classList.remove('hidden');
+  ov.innerHTML = `
+    <h1 style="color:#38f5b5;text-shadow:0 0 30px rgba(56,245,181,.5)">MISSION COMPLETE</h1>
+    <div class="sub">${gameCfg.winWaves} WAVE${gameCfg.winWaves===1?'':'S'} CLEARED &nbsp;·&nbsp; SCORE ${score} &nbsp;·&nbsp; ◆${credits}</div>
+    <button id="startBtn">Redeploy</button>`;
+  $('hud').classList.add('hidden');
+  document.getElementById('startBtn').onclick = startGame;
 }
 function endGame(){
   gameOn=false; gameOver=true; document.exitPointerLock();
