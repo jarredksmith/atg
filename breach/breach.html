@@ -5486,28 +5486,71 @@ camera.add(gun);
 scene.add(camera);
 
 // Swap in the hosted model when it loads; fall back to the placeholder on failure/offline.
+// Per-weapon viewmodels: each weapon can have its own GLB + transform. Models are cached in gunModelByWep
+// and kept in the gun group; only the current weapon's model is visible. The legacy single-gun fields
+// (gunModelUrl / gunModel) track the CURRENT weapon so the editor and existing code keep working.
 let gunModelUrl = (savedLevel && savedLevel.gun && savedLevel.gun.url) || GUN_MODEL_URL;   // editor-swappable; exported as GUN_MODEL_URL
-function loadGunModel(){
-  loadGLTFCached(gunModelUrl,
+const gunModelByWep = {};   // weapon key -> loaded Object3D (cached)
+// Resolve a weapon's effective model URL: its own override, else the shared default gun url.
+function wepModelUrl(key){ const w=WEAPONS[key]; return (w && w.model) ? w.model : gunModelUrl; }
+// Default per-weapon transform (falls back to the shared GUN_* framing when a weapon has no saved view).
+function wepView(key){ const w=WEAPONS[key]; return (w && w.view) ? w.view
+  : { px:GUN_OFFSET.x, py:GUN_OFFSET.y, pz:GUN_OFFSET.z, rx:GUN_ROT.x*DEG, ry:GUN_ROT.y*DEG, rz:GUN_ROT.z*DEG, s:GUN_SCALE }; }
+
+function applyWepView(model, key){
+  const v = wepView(key);
+  model.position.set(v.px, v.py, v.pz);
+  model.scale.setScalar(v.s);
+  model.rotation.set(v.rx*RAD, v.ry*RAD, v.rz*RAD);
+}
+
+// Show the given weapon's model (loading it on first use); hide the others and the placeholder.
+function showWeaponModel(key){
+  for(const k in gunModelByWep){ if(gunModelByWep[k]) gunModelByWep[k].visible = (k===key); }
+  const existing = gunModelByWep[key];
+  if(existing){
+    if(gunPlaceholder) gunPlaceholder.visible = false;
+    gunModel = existing;
+    sight = null;
+    if(typeof editorTargets!=='undefined' && editorTargets.gun) editorTargets.gun.apply();
+    return;
+  }
+  // not loaded yet — keep placeholder visible until it arrives
+  if(gunPlaceholder) gunPlaceholder.visible = true;
+  const url = wepModelUrl(key);
+  loadGLTFCached(url,
     (gltf)=>{
       const model = gltf.scene.clone(true);
-      model.position.copy(GUN_OFFSET);
-      model.scale.setScalar(GUN_SCALE);
-      model.rotation.copy(GUN_ROT);
-      model.traverse(o=>{ if(o.isMesh){ o.castShadow = false; o.frustumCulled = false; o.renderOrder = 999; if(o.material){ o.material.depthTest = true; } } });
-      if(gunModel){ gun.remove(gunModel); if(gunModel.userData.mixer){ const mi=mixers.indexOf(gunModel.userData.mixer); if(mi>=0) mixers.splice(mi,1); } }
-      else { gun.remove(gunPlaceholder); }
+      applyWepView(model, key);
+      model.traverse(o=>{ if(o.isMesh){ o.castShadow=false; o.frustumCulled=false; o.renderOrder=999; if(o.material){ o.material.depthTest=true; } } });
       gun.add(model);
-      gunModel = model;
-      sight = null;  // model carries its own materials; weapon tinting no-ops gracefully
+      gunModelByWep[key] = model;
+      model.visible = (key === curWep);          // only show if it's still the active weapon
+      if(model.visible){ if(gunPlaceholder) gunPlaceholder.visible=false; gunModel = model; sight = null; }
       playModelAnimations(model, gltf);
-      if(typeof editorTargets!=='undefined' && editorTargets.gun) editorTargets.gun.apply();  // apply saved/edited transform
-      console.log('Gun model loaded from', gunModelUrl);
+      if(model.visible && typeof editorTargets!=='undefined' && editorTargets.gun) editorTargets.gun.apply();
+      console.log('Weapon model loaded:', key, url);
     },
-    (err)=>{ console.warn('Gun model load failed, keeping placeholder:', err && err.message); }
+    (err)=>{ console.warn('Weapon model load failed for', key, '-', err && err.message); }   // placeholder stays
   );
 }
-function swapGunModel(url){ gunModelUrl = url; loadGunModel(); }
+
+// Legacy entry points kept for callers: load/refresh the CURRENT weapon's model.
+function loadGunModel(){ showWeaponModel(curWep); }
+// Swap the model URL. Call with an explicit weapon key to set THAT weapon's override. Call with no key
+// to set the shared default gun url (legacy single-gun behavior) that weapons fall back to.
+function swapGunModel(url, key){
+  if(key){
+    const w = WEAPONS[key]; if(w) w.model = url || '';
+    if(gunModelByWep[key]){ gun.remove(gunModelByWep[key]); const m=gunModelByWep[key].userData && gunModelByWep[key].userData.mixer; if(m){ const mi=mixers.indexOf(m); if(mi>=0) mixers.splice(mi,1); } gunModelByWep[key]=null; }
+    if(key === curWep) showWeaponModel(key);
+  } else {
+    gunModelUrl = url || gunModelUrl;   // shared default
+    // reload any weapon that has no explicit override (it falls back to the default)
+    for(const k in gunModelByWep){ if(!WEAPONS[k].model && gunModelByWep[k]){ gun.remove(gunModelByWep[k]); gunModelByWep[k]=null; } }
+    showWeaponModel(curWep);
+  }
+}
 loadGunModel();
 
 // muzzle flash
@@ -5519,9 +5562,9 @@ flash.position.set(.35,-.32,-1.5); camera.add(flash);
 
 // ---------- Weapon system (data-driven) ----------
 const WEAPONS = {
-  rifle:   { name:'RIFLE',   mag:30, magSize:30, reserve:90,  reserveMax:270, fireRate:95,  dmg:12, pellets:1, spread:0.0,  auto:true,  reloadMs:1100, color:0xffe08a, refillAmt:60, refillCost:50 },
-  smg:     { name:'SMG',     mag:40, magSize:40, reserve:120, reserveMax:360, fireRate:55,  dmg:8,  pellets:1, spread:0.02, auto:true,  reloadMs:1000, color:0xa8e6ff, refillAmt:80, refillCost:50 },
-  shotgun: { name:'SHOTGUN', mag:6,  magSize:6,  reserve:24,  reserveMax:72,  fireRate:650, dmg:9,  pellets:8, spread:0.08, auto:false, reloadMs:1300, color:0xffb86b, refillAmt:18, refillCost:60 },
+  rifle:   { name:'RIFLE',   mag:30, magSize:30, reserve:90,  reserveMax:270, fireRate:95,  dmg:12, pellets:1, spread:0.0,  auto:true,  reloadMs:1100, color:0xffe08a, refillAmt:60, refillCost:50, model:'', view:null },
+  smg:     { name:'SMG',     mag:40, magSize:40, reserve:120, reserveMax:360, fireRate:55,  dmg:8,  pellets:1, spread:0.02, auto:true,  reloadMs:1000, color:0xa8e6ff, refillAmt:80, refillCost:50, model:'', view:null },
+  shotgun: { name:'SHOTGUN', mag:6,  magSize:6,  reserve:24,  reserveMax:72,  fireRate:650, dmg:9,  pellets:8, spread:0.08, auto:false, reloadMs:1300, color:0xffb86b, refillAmt:18, refillCost:60, model:'', view:null },
 };
 let owned = ['rifle'];           // weapons the player has
 let curWep = 'rifle';            // current weapon key
@@ -5538,6 +5581,7 @@ function giveDuelLoadout(){ owned=['rifle','smg','shotgun']; curWep='rifle'; ref
 function switchWeapon(key){
   if(!owned.includes(key) || key===curWep || reloading) return;
   curWep = key; SFX.swap(); showWeaponToast(); updateHUD();
+  showWeaponModel(key);   // show this weapon's own viewmodel (loads on first use)
   // retint the viewmodel sight (placeholder only; the loaded model carries its own materials)
   if(sight && sight.material) sight.material.emissive.setHex(WEAPONS[key].color);
 }
@@ -6502,7 +6546,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 13 · 2026-06-01';
+const BUILD_VERSION = 'build 15 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7335,6 +7379,10 @@ function loop(){
     camera.rotation.x = player.pitch;
     camera.rotation.z = 0;
   } else {
+    if(scene.fog !== SCENE_FOG) scene.fog = SCENE_FOG;
+    if(editorBrightLight.intensity !== 0) editorBrightLight.intensity = 0;
+    gun.visible = true;
+    camera.position.copy(player.pos);
     if(crouchT > 0.001) camera.position.y -= crouchT * CROUCH_DIP;   // crouch lowers the view
 
     // camera shake (decays quickly) — offsets rotation so it reads as a jolt
@@ -7512,11 +7560,16 @@ const editorTargets = {
     ],
     obj: ()=>gunModel,
     urlField: true,
-    getUrl(){ return gunModelUrl; },
-    setUrl(u){ swapGunModel(u); },
+    perWeapon: true,
+    getUrl(){ const w=WEAPONS[curWep]; return (w && w.model) ? w.model : gunModelUrl; },
+    setUrl(u){ swapGunModel(u, curWep); },
+    // pull this weapon's saved view into the editor state (called when you switch the edited weapon)
+    syncFromWeapon(){ const v=wepView(curWep); this.state.px=v.px; this.state.py=v.py; this.state.pz=v.pz; this.state.rx=v.rx; this.state.ry=v.ry; this.state.rz=v.rz; this.state.s=v.s; },
     apply(){ const o=this.obj(), s=this.state; if(!o) return;
       o.position.set(s.px,s.py,s.pz); o.scale.setScalar(s.s);
-      o.rotation.set(s.rx*RAD, s.ry*RAD, s.rz*RAD); },
+      o.rotation.set(s.rx*RAD, s.ry*RAD, s.rz*RAD);
+      // persist the edited transform onto the current weapon so it sticks per-gun and serializes
+      WEAPONS[curWep].view = { px:s.px, py:s.py, pz:s.pz, rx:s.rx, ry:s.ry, rz:s.rz, s:s.s }; },
     code(){ const s=this.state;
       return '// ===== Gun viewmodel =====\n'
         + 'const GUN_MODEL_URL = ' + JSON.stringify(gunModelUrl) + ';\n'
@@ -7785,6 +7838,7 @@ function serializeLevel(){
   return {
     v: 1,
     gun:     { url: gunModelUrl,     state: Object.assign({}, editorTargets.gun.state) },
+    weapons: Object.keys(WEAPONS).reduce((acc,k)=>{ const w=WEAPONS[k]; if(w.model || w.view) acc[k]={ model:w.model||'', view:w.view||null }; return acc; }, {}),
     aim:     { state: Object.assign({}, editorTargets.aim.state) },
     station: { url: stationModelUrl, state: Object.assign({}, editorTargets.station.state) },
     world:   Object.assign({}, worldCfg),
@@ -7825,6 +7879,14 @@ function restoreLevel(level){
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   // gun / aim / station
   if(level.gun){ if(level.gun.url && level.gun.url!==gunModelUrl) swapGunModel(level.gun.url); Object.assign(editorTargets.gun.state, level.gun.state||{}); editorTargets.gun.apply(); }
+  // per-weapon models + framing
+  if(level.weapons && typeof level.weapons==='object'){
+    for(const k in WEAPONS){ const wd=level.weapons[k]; if(wd){ WEAPONS[k].model=wd.model||''; WEAPONS[k].view=wd.view||null; } else { WEAPONS[k].model=''; WEAPONS[k].view=null; } }
+    // drop cached models so they reload with their (possibly new) urls
+    for(const k in gunModelByWep){ if(gunModelByWep[k]){ gun.remove(gunModelByWep[k]); gunModelByWep[k]=null; } }
+    if(editorTargets.gun.syncFromWeapon) editorTargets.gun.syncFromWeapon();
+    showWeaponModel(curWep);
+  }
   if(level.aim){ Object.assign(editorTargets.aim.state, level.aim.state||{}); editorTargets.aim.apply(); }
   if(level.station){ if(level.station.url && level.station.url!==stationModelUrl) swapStationModel(level.station.url); Object.assign(editorTargets.station.state, level.station.state||{}); editorTargets.station.apply(); }
   // world + loot
@@ -7990,7 +8052,7 @@ function buildEditorPanel(){
   for(const key of Object.keys(editorTargets)){
     const b = document.createElement('div'); b.className='tab'; b.textContent = editorTargets[key].label;
     b.dataset.key = key;
-    b.onclick = ()=>{ editorActive = key; renderEditorFields(); };
+    b.onclick = ()=>{ editorActive = key; if(key==='gun' && editorTargets.gun.syncFromWeapon) editorTargets.gun.syncFromWeapon(); renderEditorFields(); };
     tabs.appendChild(b);
   }
   p.querySelector('#edReset').onclick = ()=>{ resetEditorTarget(editorActive); };
@@ -8250,6 +8312,28 @@ function renderEditorFields(){
   const urlHost = editorEl.querySelector('#edUrl');
   urlHost.innerHTML = '';
   if(tgt.urlField){
+    if(tgt.perWeapon){
+      const wh = document.createElement('div'); wh.className='hint'; wh.style.margin='2px 0 3px';
+      wh.innerHTML = '<b>Editing weapon</b> — each weapon has its own model + framing';
+      urlHost.appendChild(wh);
+      const wrow = document.createElement('div'); wrow.className='row2'; wrow.style.marginBottom='6px';
+      for(const key of Object.keys(WEAPONS)){
+        const b=document.createElement('button'); b.textContent=WEAPONS[key].name;
+        if(key===curWep){ b.style.background='rgba(56,245,181,0.28)'; b.style.color='#eafff7'; }
+        b.onclick=()=>{
+          if(key!==curWep){
+            if(!owned.includes(key)) owned.push(key);   // make sure it's equippable so you can see it
+            const wasReloading = reloading; reloading = false; const prev=curWep; curWep=key;
+            // force the switch (switchWeapon early-returns if same/owned checks fail)
+            SFX.swap(); showWeaponToast(); updateHUD(); showWeaponModel(key); reloading = wasReloading;
+          }
+          tgt.syncFromWeapon();
+          renderEditorFields();
+        };
+        wrow.appendChild(b);
+      }
+      urlHost.appendChild(wrow);
+    }
     if(tgt.addable){
       const head = document.createElement('div'); head.className='hint'; head.style.margin='8px 0 3px';
       head.innerHTML = '<b>Add from URL</b> — paste any hosted .glb (your own server, a CDN, etc.)';
