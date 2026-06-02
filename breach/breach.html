@@ -7001,7 +7001,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 34 · 2026-06-02';
+const BUILD_VERSION = 'build 35 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8152,7 +8152,12 @@ function loop(){
       const td = enemyDesiredTarget(en, near.pos.x, near.pos.z, nd, nowMs);
       en._chase = td.chase; en._faceX = td.tx; en._faceZ = td.tz;
       const dx = td.tx - en.mesh.position.x, dz = td.tz - en.mesh.position.z, d = Math.hypot(dx,dz);
-      const stopAt = td.chase ? 1.8 : 0.5;                 // patrol: stop on the waypoint; chase: just outside melee
+      // stop with the BODY just outside the player, not the center — a wide model otherwise walks until
+      // its centre is 1.8u away (engulfing the player) and tracks them like it's glued on. footprint+0.9
+      // keeps the capsule's old 1.8 and pushes bigger models back by their real radius.
+      const fp = en.mesh.userData.footprint || 0.9;
+      en._reach = 1.5 + fp;                                // attack range scales with the body too (Phase 3)
+      const stopAt = td.chase ? (fp + 0.9) : 0.5;          // patrol: stop on the waypoint; chase: body just shy of the player
       const spd = td.chase ? en.speed : en.speed*0.5;      // patrol/return at half pace
       if(d > stopAt){ _eDir.set(dx,0,dz).multiplyScalar(1/d); en.mesh.position.addScaledVector(_eDir, spd*dt); }
     }
@@ -8205,7 +8210,7 @@ function loop(){
       en.mesh.lookAt(fx, en.mesh.position.y, fz);   // chasing -> face player; patrolling -> face where it walks
       if(enemyModelUrl) en.mesh.rotateY(enemyFaceOffset);   // GLB characters vary in which way they face; nudge to face forward
       en.cooldown -= dt;
-      if(en._chase && en._dist < 2.4 && en.cooldown<=0 && !editorOpen){   // only an aware/chasing enemy attacks
+      if(en._chase && en._dist < (en._reach || 2.4) && en.cooldown<=0 && !editorOpen){   // aware/chasing enemy in reach attacks
         en.cooldown = 0.8;
         near.hurt(9);   // routes to the local player or, in co-op, the remote one
       }
