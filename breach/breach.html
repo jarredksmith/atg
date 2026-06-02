@@ -5931,7 +5931,7 @@ function buildEnemyVisual(body){
     const eye = new THREE.Mesh(new THREE.SphereGeometry(.18,8,8), new THREE.MeshBasicMaterial({color:0xffd166}));
     eye.position.set(0, 0.7, -0.55);   // slightly forward so you can read facing
     cap.add(eye);
-    body.add(cap); body.userData.visual = cap; body.userData.modelY = 0;
+    body.add(cap); body.userData.visual = cap; body.userData.modelY = 0; body.userData.footprint = 0.9;
   };
   if(!enemyModelUrl){ useCapsule(); return; }
   useCapsule();   // show the capsule immediately; replace it when the GLB arrives
@@ -5950,6 +5950,9 @@ function buildEnemyVisual(body){
       if(isFinite(box.min.y) && isFinite(box.min.x)){
         const cx = (box.min.x+box.max.x)/2, cz = (box.min.z+box.max.z)/2;
         model.position.set(model.position.x - cx, model.position.y - box.min.y - 1.4, model.position.z - cz);
+        // collision footprint: the model's real half-width in XZ (min 0.9 so small models still match
+        // the capsule). Used by the AI for obstacle + enemy-enemy spacing so big models don't clip.
+        body.userData.footprint = Math.max(0.9, Math.min(3.5, Math.max((box.max.x-box.min.x)/2, (box.max.z-box.min.z)/2)));
       }
       body.userData.visual = model;
       body.userData.modelY = 0;
@@ -6895,7 +6898,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 29 · 2026-06-02';
+const BUILD_VERSION = 'build 30 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8024,38 +8027,68 @@ function loop(){
   const hideEn = editorOpen && editorHideEnemies;
   if(!isClient && !duelMode){
     const players = allPlayers();
+    const _eDir = new THREE.Vector3();
+    // Phase 1 — chase: walk toward the nearest player, but stop just outside melee so they crowd
+    // around the player instead of bulldozing through them.
     for(const en of enemies){
       en.mesh.visible = !hideEn;
-      // pick nearest player to chase
       let near=players[0], nd=1e9;
       for(const pl of players){ const d=Math.hypot(pl.pos.x-en.mesh.position.x, pl.pos.z-en.mesh.position.z); if(d<nd){ nd=d; near=pl; } }
-      const toP = new THREE.Vector3(near.pos.x-en.mesh.position.x, 0, near.pos.z-en.mesh.position.z);
-      const dist = toP.length(); toP.normalize();
-      en.mesh.position.addScaledVector(toP, en.speed*dt);
-
-      // collision: push enemy out of obstacles (treat enemy as a cylinder radius ~0.9)
-      const eR = 0.9;
+      en._near = near; en._dist = nd;
+      if(nd > 1.8){
+        _eDir.set(near.pos.x-en.mesh.position.x, 0, near.pos.z-en.mesh.position.z).normalize();
+        en.mesh.position.addScaledVector(_eDir, en.speed*dt);
+      }
+    }
+    // Phase 2 — separation: shove overlapping enemies apart so they don't stack / clip through each
+    // other. Desired spacing is the sum of the two footprints (capped). Runs before obstacle resolve
+    // so crowding can't push anyone through a wall.
+    for(let i=0;i<enemies.length;i++){
+      const a = enemies[i].mesh.position, ra = enemies[i].mesh.userData.footprint || 0.9;
+      for(let j=i+1;j<enemies.length;j++){
+        const b = enemies[j].mesh.position, rb = enemies[j].mesh.userData.footprint || 0.9;
+        const minD = Math.min(4, ra+rb);
+        let dx=a.x-b.x, dz=a.z-b.z, d=Math.hypot(dx,dz);
+        if(d < minD){
+          if(d < 1e-4){ dx=Math.cos(enemies[i].id*1.7); dz=Math.sin(enemies[i].id*1.7); d=1; }   // exact overlap: deterministic nudge
+          const push=(minD-d)*0.5, nx=dx/d, nz=dz/d;
+          a.x += nx*push; a.z += nz*push; b.x -= nx*push; b.z -= nz*push;
+        }
+      }
+    }
+    // Phase 3 — obstacle resolution (walls + static props + dynamic props), arena clamp, facing, attack
+    for(const en of enemies){
+      const eR = en.mesh.userData.footprint || 0.9;
+      // static colliders (walls + non-dynamic props): push out of the nearest box face
       for(const c of colliders){
-        const b = c.userData.box;
+        const b = c.userData.box; if(!b) continue;
         const cx = Math.max(b.min.x, Math.min(en.mesh.position.x, b.max.x));
         const cz = Math.max(b.min.z, Math.min(en.mesh.position.z, b.max.z));
         const dx = en.mesh.position.x - cx, dz = en.mesh.position.z - cz;
         const d = Math.hypot(dx,dz);
-        if(d < eR && d > 0.0001){
-          const push = eR - d;
-          en.mesh.position.x += dx/d*push; en.mesh.position.z += dz/d*push;
-        }
+        if(d < eR && d > 1e-4){ const push=eR-d; en.mesh.position.x += dx/d*push; en.mesh.position.z += dz/d*push; }
+      }
+      // dynamic physics props (crates etc.) live in dynamicProps, not colliders — treat each as an
+      // upright cylinder at its current position so enemies can't walk through them.
+      for(const obj of dynamicProps){
+        const info = obj.userData.physInfo; if(!info) continue;
+        const baseY = obj.position.y, topY = baseY + (info.height||1);
+        if(topY < 0.1 || baseY > 2.7) continue;                 // no vertical overlap with the enemy column
+        let dx = en.mesh.position.x - obj.position.x, dz = en.mesh.position.z - obj.position.z, d = Math.hypot(dx,dz);
+        const minD = eR + (info.radius||0.5);
+        if(d < minD && d > 1e-4){ const push=minD-d; en.mesh.position.x += dx/d*push; en.mesh.position.z += dz/d*push; }
       }
       // keep inside arena
       const elim = ARENA - 2;
       en.mesh.position.x = Math.max(-elim, Math.min(elim, en.mesh.position.x));
       en.mesh.position.z = Math.max(-elim, Math.min(elim, en.mesh.position.z));
 
+      const near = en._near || players[0];
       en.mesh.position.y = 1.4 + Math.sin(t*4+en.id)*0.08;
       en.mesh.lookAt(near.pos.x, en.mesh.position.y, near.pos.z);
       if(enemyModelUrl) en.mesh.rotateY(enemyFaceOffset);   // GLB characters vary in which way they face; nudge to face the player
       en.cooldown -= dt;
-      if(dist < 2.4 && en.cooldown<=0 && !editorOpen){
+      if(en._dist < 2.4 && en.cooldown<=0 && !editorOpen){
         en.cooldown = 0.8;
         near.hurt(9);   // routes to the local player or, in co-op, the remote one
       }
