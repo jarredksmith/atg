@@ -4806,6 +4806,30 @@ function addPrimitiveAttributes( geometry, primitiveDef, parser ) {
 
 THREE.GLTFLoader = GLTFLoader;
 
+// Skeleton-aware deep clone. THREE's Object3D.clone() does NOT rebind a SkinnedMesh to the cloned
+// bones — the copy keeps pointing at the ORIGINAL skeleton, so animated/rigged models collapse to the
+// world origin and look jumbled. This re-implements three/examples SkeletonUtils.clone(): deep-clone the
+// hierarchy, then for every SkinnedMesh, rebuild its Skeleton from the matching cloned bones. Static
+// (un-rigged) models pass straight through clone() unaffected.
+THREE.cloneSkinned = function(source){
+  const cloneLookup = new Map();          // original node -> cloned node
+  const skinnedPairs = [];                // [origSkinnedMesh, clonedSkinnedMesh]
+  const clone = source.clone(true);
+  (function parallel(orig, copy){
+    cloneLookup.set(orig, copy);
+    if(orig.isSkinnedMesh) skinnedPairs.push([orig, copy]);
+    const n = Math.min(orig.children.length, copy.children.length);
+    for(let i=0;i<n;i++) parallel(orig.children[i], copy.children[i]);
+  })(source, clone);
+  for(const [orig, copy] of skinnedPairs){
+    const skeleton = orig.skeleton;
+    const cloneBones = skeleton.bones.map(b=> cloneLookup.get(b) || b);     // each bone -> its clone
+    copy.bind(new THREE.Skeleton(cloneBones, skeleton.boneInverses.slice()),
+              orig.bindMatrix ? orig.bindMatrix.clone() : copy.bindMatrix);
+  }
+  return clone;
+};
+
 
 };
 </script>
@@ -5222,7 +5246,7 @@ function spawnProp(src, t, onReady, slot, animMode, mat, onError, nid){
     return;
   }
   loadGLTFCached(src,
-    (gltf)=>{ const obj = finalizeProp(gltf.scene.clone(true), src, t, gltf, slot, animMode, mat, nid); if(onReady) onReady(obj); },
+    (gltf)=>{ const obj = finalizeProp(THREE.cloneSkinned(gltf.scene), src, t, gltf, slot, animMode, mat, nid); if(onReady) onReady(obj); },
     (err)=>{ console.warn('Prop load failed for', src, '-', err && err.message); if(onError) onError(err); }
   );
 }
@@ -5520,7 +5544,7 @@ function showWeaponModel(key){
   const url = wepModelUrl(key);
   loadGLTFCached(url,
     (gltf)=>{
-      const model = gltf.scene.clone(true);
+      const model = THREE.cloneSkinned(gltf.scene);
       applyWepView(model, key);
       model.traverse(o=>{ if(o.isMesh){ o.castShadow=false; o.frustumCulled=false; o.renderOrder=999; if(o.material){ o.material.depthTest=true; } } });
       gun.add(model);
@@ -5639,14 +5663,18 @@ function buildEnemyVisual(body){
     (gltf)=>{
       // drop the placeholder capsule
       if(body.userData.visual){ body.remove(body.userData.visual); body.userData.visual=null; }
-      const model = gltf.scene.clone(true);
+      const model = THREE.cloneSkinned(gltf.scene);
       model.scale.setScalar(enemyModelScale || 1);
-      model.traverse(o=>{ if(o.isMesh){ o.castShadow = true; o.receiveShadow = false; } });
-      // center horizontally and seat on the body so a feet-origin model isn't half-buried
-      const box = new THREE.Box3().setFromObject(model);
-      const cx = (box.min.x+box.max.x)/2, cz = (box.min.z+box.max.z)/2;
-      model.position.set(-cx, -box.min.y - 1.4, -cz);   // body center is ~1.4 above feet; lift so feet sit at the body base
+      model.traverse(o=>{ if(o.isMesh){ o.castShadow = true; o.receiveShadow = false; if(o.frustumCulled!==undefined) o.frustumCulled = false; } });   // skinned meshes can be culled wrongly by their bind-pose bounds
       body.add(model);
+      // Measure AFTER parenting + a matrix refresh so the bounding box is correct (esp. for skinned meshes),
+      // then re-center horizontally and seat the feet at the body base (~1.4 below body center).
+      model.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(model);
+      if(isFinite(box.min.y) && isFinite(box.min.x)){
+        const cx = (box.min.x+box.max.x)/2, cz = (box.min.z+box.max.z)/2;
+        model.position.set(model.position.x - cx, model.position.y - box.min.y - 1.4, model.position.z - cz);
+      }
       body.userData.visual = model;
       body.userData.modelY = 0;
       const mx = playModelAnimations(model, gltf, 'loop');   // auto-loop idle/walk clips
@@ -6251,7 +6279,7 @@ function loadStationModel(){
   const g = station.group;
   loadGLTFCached(stationModelUrl,
     (gltf)=>{
-      const model = gltf.scene.clone(true);
+      const model = THREE.cloneSkinned(gltf.scene);
       model.scale.setScalar(STATION_SCALE);
       model.rotation.copy(STATION_ROT);
       model.traverse(o=>{ if(o.isMesh){ o.castShadow = true; o.receiveShadow = true; } });
@@ -6316,7 +6344,7 @@ function buildChestMesh(px, pz){
   if(chestModelUrl){
     loadGLTFCached(chestModelUrl,
       (gltf)=>{
-        const model = gltf.scene.clone(true);
+        const model = THREE.cloneSkinned(gltf.scene);
         model.scale.setScalar(chestModelScale || 1);
         model.traverse(o=>{ if(o.isMesh){ o.castShadow = true; o.receiveShadow = true; } });
         mesh.add(model);
@@ -6586,7 +6614,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 17 · 2026-06-01';
+const BUILD_VERSION = 'build 18 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
