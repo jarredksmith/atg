@@ -4924,9 +4924,93 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 
+// ---------- Depth of field (optional post-process) ----------
+// Self-contained: no external composer addons. We render the scene into a color target that also has a
+// depth texture, then draw a fullscreen quad whose shader blurs each pixel by how far its depth is from
+// the focus plane (a "circle of confusion" approximation). Two passes (H then V) give a smooth bokeh-ish
+// blur cheaply. Toggled by worldCfg.dof; when off, we render straight to the screen (zero cost).
+let dofEnabled = false, dofFocus = 18, dofRange = 14, dofStrength = 1.4;
+let _dofRT = null, _dofRT2 = null, _dofScene = null, _dofCam = null, _dofMatH = null, _dofMatV = null, _dofQuad = null;
+function _dofSize(){ return [Math.max(2, Math.floor(innerWidth * renderer.getPixelRatio())), Math.max(2, Math.floor(innerHeight * renderer.getPixelRatio()))]; }
+function ensureDof(){
+  if(_dofScene) return true;
+  if(!THREE.WebGLRenderTarget || !THREE.DepthTexture) return false;
+  const [w,h] = _dofSize();
+  const mkRT = (withDepth)=>{
+    const rt = new THREE.WebGLRenderTarget(w, h, { minFilter:THREE.LinearFilter, magFilter:THREE.LinearFilter, type:THREE.UnsignedByteType });
+    if(withDepth){ rt.depthTexture = new THREE.DepthTexture(w, h); rt.depthTexture.format = THREE.DepthFormat; rt.depthTexture.type = THREE.UnsignedShortType; }
+    return rt;
+  };
+  _dofRT  = mkRT(true);    // scene color + depth
+  _dofRT2 = mkRT(false);   // intermediate (after horizontal blur)
+  const uniformsCommon = ()=>({
+    tColor: { value:null }, tDepth: { value:null },
+    uTexel: { value:new THREE.Vector2(1/w, 1/h) },
+    uNear:  { value:camera.near }, uFar: { value:camera.far },
+    uFocus: { value:dofFocus }, uRange: { value:dofRange }, uStrength: { value:dofStrength },
+    uDir:   { value:new THREE.Vector2(1,0) },
+  });
+  const vert = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
+  // reconstruct view-space distance from the depth buffer, compute blur radius from |dist - focus|
+  const frag = [
+    'varying vec2 vUv;',
+    'uniform sampler2D tColor; uniform sampler2D tDepth;',
+    'uniform vec2 uTexel; uniform float uNear; uniform float uFar; uniform float uFocus; uniform float uRange; uniform float uStrength; uniform vec2 uDir;',
+    'float viewZ(float d){ float z = d * 2.0 - 1.0; return (2.0 * uNear * uFar) / (uFar + uNear - z * (uFar - uNear)); }',
+    'void main(){',
+    '  float d = texture2D(tDepth, vUv).x;',
+    '  float dist = viewZ(d);',
+    '  float coc = clamp(abs(dist - uFocus) / max(0.001, uRange), 0.0, 1.0) * uStrength;',  // 0 in focus, ->1 far from focus
+    '  if(coc < 0.01){ gl_FragColor = texture2D(tColor, vUv); return; }',
+    '  vec2 step = uDir * uTexel * coc * 6.0;',
+    '  vec4 sum = vec4(0.0); float wsum = 0.0;',
+    '  for(int i=-6;i<=6;i++){ float fi=float(i); float w = exp(-fi*fi/18.0);',  // gaussian-ish 13-tap
+    '    sum += texture2D(tColor, vUv + step*fi) * w; wsum += w; }',
+    '  gl_FragColor = sum / wsum;',
+    '}',
+  ].join('\n');
+  _dofMatH = new THREE.ShaderMaterial({ uniforms:uniformsCommon(), vertexShader:vert, fragmentShader:frag, depthTest:false, depthWrite:false });
+  _dofMatV = new THREE.ShaderMaterial({ uniforms:uniformsCommon(), vertexShader:vert, fragmentShader:frag, depthTest:false, depthWrite:false });
+  _dofMatV.uniforms.uDir.value.set(0,1);
+  _dofScene = new THREE.Scene();
+  _dofCam = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+  _dofQuad = new THREE.Mesh(new THREE.PlaneGeometry(2,2), _dofMatH);
+  _dofScene.add(_dofQuad);
+  return true;
+}
+function disposeDof(){
+  for(const rt of [_dofRT,_dofRT2]){ if(rt){ rt.dispose && rt.dispose(); if(rt.depthTexture) rt.depthTexture.dispose && rt.depthTexture.dispose(); } }
+  _dofRT=_dofRT2=null; _dofScene=null;   // rebuilt lazily on next enable / resize
+}
+function resizeDof(){ if(_dofScene){ disposeDof(); /* rebuilt on next render */ } }
+// Render either straight to screen, or through the DoF passes. Used by every render call site.
+function renderScene(scn, cam){
+  if(!dofEnabled || !ensureDof()){ renderer.render(scn, cam); return; }
+  const [w,h] = _dofSize();
+  if(_dofRT.width !== w || _dofRT.height !== h){ disposeDof(); ensureDof(); }
+  // 1) scene -> color+depth target
+  renderer.setRenderTarget(_dofRT);
+  renderer.render(scn, cam);
+  // sync uniforms (focus/range/strength can change live; near/far track the camera)
+  for(const m of [_dofMatH,_dofMatV]){ const u=m.uniforms; u.uNear.value=cam.near; u.uFar.value=cam.far; u.uFocus.value=dofFocus; u.uRange.value=dofRange; u.uStrength.value=dofStrength; u.uTexel.value.set(1/w,1/h); }
+  // 2) horizontal blur -> RT2
+  _dofMatH.uniforms.tColor.value = _dofRT.texture;
+  _dofMatH.uniforms.tDepth.value = _dofRT.depthTexture;
+  _dofQuad.material = _dofMatH;
+  renderer.setRenderTarget(_dofRT2);
+  renderer.render(_dofScene, _dofCam);
+  // 3) vertical blur -> screen (depth still sampled from the original target)
+  _dofMatV.uniforms.tColor.value = _dofRT2.texture;
+  _dofMatV.uniforms.tDepth.value = _dofRT.depthTexture;
+  _dofQuad.material = _dofMatV;
+  renderer.setRenderTarget(null);
+  renderer.render(_dofScene, _dofCam);
+}
+
 addEventListener('resize', () => {
   camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  if(typeof resizeDof==='function') resizeDof();   // DoF render targets must match the new size
 });
 
 // ---------- Lighting ----------
@@ -5401,7 +5485,7 @@ const player = {
 };
 const EYE = 1.7;            // standing camera height above the surface the player stands on
 // ---- World movement settings (editable in the editor's World panel; saved with the level) ----
-const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorTex:'', wallColor:0x1a242b, wallTex:'', sky_hdri:'' };
+const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorTex:'', floorTile:0, wallColor:0x1a242b, wallTex:'', wallTile:0, sky_hdri:'', fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4 };
 let worldCfg = Object.assign({}, DEFAULT_WORLD, (savedLevel && savedLevel.world) || {});
 
 // Apply (or clear) a tiling texture on a shared material. Stores the current url on the material under
@@ -5433,7 +5517,7 @@ function applySkyHdri(url){
   if(_skyHdriUrl === url) return;
   _skyHdriUrl = url;
   if(!url){
-    scene.background = new THREE.Color(0x070b10);
+    scene.background = new THREE.Color((worldCfg && worldCfg.fogColor!=null ? worldCfg.fogColor : 0x070b10)>>>0);
     if(scene.environment){ scene.environment = null; }
     if(_skyEnvRT){ _skyEnvRT.dispose && _skyEnvRT.dispose(); _skyEnvRT = null; }
     return;
@@ -5506,20 +5590,44 @@ function applyWorldCfg(){
     ARENA = worldCfg.arena;
     if(!_arenaRebuildQueued){ _arenaRebuildQueued = true; requestAnimationFrame(()=>{ _arenaRebuildQueued = false; rebuildArena(); }); }
   }
-  // floor + wall materials (color + optional tiling texture)
+  // floor + wall materials (color + optional tiling texture; tile 0 = auto from arena size)
   if(typeof floorMat!=='undefined'){
     if(worldCfg.floorColor==null) worldCfg.floorColor = DEFAULT_WORLD.floorColor;
     floorMat.color.setHex(worldCfg.floorColor>>>0);
-    applySurfaceTexture(floorMat, worldCfg.floorTex, '_floorTexUrl', Math.max(2, Math.round(ARENA/4)));
+    const ft = (+worldCfg.floorTile > 0) ? +worldCfg.floorTile : Math.max(2, Math.round(ARENA/4));
+    applySurfaceTexture(floorMat, worldCfg.floorTex, '_floorTexUrl', ft);
   }
   if(typeof wallMat!=='undefined'){
     if(worldCfg.wallColor==null) worldCfg.wallColor = DEFAULT_WORLD.wallColor;
     wallMat.color.setHex(worldCfg.wallColor>>>0);
-    applySurfaceTexture(wallMat, worldCfg.wallTex, '_wallTexUrl', Math.max(2, Math.round(ARENA/8)));
+    const wt = (+worldCfg.wallTile > 0) ? +worldCfg.wallTile : Math.max(2, Math.round(ARENA/8));
+    applySurfaceTexture(wallMat, worldCfg.wallTex, '_wallTexUrl', wt);
+  }
+  // camera: field of view + view distance (the range before geometry/fog fades out)
+  worldCfg.fov      = Math.max(40, Math.min(120, worldCfg.fov == null ? DEFAULT_WORLD.fov : +worldCfg.fov));
+  worldCfg.viewDist = Math.max(60, Math.min(2000, worldCfg.viewDist == null ? DEFAULT_WORLD.viewDist : +worldCfg.viewDist));
+  if(typeof camera !== 'undefined'){
+    if(Math.abs(camera.far - worldCfg.viewDist) > 0.01){ camera.far = worldCfg.viewDist; camera.updateProjectionMatrix(); }
+    if(!_editorOpenFlag && Math.abs(camera.fov - worldCfg.fov) > 0.01){ camera.fov = worldCfg.fov; camera.updateProjectionMatrix(); }
+  }
+  // fog: density (exponential) + color. Color defaults to follow the sky/background tint.
+  worldCfg.fogDensity = Math.max(0, Math.min(0.2, worldCfg.fogDensity == null ? DEFAULT_WORLD.fogDensity : +worldCfg.fogDensity));
+  if(worldCfg.fogColor == null) worldCfg.fogColor = DEFAULT_WORLD.fogColor;
+  if(typeof SCENE_FOG !== 'undefined'){ SCENE_FOG.density = worldCfg.fogDensity; SCENE_FOG.color.setHex(worldCfg.fogColor>>>0); }
+  if(typeof scene !== 'undefined' && !(scene.background && scene.background.isTexture)) scene.background = new THREE.Color(worldCfg.fogColor>>>0);
+  // ground grid visibility
+  if(typeof grid !== 'undefined' && grid) grid.visible = (worldCfg.grid !== false);
+  // depth of field
+  if(typeof dofEnabled !== 'undefined'){
+    dofEnabled  = (worldCfg.dof === true);
+    dofFocus    = Math.max(2,   Math.min(300, worldCfg.dofFocus    == null ? DEFAULT_WORLD.dofFocus    : +worldCfg.dofFocus));
+    dofRange    = Math.max(1,   Math.min(200, worldCfg.dofRange    == null ? DEFAULT_WORLD.dofRange    : +worldCfg.dofRange));
+    dofStrength = Math.max(0.1, Math.min(4,   worldCfg.dofStrength == null ? DEFAULT_WORLD.dofStrength : +worldCfg.dofStrength));
   }
   // HDRI / equirectangular sky
   if(typeof applySkyHdri==='function') applySkyHdri(worldCfg.sky_hdri||'');
 }
+let _editorOpenFlag = false;   // mirror of editorOpen, declared early so applyWorldCfg reads it at init (TDZ-safe)
 applyWorldCfg();
 // crouch (hold Ctrl or C): lowers the view and slows movement
 let crouching = false, crouchT = 0;
@@ -6780,7 +6888,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 26 · 2026-06-01';
+const BUILD_VERSION = 'build 27 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7502,8 +7610,8 @@ const clock = new THREE.Clock();
 function loop(){
   requestAnimationFrame(loop);
   const dt = Math.min(clock.getDelta(), 0.05);
-  if(!gameOn) { pollGamepad(dt); renderer.render(scene,camera); return; }
-  if(shopOpen) { pollGamepad(dt); renderer.render(scene,camera); return; }  // freeze world while shopping
+  if(!gameOn) { pollGamepad(dt); renderScene(scene,camera); return; }
+  if(shopOpen) { pollGamepad(dt); renderScene(scene,camera); return; }  // freeze world while shopping
 
   pollGamepad(dt);   // controller input feeds the same flags as keyboard/mouse
   updateColliderViz(dt);   // debug overlay of collision boxes (toggle in editor)
@@ -7515,7 +7623,8 @@ function loop(){
   const adsTarget = (ads || padAds || editorAimPreview) ? 1 : 0;
   adsBlend += (adsTarget - adsBlend) * Math.min(1, dt*14);
   if(Math.abs(adsBlend - adsTarget) < 0.002) adsBlend = adsTarget;
-  const wantFov = BASE_FOV + (adsFovLive - BASE_FOV) * adsBlend;
+  const hipFov = (worldCfg && worldCfg.fov) ? worldCfg.fov : BASE_FOV;
+  const wantFov = hipFov + (adsFovLive - hipFov) * adsBlend;
   if(Math.abs(camera.fov - wantFov) > 0.01){ camera.fov = wantFov; camera.updateProjectionMatrix(); }
   crosshairEl.style.opacity = (1 - adsBlend*0.85).toFixed(2);
 
@@ -7762,7 +7871,7 @@ function loop(){
 
   drawMinimap();
   if(editorOpen && typeof updateSelectionHighlight==='function') updateSelectionHighlight();
-  renderer.render(scene, activeCam());
+  renderScene(scene, activeCam());
 }
 loop();
 
@@ -8431,6 +8540,33 @@ function renderEditorFields(){
     hint(worldHost, '<b>Arena</b> — playable half-size (rebuilds floor + walls live)', '10px 0 4px');
     slider(worldHost, 'Arena size','arena', 15, 400, 1);
 
+    // camera & view
+    hint(worldHost, '<b>Camera &amp; view</b> — applies live; saved with the level', '10px 0 4px');
+    slider(worldHost, 'Field of view','fov', 50, 110, 1);
+    slider(worldHost, 'View distance','viewDist', 60, 2000, 10);
+    slider(worldHost, 'Fog density','fogDensity', 0, 0.08, 0.001);
+    colorRow(worldHost, 'Fog color', 'fogColor');
+    // grid toggle
+    const gridRow=document.createElement('label'); gridRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0;cursor:pointer;';
+    const gridCb=document.createElement('input'); gridCb.type='checkbox'; gridCb.checked=(worldCfg.grid!==false); gridCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+    gridCb.onchange=()=>{ pushUndoSnapshot(); worldCfg.grid=gridCb.checked; applyWorldCfg(); };
+    const gridSp=document.createElement('span'); gridSp.textContent='Show ground grid';
+    gridRow.appendChild(gridCb); gridRow.appendChild(gridSp); worldHost.appendChild(gridRow);
+    hint(worldHost, '', '0 0 4px').textContent = 'Lower fog density = see farther into the dark. View distance is the hard cutoff where geometry stops drawing.';
+
+    // depth of field
+    const dofRow=document.createElement('label'); dofRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:8px 0 4px;cursor:pointer;';
+    const dofCb=document.createElement('input'); dofCb.type='checkbox'; dofCb.checked=(worldCfg.dof===true); dofCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+    dofCb.onchange=()=>{ pushUndoSnapshot(); worldCfg.dof=dofCb.checked; applyWorldCfg(); renderEditorFields(); };
+    const dofSp=document.createElement('span'); dofSp.innerHTML='<b>Depth of field</b> — blur by distance';
+    dofRow.appendChild(dofCb); dofRow.appendChild(dofSp); worldHost.appendChild(dofRow);
+    if(worldCfg.dof===true){
+      slider(worldHost, 'Focus distance','dofFocus', 2, 120, 1);
+      slider(worldHost, 'In-focus range','dofRange', 1, 80, 1);
+      slider(worldHost, 'Blur strength','dofStrength', 0.1, 4, 0.1);
+      hint(worldHost, '', '0 0 4px').textContent = 'Focus distance = how far away stays sharp. In-focus range = depth kept sharp around it. Everything else blurs.';
+    }
+
     hint(worldHost, '<b>Sky</b> — equirectangular panorama as <b>.jpg or .png</b> (not .hdr). Lights reflections too. Blank = flat color.', '10px 0 4px');
     texRow(worldHost, 'https://…/sky.jpg (equirectangular)', 'sky_hdri');
     // one-tap presets — verified 2:1 equirectangular JPGs that load directly (CORS-open, no proxy needed)
@@ -8457,10 +8593,13 @@ function renderEditorFields(){
     hint(worldHost, '<b>Floor</b> — color + optional tiling texture', '10px 0 4px');
     colorRow(worldHost, 'Floor color', 'floorColor');
     texRow(worldHost, 'https://…/floor.jpg (tiles)', 'floorTex');
+    slider(worldHost, 'Floor tiles','floorTile', 0, 80, 1);
 
     hint(worldHost, '<b>Walls</b> — color + optional tiling texture');
     colorRow(worldHost, 'Wall color', 'wallColor');
     texRow(worldHost, 'https://…/wall.jpg (tiles)', 'wallTex');
+    slider(worldHost, 'Wall tiles','wallTile', 0, 80, 1);
+    hint(worldHost, '', '0 0 6px').textContent = 'Tiles = how many times the texture repeats across the surface (0 = auto-scale to arena).';
 
     // ===== ENEMIES section =====
     const eHost = enemyHost || worldHost;
@@ -9259,7 +9398,7 @@ function setSceneWireframe(on){
 }
 
 function toggleEditor(){
-  editorOpen = !editorOpen;
+  editorOpen = !editorOpen; _editorOpenFlag = editorOpen;
   if(editorOpen){
     if(!editorEl) buildEditorPanel();
     editorEl.style.display = 'block';
@@ -9306,8 +9445,8 @@ function startGame(){
   buffs.damage=0; buffs.speed=0; buffs.shield=0;
   // reset aim/shake state
   firing=false; ads=false; adsBlend=0; shake=0;
-  editorOpen=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
-  camera.fov = BASE_FOV; camera.updateProjectionMatrix(); camera.rotation.z = 0;
+  editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
+  camera.fov = (worldCfg && worldCfg.fov) || BASE_FOV; camera.updateProjectionMatrix(); camera.rotation.z = 0;
   // clear entities
   enemies.slice().forEach(e=>{ scene.remove(e.mesh); if(e.mesh.userData.mixer){ const mi=mixers.indexOf(e.mesh.userData.mixer); if(mi>=0) mixers.splice(mi,1); } }); enemies.length=0;
   coins.slice().forEach(c=>scene.remove(c.mesh)); coins.length=0;
@@ -9343,7 +9482,7 @@ function startGame(){
 function endGame(){
   gameOn=false; gameOver=true; document.exitPointerLock();
   firing=false; ads=false; shopOpen=false;
-  editorOpen=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
+  editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
   $('shop').classList.add('hidden');
   $('prompt').style.display='none';
   const ov=$('overlay'); ov.classList.remove('hidden');
