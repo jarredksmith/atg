@@ -5185,6 +5185,17 @@ function playModelAnimations(root, gltf, mode){
   root.userData.animMode = mode;
   return mixer;
 }
+// Enemies play ONE looping clip (prefer idle/walk/run, else the first). Playing every clip at once —
+// as props do — makes character rigs fight over the root transform and look broken.
+function playEnemyClip(root, gltf){
+  if(!gltf || !gltf.animations || !gltf.animations.length) return null;
+  const find = re => gltf.animations.find(c => re.test(c.name||''));
+  const clip = find(/idle/i) || find(/walk/i) || find(/run/i) || gltf.animations[0];
+  const mixer = new THREE.AnimationMixer(root);
+  const a = mixer.clipAction(clip); a.loop = THREE.LoopRepeat; a.play();
+  mixers.push(mixer); root.userData.mixer = mixer;
+  return mixer;
+}
 // Set a prop's animation behavior after the fact (editor toggle), re-driving its actions.
 function setPropAnimMode(obj, mode){
   mode = (mode === 'trigger') ? 'trigger' : 'loop';
@@ -6038,6 +6049,9 @@ let enemyModelScale = (savedLevel && savedLevel.enemy && savedLevel.enemy.scale)
 let enemyFaceOffset = (savedLevel && savedLevel.enemy && savedLevel.enemy.face != null) ? savedLevel.enemy.face : 0;   // radians added after lookAt so the model faces the player (0 / π / ±π·0.5)
 let enemyColliderR  = (savedLevel && savedLevel.enemy && savedLevel.enemy.cr   != null) ? savedLevel.enemy.cr   : 0;   // collision footprint radius; 0 = auto (measured from the model bounds)
 let enemyYOffset    = (savedLevel && savedLevel.enemy && savedLevel.enemy.yoff != null) ? savedLevel.enemy.yoff : 0;   // vertical nudge for the visual model (fixes models that hover or sink)
+let enemyXOffset    = (savedLevel && savedLevel.enemy && savedLevel.enemy.xoff != null) ? savedLevel.enemy.xoff : 0;   // sideways nudge to re-center an off-pivot model
+let enemyZOffset    = (savedLevel && savedLevel.enemy && savedLevel.enemy.zoff != null) ? savedLevel.enemy.zoff : 0;   // forward/back nudge to re-center an off-pivot model
+const _seatInv = new THREE.Matrix4();
 function swapEnemyModel(url){ enemyModelUrl = (url||'').trim(); }
 
 // Build the visual for one enemy body Group: the uploaded GLB (animated) if set, else the capsule.
@@ -6065,25 +6079,57 @@ function buildEnemyVisual(body){
       model.scale.setScalar((enemyModelScale || 1) * ty.scale);
       model.traverse(o=>{ if(o.isMesh){ o.castShadow = true; o.receiveShadow = false; if(o.frustumCulled!==undefined) o.frustumCulled = false; } });   // skinned meshes can be culled wrongly by their bind-pose bounds
       body.add(model);
-      // Measure AFTER parenting + a matrix refresh so the bounding box is correct (esp. for skinned meshes),
-      // then re-center horizontally and seat the feet at the body base (~1.4 below body center).
-      model.updateMatrixWorld(true);
-      const box = new THREE.Box3().setFromObject(model);
-      if(isFinite(box.min.y) && isFinite(box.min.x)){
-        const cx = (box.min.x+box.max.x)/2, cz = (box.min.z+box.max.z)/2;
-        model.position.set(model.position.x - cx, model.position.y - box.min.y - 1.4 + enemyYOffset, model.position.z - cz);
-        // collision footprint: the model's real half-width in XZ (min 0.9 so small models still match
-        // the capsule). Used by the AI for obstacle + enemy-enemy spacing so big models don't clip.
-        body.userData.footprint = Math.max(0.9, Math.min(3.5, Math.max((box.max.x-box.min.x)/2, (box.max.z-box.min.z)/2)));
+      // Measure in BODY-LOCAL space. setFromObject gives a WORLD box; using it to set the model's LOCAL
+      // position only works while the body sits at the origin — for an async (uncached) load the body is
+      // already at its spawn point, and the old math yanked the model to world origin (the "stuck on the
+      // player" bug). Transform the world box back into body space first.
+      body.updateMatrixWorld(true); model.updateMatrixWorld(true);
+      const wbox = new THREE.Box3().setFromObject(model);
+      if(isFinite(wbox.min.y) && isFinite(wbox.min.x) && !wbox.isEmpty()){
+        const lbox = wbox.clone().applyMatrix4(_seatInv.copy(body.matrixWorld).invert());   // model extent relative to the body
+        const cx = (lbox.min.x+lbox.max.x)/2, cz = (lbox.min.z+lbox.max.z)/2;
+        model.position.set(model.position.x - cx + enemyXOffset, model.position.y - lbox.min.y - 1.4 + enemyYOffset, model.position.z - cz + enemyZOffset);
+        body.userData.footprint = Math.max(0.9, Math.min(3.5, Math.max((lbox.max.x-lbox.min.x)/2, (lbox.max.z-lbox.min.z)/2)));   // collision radius from the real footprint
       }
       if(enemyColliderR > 0) body.userData.footprint = enemyColliderR;   // manual collider-radius override
       body.userData.visual = model;
       body.userData.modelY = 0;
-      const mx = playModelAnimations(model, gltf, 'loop');   // auto-loop idle/walk clips
+      model.userData.seat = { p:model.position.clone(), q:model.quaternion.clone(), s:model.scale.clone() };   // locked each frame so animation root-motion/scale tracks can't fling or shrink the model
+      const mx = playEnemyClip(model, gltf);   // ONE looping clip (idle/walk/run) — not every clip at once
       if(mx) body.userData.mixer = mx;
     },
     (err)=>{ console.warn('Enemy model load failed, using capsule:', err && err.message); }   // capsule stays
   );
+}
+// ---- Editor preview: a stationary enemy + a wireframe collider so you can see/tune a model live ----
+let previewEnemy = null, previewCollider = null;
+const PREVIEW_POS = new THREE.Vector3(0, 1.4, 6);   // a fixed, easy-to-find spot in front of the arena center
+function clearPreviewEnemy(){
+  if(previewEnemy){ if(previewEnemy.userData.mixer){ const mi=mixers.indexOf(previewEnemy.userData.mixer); if(mi>=0) mixers.splice(mi,1); } scene.remove(previewEnemy); previewEnemy=null; }
+  if(previewCollider){ scene.remove(previewCollider); previewCollider.traverse(o=>{ if(o.geometry) o.geometry.dispose(); if(o.material && o.material.dispose) o.material.dispose(); }); previewCollider=null; }
+}
+function buildPreviewEnemy(typeKey){
+  const tk = (typeKey && ENEMY_TYPES[typeKey]) ? typeKey : (previewEnemy && previewEnemy.userData.enemyType) || 'grunt';
+  clearPreviewEnemy();
+  const body = new THREE.Group(); body.position.copy(PREVIEW_POS); body.userData.enemyType = tk;
+  buildEnemyVisual(body); scene.add(body); previewEnemy = body;
+  const grp = new THREE.Group(); grp.position.copy(PREVIEW_POS);
+  const cyl = new THREE.Mesh(new THREE.CylinderGeometry(1,1,2.8,22,1,true), new THREE.MeshBasicMaterial({ color:0x38f5b5, wireframe:true, transparent:true, opacity:0.55, depthTest:false }));
+  cyl.renderOrder = 9100; grp.add(cyl); grp.userData.cyl = cyl;
+  scene.add(grp); previewCollider = grp;
+}
+function refreshPreviewEnemy(){ if(previewEnemy) buildPreviewEnemy(previewEnemy.userData.enemyType); }
+function refreshEnemyVisuals(){ for(const en of enemies) buildEnemyVisual(en.mesh); if(previewEnemy) refreshPreviewEnemy(); }
+// Scale the model so it stands ~2.6u tall (capsule height) — fixes "too big/tiny to see". Needs a loaded model.
+function autoFitEnemyScale(){
+  const v = previewEnemy && previewEnemy.userData.visual;
+  if(!v || !v.userData.seat) return false;   // capsule or model not loaded yet
+  previewEnemy.updateMatrixWorld(true);
+  const b = new THREE.Box3().setFromObject(v), h = b.max.y - b.min.y;
+  if(!isFinite(h) || h <= 0.02) return false;
+  enemyModelScale = Math.max(0.05, Math.min(50, enemyModelScale * (2.6/h)));
+  refreshEnemyVisuals();
+  return true;
 }
 function spawnEnemy(spawn){
   const mesh = new THREE.Group();   // logical body (capsule-sized); visual is a child
@@ -6352,7 +6398,7 @@ function loadLevelFromNet(level){
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; }
   if(level.enemy){   // adopt the host's enemy model + collider/offset so clients render the same hostiles
     enemyModelUrl = level.enemy.url||''; enemyModelScale = level.enemy.scale||1; enemyFaceOffset = level.enemy.face||0;
-    enemyColliderR = level.enemy.cr||0; enemyYOffset = level.enemy.yoff||0;
+    enemyColliderR = level.enemy.cr||0; enemyYOffset = level.enemy.yoff||0; enemyXOffset = level.enemy.xoff||0; enemyZOffset = level.enemy.zoff||0;
     for(const id in NET.enemyMeshes) buildEnemyVisual(NET.enemyMeshes[id].mesh);   // re-skin any already-spawned remote hostiles
   }
 }
@@ -7091,7 +7137,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 37 · 2026-06-02';
+const BUILD_VERSION = 'build 38 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8024,6 +8070,11 @@ function loop(){
 
   // advance any model animations (terminal/gun/prop idle loops, etc.)
   if(mixers.length){ for(const m of mixers) m.update(dt); }
+  // re-pin enemy model roots to their seated transform: clips often carry root-motion / scale tracks that
+  // would otherwise drift the model off the body or shrink it to nothing. Bones still animate normally.
+  for(const en of enemies){ const v=en.mesh.userData.visual, s=v&&v.userData.seat; if(s){ v.position.copy(s.p); v.quaternion.copy(s.q); v.scale.copy(s.s); } }
+  if(typeof previewEnemy!=='undefined' && previewEnemy){ const v=previewEnemy.userData.visual, s=v&&v.userData.seat; if(s){ v.position.copy(s.p); v.quaternion.copy(s.q); v.scale.copy(s.s); }
+    if(previewCollider && previewCollider.userData.cyl){ const r=previewEnemy.userData.footprint||0.9; previewCollider.userData.cyl.scale.set(r,1,r); } }
 
   // aim-down-sights: smoothly blend toward aimed state, drive FOV + crosshair
   const adsTarget = (ads || padAds || editorAimPreview) ? 1 : 0;
@@ -8706,7 +8757,7 @@ function serializeLevel(){
     station: { url: stationModelUrl, state: Object.assign({}, editorTargets.station.state) },
     world:   Object.assign({}, worldCfg),
     chest:   { url: chestModelUrl, scale: chestModelScale },
-    enemy:   { url: enemyModelUrl, scale: enemyModelScale, face: enemyFaceOffset, cr: enemyColliderR, yoff: enemyYOffset },
+    enemy:   { url: enemyModelUrl, scale: enemyModelScale, face: enemyFaceOffset, cr: enemyColliderR, yoff: enemyYOffset, xoff: enemyXOffset, zoff: enemyZOffset },
     props:   propModels.filter(Boolean).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
@@ -8762,7 +8813,7 @@ function restoreLevel(level){
   // world + loot
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }
   if(level.chest){ chestModelUrl = level.chest.url||''; chestModelScale = level.chest.scale||1; }
-  if(level.enemy){ enemyModelUrl = level.enemy.url||''; enemyModelScale = level.enemy.scale||1; enemyFaceOffset = level.enemy.face||0; enemyColliderR = level.enemy.cr||0; enemyYOffset = level.enemy.yoff||0; for(const en of enemies) buildEnemyVisual(en.mesh); }   // re-skin any live enemies
+  if(level.enemy){ enemyModelUrl = level.enemy.url||''; enemyModelScale = level.enemy.scale||1; enemyFaceOffset = level.enemy.face||0; enemyColliderR = level.enemy.cr||0; enemyYOffset = level.enemy.yoff||0; enemyXOffset = level.enemy.xoff||0; enemyZOffset = level.enemy.zoff||0; for(const en of enemies) buildEnemyVisual(en.mesh); }   // re-skin any live enemies
   selProps.length = 0;
   editorTargets.props.idx = Math.max(0, Math.min(editorTargets.props.idx, propModels.length-1));
   if(typeof syncSelToIdx==='function') syncSelToIdx();
@@ -9121,12 +9172,12 @@ function renderEditorFields(){
     const eRow=document.createElement('div'); eRow.style.cssText='display:flex;gap:6px;align-items:center;';
     const eUrl=document.createElement('input'); eUrl.type='text'; eUrl.placeholder='https://…/enemy.glb'; eUrl.value=enemyModelUrl; eUrl.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
     const eAb=document.createElement('button'); eAb.textContent='Apply'; eAb.style.flex='0 0 auto';
-    eAb.onclick=()=>{ pushUndoSnapshot(); swapEnemyModel(eUrl.value); for(const en of enemies) buildEnemyVisual(en.mesh); };   // re-skin existing enemies immediately
+    eAb.onclick=()=>{ pushUndoSnapshot(); swapEnemyModel(eUrl.value); refreshEnemyVisuals(); };   // re-skin existing enemies immediately
     eRow.appendChild(eUrl); eRow.appendChild(eAb); eHost.appendChild(eRow);
     const eScaleRow=document.createElement('label'); eScaleRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 2px;';
     const esSp=document.createElement('span'); esSp.textContent='Model scale'; esSp.style.minWidth='86px';
     const esNum=document.createElement('input'); esNum.type='number'; esNum.min='0.05'; esNum.max='50'; esNum.step='0.05'; esNum.value=enemyModelScale; esNum.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
-    esNum.onchange=()=>{ enemyModelScale=Math.max(0.05,Math.min(50,parseFloat(esNum.value)||1)); for(const en of enemies) buildEnemyVisual(en.mesh); };
+    esNum.onchange=()=>{ enemyModelScale=Math.max(0.05,Math.min(50,parseFloat(esNum.value)||1)); refreshEnemyVisuals(); };
     eScaleRow.appendChild(esSp); eScaleRow.appendChild(esNum); eHost.appendChild(eScaleRow);
     const eFaceRow=document.createElement('label'); eFaceRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
     const efSp=document.createElement('span'); efSp.textContent='Facing'; efSp.style.minWidth='86px';
@@ -9139,7 +9190,7 @@ function renderEditorFields(){
     const ecSp=document.createElement('span'); ecSp.textContent='Collider radius'; ecSp.style.minWidth='86px';
     const ecR=document.createElement('input'); ecR.type='range'; ecR.min='0'; ecR.max='4'; ecR.step='0.1'; ecR.value=enemyColliderR; ecR.style.cssText='flex:1;accent-color:#ff8a5b;';
     const ecN=document.createElement('input'); ecN.type='number'; ecN.min='0'; ecN.max='4'; ecN.step='0.1'; ecN.value=enemyColliderR; ecN.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
-    const applyEc=(v)=>{ const m=Math.max(0,Math.min(4,Math.round((parseFloat(v)||0)*10)/10)); ecR.value=m; ecN.value=m; enemyColliderR=m; for(const en of enemies) buildEnemyVisual(en.mesh); };
+    const applyEc=(v)=>{ const m=Math.max(0,Math.min(4,Math.round((parseFloat(v)||0)*10)/10)); ecR.value=m; ecN.value=m; enemyColliderR=m; refreshEnemyVisuals(); };
     ecR.addEventListener('mousedown',()=>pushUndoSnapshot()); ecN.addEventListener('focus',()=>pushUndoSnapshot());
     ecR.oninput=()=>applyEc(ecR.value); ecN.onchange=()=>applyEc(ecN.value);
     ecRow.appendChild(ecSp); ecRow.appendChild(ecR); ecRow.appendChild(ecN); eHost.appendChild(ecRow);
@@ -9148,11 +9199,32 @@ function renderEditorFields(){
     const eySp=document.createElement('span'); eySp.textContent='Vertical offset'; eySp.style.minWidth='86px';
     const eyR=document.createElement('input'); eyR.type='range'; eyR.min='-3'; eyR.max='3'; eyR.step='0.05'; eyR.value=enemyYOffset; eyR.style.cssText='flex:1;accent-color:#ff8a5b;';
     const eyN=document.createElement('input'); eyN.type='number'; eyN.min='-5'; eyN.max='5'; eyN.step='0.05'; eyN.value=enemyYOffset; eyN.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
-    const applyEy=(v)=>{ const m=Math.max(-5,Math.min(5,Math.round((parseFloat(v)||0)*100)/100)); eyR.value=Math.max(-3,Math.min(3,m)); eyN.value=m; enemyYOffset=m; for(const en of enemies) buildEnemyVisual(en.mesh); };
+    const applyEy=(v)=>{ const m=Math.max(-5,Math.min(5,Math.round((parseFloat(v)||0)*100)/100)); eyR.value=Math.max(-3,Math.min(3,m)); eyN.value=m; enemyYOffset=m; refreshEnemyVisuals(); };
     eyR.addEventListener('mousedown',()=>pushUndoSnapshot()); eyN.addEventListener('focus',()=>pushUndoSnapshot());
     eyR.oninput=()=>applyEy(eyR.value); eyN.onchange=()=>applyEy(eyN.value);
     eyRow.appendChild(eySp); eyRow.appendChild(eyR); eyRow.appendChild(eyN); eHost.appendChild(eyRow);
-    hint(eHost, '', '3px 0 0').textContent = 'If the model faces away while chasing, change Facing. Collider radius 0 = auto-fit; raise it if a wide model clips, lower it if it stops too far away. Vertical offset raises (+) or lowers (−) a model that hovers or sinks. Apply re-skins enemies already in the arena.';
+    // horizontal pivot offsets (re-center an off-pivot model)
+    const offRow=(label, get, set)=>{
+      const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
+      const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='86px';
+      const rng=document.createElement('input'); rng.type='range'; rng.min='-3'; rng.max='3'; rng.step='0.05'; rng.value=get(); rng.style.cssText='flex:1;accent-color:#ff8a5b;';
+      const num=document.createElement('input'); num.type='number'; num.min='-5'; num.max='5'; num.step='0.05'; num.value=get(); num.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+      const ap=(v)=>{ const m=Math.max(-5,Math.min(5,Math.round((parseFloat(v)||0)*100)/100)); rng.value=Math.max(-3,Math.min(3,m)); num.value=m; set(m); refreshEnemyVisuals(); };
+      rng.addEventListener('mousedown',()=>pushUndoSnapshot()); num.addEventListener('focus',()=>pushUndoSnapshot());
+      rng.oninput=()=>ap(rng.value); num.onchange=()=>ap(num.value);
+      row.appendChild(sp); row.appendChild(rng); row.appendChild(num); eHost.appendChild(row);
+    };
+    offRow('Offset X', ()=>enemyXOffset, v=>enemyXOffset=v);
+    offRow('Offset Z', ()=>enemyZOffset, v=>enemyZOffset=v);
+    // preview + auto-fit
+    const pvRow=document.createElement('div'); pvRow.className='row2'; pvRow.style.marginTop='6px';
+    const pv=document.createElement('button'); pv.textContent = previewEnemy ? '👁 Hide preview' : '👁 Preview enemy';
+    if(previewEnemy){ pv.style.background='rgba(56,245,181,0.30)'; pv.style.color='#eafff7'; }
+    pv.onclick=()=>{ if(previewEnemy) clearPreviewEnemy(); else buildPreviewEnemy('grunt'); renderEditorFields(); };
+    const af=document.createElement('button'); af.textContent='⤢ Auto-fit size';
+    af.onclick=()=>{ if(!previewEnemy) buildPreviewEnemy('grunt'); const ok=autoFitEnemyScale(); const note=$('edCopied'); if(note) note.textContent = ok ? ('Auto-fit ✓ scale '+(+enemyModelScale).toFixed(2)) : 'Load a model + open the preview first (give it a moment to load).'; renderEditorFields(); };
+    pvRow.appendChild(pv); pvRow.appendChild(af); eHost.appendChild(pvRow);
+    hint(eHost, '', '3px 0 0').textContent = 'Preview shows the model + its collider (green cylinder) at a fixed spot in front of the arena centre. Offsets re-center an off-pivot model; Vertical offset fixes hover/sink; Collider radius 0 = auto-fit. Auto-fit size rescales the model to ~human height.';
 
     // ===== GAME / WAVES section =====
     const gHost = gameHost || worldHost;
@@ -10132,6 +10204,7 @@ function toggleEditor(){
     if(editorEl) editorEl.style.display = 'none';
     editorAimPreview = false;
     spawnRouteEdit = null;
+    if(typeof clearPreviewEnemy==='function') clearPreviewEnemy();
     if(selBox) selBox.visible = false;
     for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible = false; }
     if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false);
@@ -10163,7 +10236,7 @@ function startGame(){
   buffs.damage=0; buffs.speed=0; buffs.shield=0;
   // reset aim/shake state
   firing=false; ads=false; adsBlend=0; shake=0;
-  editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
+  editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
   camera.fov = (worldCfg && worldCfg.fov) || BASE_FOV; camera.updateProjectionMatrix(); camera.rotation.z = 0;
   // clear entities
   enemies.slice().forEach(e=>{ scene.remove(e.mesh); if(e.mesh.userData.mixer){ const mi=mixers.indexOf(e.mesh.userData.mixer); if(mi>=0) mixers.splice(mi,1); } }); enemies.length=0;
@@ -10215,7 +10288,7 @@ function gameWon(){
 function endGame(){
   gameOn=false; gameOver=true; document.exitPointerLock();
   firing=false; ads=false; shopOpen=false;
-  editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
+  editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
   $('shop').classList.add('hidden');
   $('prompt').style.display='none';
   const ov=$('overlay'); ov.classList.remove('hidden');
