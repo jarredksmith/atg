@@ -6261,7 +6261,7 @@ function netApplyAddProp(d){
   NET.sentProps.set(d.nid, d.dyn ? 'dyn' : (d.t||[]).slice());  // claim immediately so our reconciler won't echo it
   spawnProp(d.src, d.t, (obj)=>{
     if(d.att) obj.userData.attribution=d.att;
-    applyPropDynState(obj, { dyn:d.dyn, mass:d.mass, brk:d.brk, hp:d.hp, bst:d.bst });   // host simulates; clients interpolate it from the D snapshot
+    applyPropDynState(obj, { dyn:d.dyn, mass:d.mass, brk:d.brk, hp:d.hp, bst:d.bst, fc:d.fc, fz:d.fz, dsh:d.dsh });   // host simulates; clients interpolate it from the D snapshot
     netFixSelection();
   }, undefined, d.anim, d.mat||null, undefined, d.nid);
   return true;
@@ -6361,7 +6361,7 @@ function handleClientMsg(conn, msg){
   else if(msg.t==='break'){   // host shattered a prop — show the debris locally (pDel removes the prop itself)
     const ctr=new THREE.Vector3(msg.ctr[0],msg.ctr[1],msg.ctr[2]); const sz=new THREE.Vector3(msg.sz[0],msg.sz[1],msg.sz[2]);
     if(msg.st==='puff'){ spark(ctr, msg.c||0xcfeee6); if(typeof SFX!=='undefined' && SFX.puff) SFX.puff(); }
-    else { if(typeof spawnFragmentsVisual==='function') spawnFragmentsVisual(ctr, sz, msg.c, msg.n||8); spark(ctr, msg.c||0xffd166); if(typeof SFX!=='undefined' && SFX.shatter) SFX.shatter(); }
+    else { if(typeof spawnFragmentsVisual==='function') spawnFragmentsVisual(ctr, sz, msg.c, msg.n||8, msg.sf, msg.sh); spark(ctr, msg.c||0xffd166); if(typeof SFX!=='undefined' && SFX.shatter) SFX.shatter(); }
   }
   else if(msg.t==='buyChest'){ const ci=chests.findIndex(c=>c.id===msg.id); if(ci>=0){ scene.remove(chests[ci].mesh); chests.splice(ci,1); } }   // a client bought a crate -> remove it for everyone
   else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'anim', i:msg.i}); }catch(e){} } } }   // play + relay to other clients
@@ -6895,7 +6895,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 28 · 2026-06-02';
+const BUILD_VERSION = 'build 29 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7150,7 +7150,11 @@ function applyPropDynState(obj, p){
   setPropDynamic(obj, true);
   if(p.mass!=null) obj.userData.mass = p.mass;
   if(p.brk===false){ obj.userData.breakable = false; }
-  else { obj.userData.breakable = true; if(p.hp!=null){ obj.userData.maxHp = p.hp; obj.userData.hp = p.hp; } obj.userData.breakStyle = (p.bst==='puff') ? 'puff' : 'shatter'; }
+  else { obj.userData.breakable = true; if(p.hp!=null){ obj.userData.maxHp = p.hp; obj.userData.hp = p.hp; } obj.userData.breakStyle = (p.bst==='puff') ? 'puff' : 'shatter';
+    if(p.fc!=null) obj.userData.fragCount = p.fc;
+    if(p.fz!=null) obj.userData.fragSize = p.fz;
+    obj.userData.debrisShape = (p.dsh==='cubes') ? 'cubes' : 'shards';
+  }
 }
 function removeDynamicProp(obj){
   const i = dynamicProps.indexOf(obj); if(i>=0) dynamicProps.splice(i,1);
@@ -7181,7 +7185,32 @@ function pushDynamic(obj, dir, strength, point){
 // the impact, then fade out and clean themselves up so the sim never grows unbounded.
 const fragments = [];               // { mesh, body, born, life } — transient debris
 const MAX_FRAGMENTS = 90;           // hard cap so a chain of breaks can't tank the framerate
-const _fragGeo = new THREE.BoxGeometry(1,1,1);
+const _fragGeo = new THREE.BoxGeometry(1,1,1);   // "cubes" debris shape (clean chunks)
+// Jagged "shards": a jittered low-poly icosahedron, normalised to radius 0.5 so a shard scaled by s
+// spans ~s (same footprint as a cube of size s). Faceted via per-face verts + computeVertexNormals.
+// A small reused pool keeps geometry count bounded; per-fragment non-uniform scale adds variety.
+const DEBRIS_SIZE_FRAC = 0.16;      // default fragment edge as a fraction of the prop's largest dim
+function makeShardGeometry(){
+  const t=(1+Math.sqrt(5))/2;
+  const base=[[-1,t,0],[1,t,0],[-1,-t,0],[1,-t,0],[0,-1,t],[0,1,t],[0,-1,-t],[0,1,-t],[t,0,-1],[t,0,1],[-t,0,-1],[-t,0,1]];
+  const faces=[[0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],[1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],[3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],[4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1]];
+  const verts=base.map(v=>{ const L=Math.hypot(v[0],v[1],v[2]); const r=0.5*(0.5+Math.random()*0.6)/L; return [v[0]*r+(Math.random()-0.5)*0.1, v[1]*r+(Math.random()-0.5)*0.1, v[2]*r+(Math.random()-0.5)*0.1]; });
+  const pos=[]; for(const f of faces){ for(const idx of f){ const p=verts[idx]; pos.push(p[0],p[1],p[2]); } }
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
+  g.computeVertexNormals(); g.computeBoundingSphere();
+  const k=0.5/(g.boundingSphere.radius||0.5), pa=g.attributes.position;   // normalise to radius 0.5
+  for(let i=0;i<pa.count;i++){ pa.setXYZ(i, pa.getX(i)*k, pa.getY(i)*k, pa.getZ(i)*k); }
+  pa.needsUpdate=true; g.computeBoundingSphere();
+  return g;
+}
+const _shardGeos = []; for(let i=0;i<8;i++) _shardGeos.push(makeShardGeometry());
+function debrisGeo(shape){ return shape==='cubes' ? _fragGeo : _shardGeos[(Math.random()*_shardGeos.length)|0]; }
+// Fragment edge length: a fraction of the prop's largest dimension, floored so it's never invisible
+// and capped at ~1/3 of the prop so debris never reads as bigger than the thing that broke.
+function fragmentBaseSize(maxDim, sizeFrac){
+  return Math.max(0.05, Math.min(maxDim*0.34, maxDim*(sizeFrac||DEBRIS_SIZE_FRAC)));
+}
 // A sensible default HP from a prop's footprint/mass (bigger/heavier = tougher).
 function defaultHpFor(obj){
   const m = (obj.userData.mass!=null) ? obj.userData.mass : (typeof defaultMassFor==='function'? defaultMassFor(obj):1);
@@ -7195,19 +7224,20 @@ function propColorHex(obj){
 }
 // World-space size of the prop, used to size + place the fragment cloud.
 const _shSize = new THREE.Vector3(), _shCtr = new THREE.Vector3(), _shBox = new THREE.Box3();
-function spawnFragments(center, size, colorHex, count, impulseDir, impulsePow){
+function spawnFragments(center, size, colorHex, count, impulseDir, impulsePow, sizeFrac, shape){
   if(!PHYS_OK || !physWorld) return;
   const maxDim = Math.max(size.x, size.y, size.z);
-  const fs = Math.max(0.12, Math.min(0.5, maxDim*0.28));   // fragment edge length
+  const fs = fragmentBaseSize(maxDim, sizeFrac);   // fragment edge length
   for(let i=0;i<count;i++){
     if(fragments.length >= MAX_FRAGMENTS) break;
-    const mat = new THREE.MeshStandardMaterial({ color:colorHex, roughness:.8, metalness:.15, transparent:true, opacity:1 });
-    const mesh = new THREE.Mesh(_fragGeo, mat);
-    const s = fs * (0.6 + Math.random()*0.7);
-    mesh.scale.setScalar(s);
-    const px = center.x + (Math.random()-0.5)*size.x*0.7;
-    const py = center.y + (Math.random()-0.5)*size.y*0.7;
-    const pz = center.z + (Math.random()-0.5)*size.z*0.7;
+    const mat = new THREE.MeshStandardMaterial({ color:colorHex, roughness:.8, metalness:.15, flatShading:(shape!=='cubes'), transparent:true, opacity:1 });
+    const mesh = new THREE.Mesh(debrisGeo(shape), mat);
+    const s = fs * (0.7 + Math.random()*0.5);
+    mesh.scale.set(s*(0.82+Math.random()*0.36), s*(0.82+Math.random()*0.36), s*(0.82+Math.random()*0.36));
+    mesh.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
+    const px = center.x + (Math.random()-0.5)*size.x*0.5;
+    const py = center.y + (Math.random()-0.5)*size.y*0.5;
+    const pz = center.z + (Math.random()-0.5)*size.z*0.5;
     mesh.position.set(px,py,pz); mesh.castShadow = true; scene.add(mesh);
     const rb = physWorld.createRigidBody(RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(px,py,pz).setLinearDamping(0.1).setAngularDamping(0.3).setCcdEnabled(true));
@@ -7223,15 +7253,18 @@ function spawnFragments(center, size, colorHex, count, impulseDir, impulsePow){
 }
 // Client-side debris: no Rapier body (clients don't simulate). Each fragment gets a velocity we
 // integrate manually with gravity in updateFragments, so co-op players still see the shatter.
-function spawnFragmentsVisual(center, size, colorHex, count){
+function spawnFragmentsVisual(center, size, colorHex, count, sizeFrac, shape){
   const maxDim = Math.max(size.x, size.y, size.z);
-  const fs = Math.max(0.12, Math.min(0.5, maxDim*0.28));
+  const fs = fragmentBaseSize(maxDim, sizeFrac);
   for(let i=0;i<count;i++){
     if(fragments.length >= MAX_FRAGMENTS) break;
-    const mat = new THREE.MeshStandardMaterial({ color:colorHex||0x8a97a0, roughness:.8, metalness:.15, transparent:true, opacity:1 });
-    const s = fs * (0.6 + Math.random()*0.7);
-    const mesh = new THREE.Mesh(_fragGeo, mat); mesh.scale.setScalar(s); mesh.castShadow = true;
-    const px = center.x + (Math.random()-0.5)*size.x*0.7, py = center.y + (Math.random()-0.5)*size.y*0.7, pz = center.z + (Math.random()-0.5)*size.z*0.7;
+    const mat = new THREE.MeshStandardMaterial({ color:colorHex||0x8a97a0, roughness:.8, metalness:.15, flatShading:(shape!=='cubes'), transparent:true, opacity:1 });
+    const s = fs * (0.7 + Math.random()*0.5);
+    const mesh = new THREE.Mesh(debrisGeo(shape), mat);
+    mesh.scale.set(s*(0.82+Math.random()*0.36), s*(0.82+Math.random()*0.36), s*(0.82+Math.random()*0.36));
+    mesh.rotation.set(Math.random()*Math.PI, Math.random()*Math.PI, Math.random()*Math.PI);
+    mesh.castShadow = true;
+    const px = center.x + (Math.random()-0.5)*size.x*0.5, py = center.y + (Math.random()-0.5)*size.y*0.5, pz = center.z + (Math.random()-0.5)*size.z*0.5;
     mesh.position.set(px,py,pz); scene.add(mesh);
     const out = new THREE.Vector3(px-center.x, py-center.y+0.3, pz-center.z); if(out.lengthSq()<1e-4) out.set(Math.random()-0.5,1,Math.random()-0.5);
     out.normalize().multiplyScalar(3 + Math.random()*3);
@@ -7281,10 +7314,14 @@ function shatterProp(obj, point, dir, power){
   let count = 0;
   if(style === 'shatter'){
     const vol = Math.max(0.05, _shSize.x*_shSize.y*_shSize.z);
-    count = Math.max(5, Math.min(18, Math.round(6 + vol*1.2)));
-    spawnFragments(_shCtr, _shSize, colorHex, count, dir, power||6);
+    const autoCount = Math.max(5, Math.min(18, Math.round(6 + vol*1.2)));
+    count = Math.max(3, Math.min(MAX_FRAGMENTS, (obj.userData.fragCount!=null) ? obj.userData.fragCount : autoCount));
+    const sizeFrac = (obj.userData.fragSize!=null) ? obj.userData.fragSize : DEBRIS_SIZE_FRAC;
+    const shape = (obj.userData.debrisShape==='cubes') ? 'cubes' : 'shards';
+    spawnFragments(_shCtr, _shSize, colorHex, count, dir, power||6, sizeFrac, shape);
     spark(_shCtr, colorHex); spark(_shCtr, 0xffd166);
     if(typeof SFX!=='undefined' && SFX.shatter) SFX.shatter();
+    obj.userData._breakFx = { sf:sizeFrac, sh:shape };   // stash so the net message below carries them
   } else {
     // puff: no debris cloud — a quick particle burst + soft pop, then despawn
     spark(_shCtr, colorHex); spark(_shCtr, 0xcfeee6);
@@ -7292,7 +7329,7 @@ function shatterProp(obj, point, dir, power){
   }
   // network it so co-op peers see the same break (host authoritative)
   if(typeof NET!=='undefined' && NET.mode==='host' && obj.userData.nid){
-    try{ netSendProp({ t:'break', nid:obj.userData.nid, c:colorHex, ctr:[_shCtr.x,_shCtr.y,_shCtr.z], sz:[_shSize.x,_shSize.y,_shSize.z], n:count, st:style }); }catch(e){}
+    try{ const fx=obj.userData._breakFx||{}; netSendProp({ t:'break', nid:obj.userData.nid, c:colorHex, ctr:[_shCtr.x,_shCtr.y,_shCtr.z], sz:[_shSize.x,_shSize.y,_shSize.z], n:count, st:style, sf:fx.sf, sh:fx.sh }); }catch(e){}
     try{ netSendProp({ t:'pDel', nid:obj.userData.nid }); }catch(e){}
   }
   if(typeof removeProp==='function'){ const idx = propModels.indexOf(obj); if(idx>=0){ removeProp(idx); return; } }
@@ -8348,7 +8385,11 @@ function propEntry(o){
   if(o.userData.animMode==='trigger') e.anim='trigger';
   if(o.userData.phys){ e.dyn=true; if(o.userData.mass!=null) e.mass=o.userData.mass;
     if(o.userData.breakable===false) e.brk=false;   // breakable defaults true; only store when off
-    else { if(o.userData.maxHp!=null) e.hp=o.userData.maxHp; if(o.userData.breakStyle==='puff') e.bst='puff'; }
+    else { if(o.userData.maxHp!=null) e.hp=o.userData.maxHp; if(o.userData.breakStyle==='puff') e.bst='puff';
+      if(o.userData.fragCount!=null) e.fc=o.userData.fragCount;
+      if(o.userData.fragSize!=null && Math.abs(o.userData.fragSize-DEBRIS_SIZE_FRAC)>1e-6) e.fz=o.userData.fragSize;
+      if(o.userData.debrisShape==='cubes') e.dsh='cubes';   // shards is the default; only store cubes
+    }
   }
   const m=propMaterialDesc(o); if(m) e.mat=m;
   if(o.userData.attribution) e.att=o.userData.attribution;
@@ -8978,8 +9019,43 @@ function renderEditorFields(){
             shB.onclick=()=>{ pushUndoSnapshot(); sel.userData.breakStyle='shatter'; renderEditorFields(); };
             puB.onclick=()=>{ pushUndoSnapshot(); sel.userData.breakStyle='puff'; renderEditorFields(); };
             stRow.appendChild(shB); stRow.appendChild(puB); animHost.appendChild(stRow);
-            const bnote=document.createElement('div'); bnote.className='hint'; bnote.style.marginTop='3px'; bnote.textContent='Shatter = physics debris chunks. Puff = quick burst + vanish (cheaper). Higher HP = more shots to break. Health refills on Deploy.';
+            const bnote=document.createElement('div'); bnote.className='hint'; bnote.style.marginTop='3px'; bnote.textContent='Shatter = physics debris. Puff = quick burst + vanish (cheaper). Higher HP = more shots to break. Health refills on Deploy.';
             animHost.appendChild(bnote);
+            // ---- Debris controls (count / size / shape) — only meaningful for the shatter style ----
+            if(sel.userData.breakStyle!=='puff'){
+              sel.updateMatrixWorld(true);
+              const _b=new THREE.Box3().setFromObject(sel,true), _s=_b.getSize(new THREE.Vector3());
+              const _vol=Math.max(0.05,_s.x*_s.y*_s.z), _auto=Math.max(5,Math.min(18,Math.round(6+_vol*1.2)));
+              // Pieces (count)
+              const pcLab=document.createElement('label'); pcLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin-top:8px;';
+              const pcSp=document.createElement('span'); pcSp.textContent='Pieces'; pcSp.style.minWidth='44px';
+              const pcR=document.createElement('input'); pcR.type='range'; pcR.min='3'; pcR.max='40'; pcR.step='1'; pcR.value=(sel.userData.fragCount!=null?sel.userData.fragCount:_auto); pcR.style.cssText='flex:1;accent-color:#ff8a5b;';
+              const pcN=document.createElement('input'); pcN.type='number'; pcN.min='3'; pcN.max='90'; pcN.step='1'; pcN.value=pcR.value; pcN.style.cssText='width:62px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+              const applyPc=(v)=>{ const m=Math.max(3,Math.min(90,parseInt(v,10)||_auto)); pcR.value=Math.min(40,m); pcN.value=m; sel.userData.fragCount=m; };
+              pcR.oninput=()=>applyPc(pcR.value); pcN.onchange=()=>applyPc(pcN.value);
+              pcR.addEventListener('mousedown',()=>pushUndoSnapshot()); pcN.addEventListener('focus',()=>pushUndoSnapshot());
+              pcLab.appendChild(pcSp); pcLab.appendChild(pcR); pcLab.appendChild(pcN); animHost.appendChild(pcLab);
+              // Piece size (% of the prop's largest dimension)
+              const szLab=document.createElement('label'); szLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin-top:6px;';
+              const szSp=document.createElement('span'); szSp.textContent='Size'; szSp.style.minWidth='44px';
+              const szR=document.createElement('input'); szR.type='range'; szR.min='6'; szR.max='30'; szR.step='1'; szR.value=Math.round((sel.userData.fragSize!=null?sel.userData.fragSize:0.16)*100); szR.style.cssText='flex:1;accent-color:#ff8a5b;';
+              const szV=document.createElement('span'); szV.textContent=szR.value+'%'; szV.style.cssText='min-width:38px;text-align:right;color:#cfeee2;font-size:12px;';
+              const applySz=(v)=>{ const m=Math.max(6,Math.min(30,parseInt(v,10)||16)); szR.value=m; szV.textContent=m+'%'; sel.userData.fragSize=m/100; };
+              szR.addEventListener('mousedown',()=>pushUndoSnapshot()); szR.oninput=()=>applySz(szR.value);
+              szLab.appendChild(szSp); szLab.appendChild(szR); szLab.appendChild(szV); animHost.appendChild(szLab);
+              // Shape: jagged shards (default) or clean cubes
+              if(sel.userData.debrisShape==null) sel.userData.debrisShape='shards';
+              const shRow=document.createElement('div'); shRow.className='row2'; shRow.style.margin='6px 0 0';
+              const sdB=document.createElement('button'); sdB.textContent='🪨 Shards';
+              const cbB=document.createElement('button'); cbB.textContent='🧊 Cubes';
+              const hi2=(b)=>{ b.style.background='rgba(255,138,91,0.30)'; b.style.color='#fff'; };
+              if(sel.userData.debrisShape==='cubes') hi2(cbB); else hi2(sdB);
+              sdB.onclick=()=>{ pushUndoSnapshot(); sel.userData.debrisShape='shards'; renderEditorFields(); };
+              cbB.onclick=()=>{ pushUndoSnapshot(); sel.userData.debrisShape='cubes'; renderEditorFields(); };
+              shRow.appendChild(sdB); shRow.appendChild(cbB); animHost.appendChild(shRow);
+              const snote=document.createElement('div'); snote.className='hint'; snote.style.marginTop='3px'; snote.textContent='Pieces = fragment count. Size = each piece as a % of the prop (capped so debris never looks bigger than the prop). Shards = jagged; Cubes = clean blocks.';
+              animHost.appendChild(snote);
+            }
           }
         }
       }
