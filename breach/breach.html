@@ -5612,18 +5612,57 @@ function reload(){
 const enemies = [];
 let nextEnemyId = 1;   // stable ids so co-op clients can reference enemies over the network
 const enemyGeo = new THREE.CapsuleGeometry(0.7, 1.4, 4, 10);
+// Optional uploaded enemy model (GLB, animated). When set, each enemy shows this model instead of the
+// capsule; saved with the level (under "enemy"). The logical body stays a capsule-sized Group so all the
+// AI / collision / networking code is unchanged — only the visual child swaps.
+let enemyModelUrl   = (savedLevel && savedLevel.enemy && savedLevel.enemy.url)   || '';
+let enemyModelScale = (savedLevel && savedLevel.enemy && savedLevel.enemy.scale) || 1;
+let enemyFaceOffset = (savedLevel && savedLevel.enemy && savedLevel.enemy.face != null) ? savedLevel.enemy.face : 0;   // radians added after lookAt so the model faces the player (0 / π / ±π·0.5)
+function swapEnemyModel(url){ enemyModelUrl = (url||'').trim(); }
+
+// Build the visual for one enemy body Group: the uploaded GLB (animated) if set, else the capsule.
+// modelY offsets a feet-origin GLB up so it isn't half-buried; the capsule is centered so it uses 0.
+function buildEnemyVisual(body){
+  // clear any previous visual
+  if(body.userData.visual){ if(body.userData.mixer){ const mi=mixers.indexOf(body.userData.mixer); if(mi>=0) mixers.splice(mi,1); body.userData.mixer=null; } body.remove(body.userData.visual); body.userData.visual=null; }
+  const useCapsule = ()=>{
+    const mat = new THREE.MeshStandardMaterial({ color:0x4a1020, emissive:0xff2d55, emissiveIntensity:.6, roughness:.6 });
+    const cap = new THREE.Mesh(enemyGeo, mat); cap.castShadow = true;
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(.18,8,8), new THREE.MeshBasicMaterial({color:0xffd166}));
+    eye.position.set(0, 0.7, -0.55);   // slightly forward so you can read facing
+    cap.add(eye);
+    body.add(cap); body.userData.visual = cap; body.userData.modelY = 0;
+  };
+  if(!enemyModelUrl){ useCapsule(); return; }
+  useCapsule();   // show the capsule immediately; replace it when the GLB arrives
+  loadGLTFCached(enemyModelUrl,
+    (gltf)=>{
+      // drop the placeholder capsule
+      if(body.userData.visual){ body.remove(body.userData.visual); body.userData.visual=null; }
+      const model = gltf.scene.clone(true);
+      model.scale.setScalar(enemyModelScale || 1);
+      model.traverse(o=>{ if(o.isMesh){ o.castShadow = true; o.receiveShadow = false; } });
+      // center horizontally and seat on the body so a feet-origin model isn't half-buried
+      const box = new THREE.Box3().setFromObject(model);
+      const cx = (box.min.x+box.max.x)/2, cz = (box.min.z+box.max.z)/2;
+      model.position.set(-cx, -box.min.y - 1.4, -cz);   // body center is ~1.4 above feet; lift so feet sit at the body base
+      body.add(model);
+      body.userData.visual = model;
+      body.userData.modelY = 0;
+      const mx = playModelAnimations(model, gltf, 'loop');   // auto-loop idle/walk clips
+      if(mx) body.userData.mixer = mx;
+    },
+    (err)=>{ console.warn('Enemy model load failed, using capsule:', err && err.message); }   // capsule stays
+  );
+}
 function spawnEnemy(){
-  const mat = new THREE.MeshStandardMaterial({ color:0x4a1020, emissive:0xff2d55, emissiveIntensity:.6, roughness:.6 });
-  const mesh = new THREE.Mesh(enemyGeo, mat);
+  const mesh = new THREE.Group();   // logical body (capsule-sized); visual is a child
   let px, pz;
   do { const a=Math.random()*Math.PI*2, r=ARENA*0.6+Math.random()*ARENA*0.3;
        px=Math.cos(a)*r; pz=Math.sin(a)*r; }
   while(Math.abs(px)>ARENA-3 || Math.abs(pz)>ARENA-3);
-  mesh.position.set(px, 1.4, pz); mesh.castShadow = true;
-  // eye
-  const eye = new THREE.Mesh(new THREE.SphereGeometry(.18,8,8),
-    new THREE.MeshBasicMaterial({color:0xffd166}));
-  eye.position.y = 0.7; mesh.add(eye);
+  mesh.position.set(px, 1.4, pz);
+  buildEnemyVisual(mesh);
   scene.add(mesh);
   enemies.push({ id: nextEnemyId++, mesh, hp:30, speed: 6+Math.random()*3, lastHit:0, cooldown:0 });
 }
@@ -5857,9 +5896,10 @@ function setRemoteState(id, msg){
 function upsertEnemyMesh(e){
   let em=NET.enemyMeshes[e.id];
   if(!em){
-    const mesh=new THREE.Mesh(enemyGeo, new THREE.MeshStandardMaterial({ color:0x4a1020, emissive:0xff2d55, emissiveIntensity:.6, roughness:.6 }));
-    const eye=new THREE.Mesh(new THREE.SphereGeometry(.18,8,8), new THREE.MeshBasicMaterial({color:0xffd166})); eye.position.y=0.7; mesh.add(eye);
-    mesh.position.set(e.p[0], e.p[1], e.p[2]); mesh.userData.enemyId=e.id; scene.add(mesh);
+    const mesh=new THREE.Group();
+    mesh.position.set(e.p[0], e.p[1], e.p[2]); mesh.userData.enemyId=e.id;
+    buildEnemyVisual(mesh);   // same model (or capsule) the host uses; enemyModelUrl arrives with the level sync
+    scene.add(mesh);
     em={ mesh, target:new THREE.Vector3(e.p[0],e.p[1],e.p[2]) }; NET.enemyMeshes[e.id]=em;
   }
   em.target.set(e.p[0], e.p[1], e.p[2]);
@@ -5953,7 +5993,7 @@ function applyWorld(msg){
   for(const id in NET.players){ if(!seen.has(+id)) removeRemotePlayer(+id); }
   const es=new Set();
   for(const e of msg.E){ es.add(e.id); upsertEnemyMesh(e); }
-  for(const id in NET.enemyMeshes){ if(!es.has(+id)){ scene.remove(NET.enemyMeshes[id].mesh); delete NET.enemyMeshes[id]; } }
+  for(const id in NET.enemyMeshes){ if(!es.has(+id)){ { const m=NET.enemyMeshes[id].mesh; scene.remove(m); if(m.userData.mixer){ const mi=mixers.indexOf(m.userData.mixer); if(mi>=0) mixers.splice(mi,1); } } delete NET.enemyMeshes[id]; } }
   const cs=new Set();
   for(const c of msg.C){ cs.add(c.id); upsertCoinMesh(c); }
   for(const id in NET.coinMeshes){ if(!cs.has(+id)){ scene.remove(NET.coinMeshes[id]); delete NET.coinMeshes[id]; } }
@@ -5984,7 +6024,7 @@ function netInterpolate(dt){
     let dy=rp.yaw-rp.mesh.rotation.y; while(dy>Math.PI)dy-=2*Math.PI; while(dy<-Math.PI)dy+=2*Math.PI;
     rp.mesh.rotation.y += dy*k; }
   if(NET.mode==='client'){
-    for(const id in NET.enemyMeshes){ const em=NET.enemyMeshes[id]; em.mesh.position.lerp(em.target, k); em.mesh.lookAt(player.pos.x, em.mesh.position.y, player.pos.z); }
+    for(const id in NET.enemyMeshes){ const em=NET.enemyMeshes[id]; em.mesh.position.lerp(em.target, k); em.mesh.lookAt(player.pos.x, em.mesh.position.y, player.pos.z); if(enemyModelUrl) em.mesh.rotateY(enemyFaceOffset); }
     for(const o of dynamicProps){ const tp=o.userData._netTarget; if(tp){ o.position.lerp(new THREE.Vector3(tp[0],tp[1],tp[2]), k); } }
   }
 }
@@ -6546,7 +6586,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 16 · 2026-06-01';
+const BUILD_VERSION = 'build 17 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7027,6 +7067,7 @@ function killEnemy(en){
     spawnCoin(en.mesh.position.x+ox, en.mesh.position.z+oz, 15 + Math.floor(wave*2));
   }
   scene.remove(en.mesh);
+  if(en.mesh.userData.mixer){ const mi=mixers.indexOf(en.mesh.userData.mixer); if(mi>=0) mixers.splice(mi,1); }   // stop animating a dead enemy
   enemies.splice(enemies.indexOf(en),1);
   score += 100; updateHUD();
 }
@@ -7502,8 +7543,9 @@ function loop(){
       en.mesh.position.x = Math.max(-elim, Math.min(elim, en.mesh.position.x));
       en.mesh.position.z = Math.max(-elim, Math.min(elim, en.mesh.position.z));
 
-      en.mesh.position.y = 1.4 + Math.sin(t*4+en.mesh.id)*0.08;
+      en.mesh.position.y = 1.4 + Math.sin(t*4+en.id)*0.08;
       en.mesh.lookAt(near.pos.x, en.mesh.position.y, near.pos.z);
+      if(enemyModelUrl) en.mesh.rotateY(enemyFaceOffset);   // GLB characters vary in which way they face; nudge to face the player
       en.cooldown -= dt;
       if(dist < 2.4 && en.cooldown<=0 && !editorOpen){
         en.cooldown = 0.8;
@@ -7843,6 +7885,7 @@ function serializeLevel(){
     station: { url: stationModelUrl, state: Object.assign({}, editorTargets.station.state) },
     world:   Object.assign({}, worldCfg),
     chest:   { url: chestModelUrl, scale: chestModelScale },
+    enemy:   { url: enemyModelUrl, scale: enemyModelScale, face: enemyFaceOffset },
     props:   propModels.filter(Boolean).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
   };
@@ -7892,6 +7935,7 @@ function restoreLevel(level){
   // world + loot
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }
   if(level.chest){ chestModelUrl = level.chest.url||''; chestModelScale = level.chest.scale||1; }
+  if(level.enemy){ enemyModelUrl = level.enemy.url||''; enemyModelScale = level.enemy.scale||1; enemyFaceOffset = level.enemy.face||0; for(const en of enemies) buildEnemyVisual(en.mesh); }   // re-skin any live enemies
   selProps.length = 0;
   editorTargets.props.idx = Math.max(0, Math.min(editorTargets.props.idx, propModels.length-1));
   if(typeof syncSelToIdx==='function') syncSelToIdx();
@@ -8157,6 +8201,28 @@ function renderEditorFields(){
     sRow.appendChild(sSp); sRow.appendChild(sNum); worldHost.appendChild(sRow);
     const lnote=document.createElement('div'); lnote.className='hint'; lnote.style.marginTop='3px'; lnote.textContent='Apply clears current loot boxes so the next spawn uses the new model.';
     worldHost.appendChild(lnote);
+
+    // enemy model
+    const eh=document.createElement('div'); eh.className='hint'; eh.style.margin='10px 0 4px'; eh.innerHTML='<b>Enemy model</b> — animated GLB URL (blank = default capsule). Looping clips auto-play.';
+    worldHost.appendChild(eh);
+    const eRow=document.createElement('div'); eRow.style.cssText='display:flex;gap:6px;align-items:center;';
+    const eUrl=document.createElement('input'); eUrl.type='text'; eUrl.placeholder='https://…/enemy.glb'; eUrl.value=enemyModelUrl; eUrl.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+    const eAb=document.createElement('button'); eAb.textContent='Apply';
+    eAb.onclick=()=>{ pushUndoSnapshot(); swapEnemyModel(eUrl.value); for(const en of enemies) buildEnemyVisual(en.mesh); };   // re-skin existing enemies immediately
+    eRow.appendChild(eUrl); eRow.appendChild(eAb); worldHost.appendChild(eRow);
+    const eScaleRow=document.createElement('label'); eScaleRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 2px;';
+    const esSp=document.createElement('span'); esSp.textContent='Model scale'; esSp.style.minWidth='86px';
+    const esNum=document.createElement('input'); esNum.type='number'; esNum.min='0.05'; esNum.max='50'; esNum.step='0.05'; esNum.value=enemyModelScale; esNum.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+    esNum.onchange=()=>{ enemyModelScale=Math.max(0.05,Math.min(50,parseFloat(esNum.value)||1)); for(const en of enemies) buildEnemyVisual(en.mesh); };
+    eScaleRow.appendChild(esSp); eScaleRow.appendChild(esNum); worldHost.appendChild(eScaleRow);
+    const eFaceRow=document.createElement('label'); eFaceRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
+    const efSp=document.createElement('span'); efSp.textContent='Facing'; efSp.style.minWidth='86px';
+    const efSel=document.createElement('select'); efSel.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+    for(const [lab,val] of [['Front (0°)','0'],['Back (180°)',String(Math.PI)],['Right (90°)',String(Math.PI/2)],['Left (-90°)',String(-Math.PI/2)]]){ const o=document.createElement('option'); o.value=val; o.textContent=lab; if(Math.abs(parseFloat(val)-enemyFaceOffset)<0.01) o.selected=true; efSel.appendChild(o); }
+    efSel.onchange=()=>{ enemyFaceOffset=parseFloat(efSel.value)||0; };
+    eFaceRow.appendChild(efSp); eFaceRow.appendChild(efSel); worldHost.appendChild(eFaceRow);
+    const enote=document.createElement('div'); enote.className='hint'; enote.style.marginTop='3px'; enote.textContent='If the model faces away from you while chasing, change Facing. Apply re-skins enemies already in the arena.';
+    worldHost.appendChild(enote);
   }
 
   // global view toggles (overhead camera, hide enemies)
@@ -8949,7 +9015,7 @@ function startGame(){
   editorOpen=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
   camera.fov = BASE_FOV; camera.updateProjectionMatrix(); camera.rotation.z = 0;
   // clear entities
-  enemies.slice().forEach(e=>scene.remove(e.mesh)); enemies.length=0;
+  enemies.slice().forEach(e=>{ scene.remove(e.mesh); if(e.mesh.userData.mixer){ const mi=mixers.indexOf(e.mesh.userData.mixer); if(mi>=0) mixers.splice(mi,1); } }); enemies.length=0;
   coins.slice().forEach(c=>scene.remove(c.mesh)); coins.length=0;
   chests.slice().forEach(c=>scene.remove(c.mesh)); chests.length=0;
   grenades.slice().forEach(g=>scene.remove(g.mesh)); grenades.length=0;
