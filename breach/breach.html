@@ -5503,7 +5503,9 @@ function refreshSpawnRings(g){
 function buildSpawnMarker(opts){
   const g = new THREE.Group();
   const mode = (opts.mode==='patrol'||opts.mode==='hold') ? opts.mode : 'hunt';
-  const mark = { mode, radius:(opts.radius!=null?opts.radius:6), detect:(opts.detect!=null?opts.detect:14), face:(opts.face||0) };
+  const mark = { mode, radius:(opts.radius!=null?opts.radius:6), detect:(opts.detect!=null?opts.detect:14), face:(opts.face||0),
+    route: (opts.route||[]).map(p=>Array.isArray(p)?{x:p[0],z:p[1]}:{x:p.x,z:p.z}),   // ordered patrol waypoints (world XZ)
+    routeLoop: opts.loop!==false };                                                    // loop (cycle) vs ping-pong (reverse at ends)
   g.userData.mark = mark; g.userData.isSpawn = true;
   const col = SPAWN_MODE_COLORS[mode];
   const post = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.7, 4), new THREE.MeshBasicMaterial({ color:col, transparent:true, opacity:0.9, depthTest:false }));
@@ -5514,9 +5516,28 @@ function buildSpawnMarker(opts){
   g.userData.rings = new THREE.Group(); g.add(g.userData.rings);
   refreshSpawnRings(g);
   g.position.set(opts.t[0], 0, opts.t[1]); g.rotation.y = mark.face;
+  // route polyline + nodes live in WORLD space (waypoints are absolute), so they sit in the scene, not
+  // under the (rotating) marker group. Visibility + cleanup are kept in step with the marker.
+  g.userData.routeViz = new THREE.Group(); g.userData.routeViz.visible = false; scene.add(g.userData.routeViz);
+  refreshRouteViz(g);
   g.visible = false;   // editor-only; shown while the editor is open
   scene.add(g); spawnMarkers.push(g);
   return g;
+}
+function refreshRouteViz(g){
+  const rv = g.userData.routeViz; if(!rv) return;
+  for(let i=rv.children.length-1;i>=0;i--){ const c=rv.children[i]; rv.remove(c); if(c.geometry) c.geometry.dispose(); if(c.material && c.material.dispose) c.material.dispose(); }
+  const route = g.userData.mark.route;
+  if(route && route.length){
+    const pts = [ new THREE.Vector3(g.position.x, 0.12, g.position.z) ];     // start the line at the post
+    for(const p of route) pts.push(new THREE.Vector3(p.x, 0.12, p.z));
+    if(g.userData.mark.routeLoop && route.length>1) pts.push(new THREE.Vector3(route[0].x, 0.12, route[0].z));
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color:0xffd166, transparent:true, opacity:0.85, depthTest:false }));
+    line.renderOrder = 9002; rv.add(line);
+    const nodeGeo = new THREE.SphereGeometry(0.28, 10, 10);
+    route.forEach((p,i)=>{ const s = new THREE.Mesh(nodeGeo, new THREE.MeshBasicMaterial({ color: i===0?0x9fffd0:0xffd166, depthTest:false })); s.position.set(p.x, 0.12, p.z); s.renderOrder=9003; rv.add(s); });
+  }
+  rv.visible = g.visible;
 }
 function setSpawnMarkerMode(g, mode){
   const m = g.userData.mark; m.mode = (mode==='patrol'||mode==='hold') ? mode : 'hunt';
@@ -5526,9 +5547,10 @@ function setSpawnMarkerMode(g, mode){
 function removeSpawnMarker(idx){
   const g = spawnMarkers[idx]; if(!g) return;
   g.traverse(o=>{ if(o.geometry) o.geometry.dispose(); if(o.material) o.material.dispose && o.material.dispose(); });
+  if(g.userData.routeViz){ g.userData.routeViz.traverse(o=>{ if(o.geometry) o.geometry.dispose(); if(o.material && o.material.dispose) o.material.dispose(); }); scene.remove(g.userData.routeViz); }
   scene.remove(g); spawnMarkers.splice(idx,1);
 }
-function setSpawnMarkersVisible(v){ for(const g of spawnMarkers) g.visible = v; }
+function setSpawnMarkersVisible(v){ for(const g of spawnMarkers){ g.visible = v; if(g.userData.routeViz) g.userData.routeViz.visible = v; } }
 for(const sp of ((savedLevel && Array.isArray(savedLevel.spawns)) ? savedLevel.spawns : [])) buildSpawnMarker(sp);
 
 // ---------- Player / controls ----------
@@ -6040,6 +6062,8 @@ function spawnEnemy(spawn){
     home: spawn ? { x:px, z:pz } : null,
     patrolR: (spawn && spawn.patrolR!=null) ? spawn.patrolR : 6,
     detectR: (spawn && spawn.detectR!=null) ? spawn.detectR : 14,
+    route: (spawn && spawn.route && spawn.route.length) ? spawn.route.map(p=>({ x:(p.x!=null?p.x:p[0]), z:(p.z!=null?p.z:p[1]) })) : null,
+    routeLoop: !(spawn && spawn.routeLoop===false), routeIdx:0, routeDir:1,
     aware:false, lostAt:0, wp:null, wpUntil:0 };
   enemies.push(e);
 }
@@ -6059,6 +6083,27 @@ function enemyDesiredTarget(en, px, pz, dist, now){
   const hx = en.home ? en.home.x : en.mesh.position.x, hz = en.home ? en.home.z : en.mesh.position.z;
   if(mode === 'patrol'){
     const here = en.mesh.position;
+    if(en.route && en.route.length){
+      // follow the authored route: advance to the next waypoint on arrival (loop = cycle, else ping-pong)
+      if(en.routeIdx == null || en.routeIdx >= en.route.length) en.routeIdx = 0;
+      const cur = en.route[en.routeIdx];
+      if(Math.hypot(here.x-cur.x, here.z-cur.z) < 1.0){
+        const n = en.route.length;
+        if(n > 1){
+          if(en.routeLoop){ en.routeIdx = (en.routeIdx + 1) % n; }
+          else {
+            if(en.routeDir == null) en.routeDir = 1;
+            let next = en.routeIdx + en.routeDir;
+            if(next > n-1){ next = n-2; en.routeDir = -1; }
+            else if(next < 0){ next = 1; en.routeDir = 1; }
+            en.routeIdx = Math.max(0, Math.min(n-1, next));
+          }
+        }
+      }
+      const t = en.route[en.routeIdx];
+      return { tx:t.x, tz:t.z, chase:false };
+    }
+    // no route -> wander inside the patrol radius around home
     const reached = en.wp && Math.hypot(here.x-en.wp.x, here.z-en.wp.z) < 1.0;
     if(!en.wp || now > en.wpUntil || reached){
       const a = Math.random()*Math.PI*2, r = Math.random()*(en.patrolR || 6);
@@ -7001,7 +7046,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 35 · 2026-06-02';
+const BUILD_VERSION = 'build 36 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7768,7 +7813,7 @@ function startWave(){
   spawnQueue = [];
   if(spawnMarkers.length){
     // authored level: one hostile per placed spawn, at its post with its behavior
-    for(const g of spawnMarkers){ const m=g.userData.mark; spawnQueue.push({ x:g.position.x, z:g.position.z, mode:m.mode, patrolR:m.radius, detectR:m.detect, face:m.face }); }
+    for(const g of spawnMarkers){ const m=g.userData.mark; spawnQueue.push({ x:g.position.x, z:g.position.z, mode:m.mode, patrolR:m.radius, detectR:m.detect, face:m.face, route:m.route.map(p=>({x:p.x,z:p.z})), routeLoop:m.routeLoop }); }
     toSpawn = spawnQueue.length;
   } else {
     toSpawn = 3 + wave*2;   // no authored spawns -> classic escalating random waves
@@ -8441,7 +8486,7 @@ const editorTargets = {
     sync(){ const g=this.obj(); if(!g) return; const m=g.userData.mark;
       this.state.px=g.position.x; this.state.pz=g.position.z; this.state.radius=m.radius; this.state.detect=m.detect; },
     apply(){ const g=this.obj(); if(!g) return; const m=g.userData.mark, s=this.state;
-      g.position.set(s.px, 0, s.pz); m.radius=Math.max(0,s.radius); m.detect=Math.max(1,s.detect); refreshSpawnRings(g); },
+      g.position.set(s.px, 0, s.pz); m.radius=Math.max(0,s.radius); m.detect=Math.max(1,s.detect); refreshSpawnRings(g); refreshRouteViz(g); },
     code(){ return '// ===== Enemy spawns ===== (authored in-editor; saved in the level JSON under "spawns")'; }
   },
 };
@@ -8618,7 +8663,7 @@ function serializeLevel(){
     enemy:   { url: enemyModelUrl, scale: enemyModelScale, face: enemyFaceOffset, cr: enemyColliderR, yoff: enemyYOffset },
     props:   propModels.filter(Boolean).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
-    spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face }; }),
+    spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop }; }),
   };
 }
 function saveLevel(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(serializeLevel())); return true; } catch(e){ return false; } }
@@ -8893,6 +8938,7 @@ function buildEditorPanel(){
 
 function renderEditorFields(){
   if(!editorEl) return;
+  if(spawnRouteEdit && (editorActive!=='spawns' || editorTargets.spawns.obj()!==spawnRouteEdit || spawnRouteEdit.userData.mark.mode!=='patrol')) spawnRouteEdit=null;   // route placement only while its patrol spawn stays selected
   editorEl.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.key===editorActive));
   const tgt = editorTargets[editorActive];
 
@@ -9124,6 +9170,29 @@ function renderEditorFields(){
             : g.userData.mark.mode==='patrol' ? 'Patrol: wanders inside its patrol radius, chases when a player enters Detect range, then leashes back.'
             : 'Hold: guards this post; engages only when a player enters Detect range, then returns.';
           picker.appendChild(mh);
+          // ---- Waypoint route (patrol only) ----
+          if(g.userData.mark.mode==='patrol'){
+            const m = g.userData.mark;
+            const rlab=document.createElement('div'); rlab.className='hint'; rlab.style.margin='8px 0 3px';
+            rlab.innerHTML='<b>Patrol route</b> — '+(m.route.length ? (m.route.length+' waypoint'+(m.route.length>1?'s':'')) : 'none (wanders in its radius)');
+            picker.appendChild(rlab);
+            const editing = (spawnRouteEdit===g);
+            const rrow=document.createElement('div'); rrow.className='row2';
+            const place=document.createElement('button'); place.textContent = editing ? '✓ Done placing' : '✏️ Place waypoints';
+            if(editing){ place.style.background='rgba(255,209,102,0.30)'; place.style.color='#fff'; }
+            place.onclick=()=>{ spawnRouteEdit = editing ? null : g; renderEditorFields(); };
+            const undo=document.createElement('button'); undo.textContent='↩ Remove last'; undo.disabled = !m.route.length;
+            undo.onclick=()=>{ if(!m.route.length) return; pushUndoSnapshot(); m.route.pop(); refreshRouteViz(g); renderEditorFields(); };
+            rrow.appendChild(place); rrow.appendChild(undo); picker.appendChild(rrow);
+            const rrow2=document.createElement('div'); rrow2.className='row2'; rrow2.style.marginTop='4px';
+            const clr=document.createElement('button'); clr.textContent='✖ Clear route'; clr.disabled = !m.route.length;
+            clr.onclick=()=>{ pushUndoSnapshot(); m.route.length=0; refreshRouteViz(g); renderEditorFields(); };
+            const loop=document.createElement('button'); loop.textContent = m.routeLoop ? '🔁 Loop' : '↔ Ping-pong';
+            loop.onclick=()=>{ pushUndoSnapshot(); m.routeLoop=!m.routeLoop; refreshRouteViz(g); renderEditorFields(); };
+            rrow2.appendChild(clr); rrow2.appendChild(loop); picker.appendChild(rrow2);
+            if(editing){ const eh=document.createElement('div'); eh.className='hint'; eh.style.margin='3px 0 0'; eh.style.color='#ffd166';
+              eh.textContent='Click the ground to drop waypoints in order. The enemy walks them ('+(m.routeLoop?'looping':'back and forth')+'), chasing if it spots you. Click “Done” when finished.'; picker.appendChild(eh); }
+          }
         }
       }
     }
@@ -9505,6 +9574,15 @@ const AXIS_COL = { x:0xff5566, y:0x66ff88, z:0x5599ff };
 let selProps = [];        // selected prop meshes; the "primary" is editorTargets.props.idx
 let selLights = [];       // selected light groups; the "primary" is editorTargets.lights.idx
 let selSpawns = [];       // selected spawn markers; the "primary" is editorTargets.spawns.idx
+let spawnRouteEdit = null;   // while set (a spawn marker), clicking the ground appends a waypoint to its route
+const _groundPlane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
+function groundPointUnderPointer(e){
+  const r = renderer.domElement.getBoundingClientRect();
+  const nx = ((e.clientX - r.left)/r.width)*2 - 1, ny = -((e.clientY - r.top)/r.height)*2 + 1;
+  raycaster.setFromCamera(new THREE.Vector2(nx, ny), activeCam());
+  const p = new THREE.Vector3();
+  return raycaster.ray.intersectPlane(_groundPlane, p) ? p : null;
+}
 let selBoxes = [];        // pooled BoxHelpers for highlighting the multi-selection
 function isGroupSel(){ return editorOpen && ((editorActive==='props' && selProps.length>1) || (editorActive==='lights' && selLights.length>1)); }
 function activeSel(){ return editorActive==='lights' ? selLights : selProps; }   // the active multi-selection list
@@ -9554,6 +9632,7 @@ function setSelPos(v){
     const g=editorTargets.spawns.obj(); if(!g) return;
     g.position.set(v.x, 0, v.z);   // spawns live on the floor
     const s=editorTargets.spawns.state; s.px=v.x; s.pz=v.z;
+    if(typeof refreshRouteViz==='function') refreshRouteViz(g);
   }
 }
 // --- rotation (Euler, radians) of the selected object, for the rotate gizmo ---
@@ -9845,6 +9924,12 @@ function updateSelectionHighlight(){
 // Click an object in the scene (while the editor is open) to jump straight to its settings.
 renderer.domElement.addEventListener('click', (e)=>{
   if(!editorOpen) return;
+  if(spawnRouteEdit){   // route-placement mode: each ground click appends a waypoint
+    if(editorDragMoved){ editorDragMoved = false; return; }
+    const gp = groundPointUnderPointer(e);
+    if(gp){ pushUndoSnapshot(); spawnRouteEdit.userData.mark.route.push({ x:gp.x, z:gp.z }); refreshRouteViz(spawnRouteEdit); renderEditorFields(); }
+    return;
+  }
   if(editorDragMoved){ editorDragMoved = false; return; }   // that was a drag (look/pan/gizmo), not a selection
   const r = renderer.domElement.getBoundingClientRect();
   const nx = ((e.clientX - r.left)/r.width)*2 - 1;
@@ -9959,6 +10044,7 @@ function toggleEditor(){
   } else {
     if(editorEl) editorEl.style.display = 'none';
     editorAimPreview = false;
+    spawnRouteEdit = null;
     if(selBox) selBox.visible = false;
     for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible = false; }
     if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false);
