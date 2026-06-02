@@ -5411,9 +5411,16 @@ function applySurfaceTexture(mat, url, urlKey, repeat){
   if(mat[urlKey] === url){ if(url && mat.map){ mat.map.repeat.set(repeat, repeat); mat.needsUpdate=true; } return; }
   mat[urlKey] = url;
   if(!url){ if(mat.map){ mat.map = null; mat.needsUpdate = true; } return; }
-  const tex = loadTextureCached(proxied(url));
-  if(tex){ tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(repeat, repeat); }
-  mat.map = tex; mat.needsUpdate = true;
+  const loader = new THREE.TextureLoader(); loader.setCrossOrigin('anonymous');
+  const finish = (tex)=>{ tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(repeat, repeat);
+    if('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace; else if('encoding' in tex) tex.encoding = 3001;
+    mat.map = tex; mat.needsUpdate = true; };
+  const proxiedUrl = proxied(url);
+  loader.load(proxiedUrl, finish, undefined, ()=>{
+    if(mat[urlKey] !== url) return;
+    if(proxiedUrl !== url) loader.load(url, finish, undefined, ()=>{ if(mat[urlKey]===url) console.warn('Texture load failed (CORS?):', url); });   // direct fallback
+    else console.warn('Texture load failed:', url);
+  });
 }
 
 // Equirectangular sky / image-based lighting. Pass a panorama image URL (jpg/png; many "HDRI" panos are
@@ -5431,9 +5438,13 @@ function applySkyHdri(url){
     if(_skyEnvRT){ _skyEnvRT.dispose && _skyEnvRT.dispose(); _skyEnvRT = null; }
     return;
   }
-  const loader = new THREE.TextureLoader(); loader.setCrossOrigin('anonymous');
-  loader.load(proxied(url), (tex)=>{
-    if(_skyHdriUrl !== url){ tex.dispose && tex.dispose(); return; }   // a newer url won the race
+  if(/\.(hdr|exr)(\?|#|$)/i.test(url)){
+    skyStatus('.hdr/.exr need a special decoder this engine doesn\'t include — use a .jpg or .png equirectangular panorama instead (Poly Haven offers JPG versions).', true);
+    _skyHdriUrl = '';   // allow retrying with a jpg
+    return;
+  }
+  const onTex = (tex)=>{
+    if(_skyHdriUrl !== url){ tex.dispose && tex.dispose(); return; }
     try{
       tex.mapping = THREE.EquirectangularReflectionMapping;
       if('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace; else if('encoding' in tex) tex.encoding = 3001;
@@ -5444,8 +5455,31 @@ function applySkyHdri(url){
         _skyEnvRT = _skyPMREM.fromEquirectangular(tex);
         scene.environment = _skyEnvRT.texture;   // image-based lighting / reflections
       }
-    }catch(e){ console.warn('Sky HDRI apply failed:', e && e.message); scene.background = tex; }
-  }, undefined, (err)=>{ console.warn('Sky image load failed:', err && err.message); });
+      skyStatus('Sky loaded ✓');
+    }catch(e){ console.warn('Sky apply failed:', e && e.message); scene.background = tex; skyStatus('Sky loaded (no reflections)'); }
+  };
+  // Try the proxy first (most hosts block cross-origin image reads). If that fails — e.g. the proxy's
+  // allowlist hasn't been updated for images, or there's no proxy — fall back to a direct load, which
+  // works for hosts that already send permissive CORS headers.
+  const loader = new THREE.TextureLoader(); loader.setCrossOrigin('anonymous');
+  const proxiedUrl = proxied(url);
+  skyStatus('Loading sky…');
+  loader.load(proxiedUrl, onTex, undefined, ()=>{
+    if(_skyHdriUrl !== url) return;
+    if(proxiedUrl !== url){
+      loader.load(url, onTex, undefined, ()=>{
+        if(_skyHdriUrl !== url) return;
+        skyStatus('Could not load that sky image. The host may block cross-origin loading — re-host the .jpg alongside your game, or update your CORS proxy to allow image files (see polypizza-proxy.js).', true);
+      });
+    } else {
+      skyStatus('Could not load that sky image (network or CORS error).', true);
+    }
+  });
+}
+// Show sky load status in the editor's World panel (if present) and the console.
+function skyStatus(msg, isErr){
+  if(isErr) console.warn('Sky:', msg); else console.log('Sky:', msg);
+  try{ const el = editorEl && editorEl.querySelector('#edSkyStatus'); if(el){ el.textContent = msg; el.style.color = isErr ? '#ff8a9b' : '#7fe6cf'; } }catch(e){}
 }
 
 let SPEED, SPRINT, JUMP, GRAV, CROUCH_SPEED;   // live values derived from worldCfg
@@ -6746,7 +6780,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 24 · 2026-06-01';
+const BUILD_VERSION = 'build 25 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8397,8 +8431,9 @@ function renderEditorFields(){
     hint(worldHost, '<b>Arena</b> — playable half-size (rebuilds floor + walls live)', '10px 0 4px');
     slider(worldHost, 'Arena size','arena', 15, 400, 1);
 
-    hint(worldHost, '<b>Sky</b> — equirectangular panorama (.jpg/.png/.hdr). Lights reflections too. Blank = flat color.', '10px 0 4px');
+    hint(worldHost, '<b>Sky</b> — equirectangular panorama as <b>.jpg or .png</b> (not .hdr). Lights reflections too. Blank = flat color.', '10px 0 4px');
     texRow(worldHost, 'https://…/sky.jpg (equirectangular)', 'sky_hdri');
+    const skStatus=document.createElement('div'); skStatus.id='edSkyStatus'; skStatus.className='hint'; skStatus.style.cssText='margin:-2px 0 6px;font-size:10px;'; worldHost.appendChild(skStatus);
 
     hint(worldHost, '<b>Floor</b> — color + optional tiling texture', '10px 0 4px');
     colorRow(worldHost, 'Floor color', 'floorColor');
