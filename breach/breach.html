@@ -5203,10 +5203,29 @@ function proxied(url){
   try{ if(new URL(url, location.href).origin === location.origin) return url; }catch(e){ return url; }
   return base + (base.indexOf('?')>=0 ? '&' : '?') + 'url=' + encodeURIComponent(url);
 }
+// Shared loading manager that proxies cross-origin fetches — the GLB itself AND any external texture/
+// .bin files it references — through the CORS proxy. Embedded resources arrive as blob:/data: URLs and
+// pass straight through. This is why a cross-origin model's separate texture files now load: without it,
+// GLTFLoader resolved them against the proxy's own domain (404), so the model came in untextured.
+let _gltfMgr = null;
+function gltfManager(){
+  if(_gltfMgr) return _gltfMgr;
+  if(!THREE.LoadingManager) return null;
+  const m = new THREE.LoadingManager();
+  if(m.setURLModifier) m.setURLModifier((u)=> (!u || u.startsWith('blob:') || u.startsWith('data:')) ? u : proxied(u));
+  _gltfMgr = m; return m;
+}
 function loadGLTFCached(url, cb, errcb){
   if(gltfCache[url]){ cb(gltfCache[url]); return; }
   if(!THREE.GLTFLoader){ errcb && errcb(new Error('GLTFLoader unavailable')); return; }
-  new THREE.GLTFLoader().load(proxied(url), (gltf)=>{ gltfCache[url]=gltf; cb(gltf); }, undefined, errcb);   // cache by original url; fetch via proxy if cross-origin
+  const mgr = gltfManager();
+  if(mgr){
+    // Pass the ORIGINAL url: the manager proxies it (and sub-resources resolve against the real origin,
+    // then get proxied too). Pre-proxying here would double-encode via the modifier.
+    new THREE.GLTFLoader(mgr).load(url, (gltf)=>{ gltfCache[url]=gltf; cb(gltf); }, undefined, errcb);
+  } else {
+    new THREE.GLTFLoader().load(proxied(url), (gltf)=>{ gltfCache[url]=gltf; cb(gltf); }, undefined, errcb);   // fallback: main file only
+  }
 }
 // Stable per-prop network id for live multiplayer prop sync. Prefix namespaces by peer so ids never
 // collide across machines: 's' at startup/single-player, 'h' once hosting, 'c<id>' once joined.
@@ -6614,7 +6633,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 18 · 2026-06-01';
+const BUILD_VERSION = 'build 19 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
