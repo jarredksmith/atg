@@ -4882,7 +4882,10 @@ addEventListener('resize', () => {
 });
 
 // ---------- Lighting ----------
-scene.add(new THREE.HemisphereLight(0x4a6c7a, 0x0a0f14, 0.55));
+const skyLight = new THREE.HemisphereLight(0x4a6c7a, 0x0a0f14, 0.55);
+scene.add(skyLight);
+const worldAmbient = new THREE.AmbientLight(0xffffff, 0);   // global brightness lift, driven by worldCfg.ambient
+scene.add(worldAmbient);
 const moon = new THREE.DirectionalLight(0x9fd8ff, 0.9);
 moon.position.set(40, 80, 20);
 moon.castShadow = true;
@@ -5307,7 +5310,7 @@ const player = {
 };
 const EYE = 1.7;            // standing camera height above the surface the player stands on
 // ---- World movement settings (editable in the editor's World panel; saved with the level) ----
-const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14 };
+const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0 };
 let worldCfg = Object.assign({}, DEFAULT_WORLD, (savedLevel && savedLevel.world) || {});
 let SPEED, SPRINT, JUMP, GRAV, CROUCH_SPEED;   // live values derived from worldCfg
 function applyWorldCfg(){
@@ -5316,6 +5319,14 @@ function applyWorldCfg(){
   worldCfg.jump   = Math.max(0,  +worldCfg.jump   || DEFAULT_WORLD.jump);
   worldCfg.grav   = Math.max(1,  +worldCfg.grav   || DEFAULT_WORLD.grav);
   worldCfg.crouch = Math.max(1,  Math.min(worldCfg.walk, +worldCfg.crouch || DEFAULT_WORLD.crouch));
+  // global lighting (saved with the level)
+  worldCfg.sun     = Math.max(0, worldCfg.sun     == null ? DEFAULT_WORLD.sun     : +worldCfg.sun);
+  worldCfg.sky     = Math.max(0, worldCfg.sky     == null ? DEFAULT_WORLD.sky     : +worldCfg.sky);
+  worldCfg.ambient = Math.max(0, worldCfg.ambient == null ? DEFAULT_WORLD.ambient : +worldCfg.ambient);
+  if(worldCfg.sunColor == null) worldCfg.sunColor = DEFAULT_WORLD.sunColor;
+  if(typeof moon!=='undefined'){ moon.intensity = worldCfg.sun; moon.color.setHex(worldCfg.sunColor>>>0); }
+  if(typeof skyLight!=='undefined') skyLight.intensity = worldCfg.sky;
+  if(typeof worldAmbient!=='undefined') worldAmbient.intensity = worldCfg.ambient;
   SPEED = worldCfg.walk; SPRINT = worldCfg.run / worldCfg.walk;
   JUMP = worldCfg.jump; GRAV = worldCfg.grav; CROUCH_SPEED = worldCfg.crouch;
 }
@@ -6255,6 +6266,9 @@ function updateChests(dt){
 let shopOpen = false;
 let editorOpen = false;   // transform editor panel open (soft-pauses combat)
 let editorTopView = false;     // overhead straight-down camera for placement
+let editorFreeFly = false;     // free-fly camera: detach from the player, fly anywhere with WASD + mouse-look
+const flyPos = new THREE.Vector3();   // free-fly camera position (seeded from the player on enable)
+let flyInit = false;
 let editorHideEnemies = true;  // hide enemies while editing (default on)
 // Collider debug overlay: draw every per-mesh collision box (green = static props/walls, amber = dynamic)
 // so you can SEE exactly where a boundary sits vs the visible mesh. Toggle in the editor; it stays on when
@@ -6488,7 +6502,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 12 · 2026-06-01';
+const BUILD_VERSION = 'build 13 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7299,11 +7313,28 @@ function loop(){
     topCam.updateProjectionMatrix();
     editorBrightLight.intensity = 1.15;   // flood the field so everything is visible
     gun.visible = false;
-  } else {
-    if(scene.fog !== SCENE_FOG) scene.fog = SCENE_FOG;   // restore atmospheric fog
+  } else if(editorOpen && editorFreeFly){
+    if(scene.fog !== SCENE_FOG) scene.fog = SCENE_FOG;
     if(editorBrightLight.intensity !== 0) editorBrightLight.intensity = 0;
-    gun.visible = true;
-    camera.position.copy(player.pos);
+    gun.visible = false;
+    if(!flyInit){ flyPos.copy(player.pos); flyInit = true; }   // seed from where the player stands
+    // WASD moves along the view direction, Space/Ctrl rise/fall, Shift sprints — all in world space
+    const spd = (keys['ShiftLeft']||keys['ShiftRight']?60:26) * dt;
+    const cy = Math.cos(player.yaw), sy = Math.sin(player.yaw), cp = Math.cos(player.pitch), sp = Math.sin(player.pitch);
+    const fwd = new THREE.Vector3(-sy*cp, sp, -cy*cp);          // camera forward (matches the look basis below)
+    const right = new THREE.Vector3(cy, 0, -sy);
+    if(keys['KeyW']) flyPos.addScaledVector(fwd, spd);
+    if(keys['KeyS']) flyPos.addScaledVector(fwd, -spd);
+    if(keys['KeyD']) flyPos.addScaledVector(right, spd);
+    if(keys['KeyA']) flyPos.addScaledVector(right, -spd);
+    if(keys['Space']) flyPos.y += spd;
+    if(keys['ControlLeft']||keys['ControlRight']) flyPos.y -= spd;
+    camera.position.copy(flyPos);
+    camera.rotation.order = 'YXZ';
+    camera.rotation.y = player.yaw;
+    camera.rotation.x = player.pitch;
+    camera.rotation.z = 0;
+  } else {
     if(crouchT > 0.001) camera.position.y -= crouchT * CROUCH_DIP;   // crouch lowers the view
 
     // camera shake (decays quickly) — offsets rotation so it reads as a jolt
@@ -7938,6 +7969,8 @@ function buildEditorPanel(){
     + sec('World &amp; loot', 'world', '<div id="edWorld"></div>')
     + '<div class="row2" style="margin-top:6px"><button id="edReset">Reset target</button><button id="edCopy">Copy code</button></div>'
     + '<div class="row2" style="margin-top:6px"><button id="edSave">💾 Save level</button><button id="edClear">Clear save</button></div>'
+    + '<div class="row2" style="margin-top:6px"><button id="edExport">⬇ Export .json</button><button id="edImport">⬆ Import .json</button></div>'
+    + '<input type="file" id="edImportFile" accept=".json,application/json" style="display:none">'
     + '<div class="copied" id="edCopied"></div>'
     + '<textarea id="edOut" readonly></textarea>';
   document.body.appendChild(p);
@@ -7973,6 +8006,37 @@ function buildEditorPanel(){
     else { note.textContent = 'Could not clear (storage blocked here)'; }
     clearTimeout(note._t); note._t = setTimeout(()=>{ note.textContent=''; }, 2800);
   };
+  p.querySelector('#edExport').onclick = ()=>{
+    const note = editorEl.querySelector('#edCopied');
+    try {
+      const data = JSON.stringify(serializeLevel(), null, 2);
+      const blob = new Blob([data], { type:'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = new Date().toISOString().slice(0,16).replace(/[:T]/g,'-');
+      a.href = url; a.download = 'breach-level-' + stamp + '.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 4000);
+      note.textContent = 'Exported — share the .json file ✓';
+    } catch(e){ note.textContent = 'Export failed'; }
+    clearTimeout(note._t); note._t = setTimeout(()=>{ note.textContent=''; }, 2800);
+  };
+  const importFile = p.querySelector('#edImportFile');
+  p.querySelector('#edImport').onclick = ()=>{ importFile.value=''; importFile.click(); };
+  importFile.onchange = ()=>{
+    const note = editorEl.querySelector('#edCopied');
+    const file = importFile.files && importFile.files[0]; if(!file) return;
+    const reader = new FileReader();
+    reader.onload = ()=>{
+      let level; try { level = JSON.parse(reader.result); } catch(e){ note.textContent='Import failed: not valid level JSON'; clearTimeout(note._t); note._t=setTimeout(()=>note.textContent='',3200); return; }
+      if(!level || typeof level!=='object' || (!level.props && !level.world)){ note.textContent='Import failed: unrecognized file'; clearTimeout(note._t); note._t=setTimeout(()=>note.textContent='',3200); return; }
+      if(typeof pushUndoSnapshot==='function') pushUndoSnapshot();   // so Ctrl+Z undoes the import
+      restoreLevel(level);
+      note.textContent = 'Level imported ✓ (Save to keep it)';
+      clearTimeout(note._t); note._t = setTimeout(()=>{ note.textContent=''; }, 3200);
+    };
+    reader.readAsText(file);
+  };
   renderEditorFields();
 }
 
@@ -8004,6 +8068,18 @@ function renderEditorFields(){
     slider('Gravity','grav', 5, 80, 1);
     const gnote=document.createElement('div'); gnote.className='hint'; gnote.style.margin='1px 0 8px'; gnote.textContent='Crouch: hold Ctrl or C (R3 on a controller). Gravity change affects props on next Deploy.';
     worldHost.appendChild(gnote);
+    // global lighting
+    const lgh=document.createElement('div'); lgh.className='hint'; lgh.style.margin='6px 0 4px'; lgh.innerHTML='<b>Lighting</b> — applies live; saved with the level';
+    worldHost.appendChild(lgh);
+    slider('Sun (directional)','sun', 0, 4, 0.05);
+    slider('Sky (ambient fill)','sky', 0, 3, 0.05);
+    slider('Brightness lift','ambient', 0, 2, 0.05);
+    const scRow=document.createElement('label'); scRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 8px;';
+    const scSp=document.createElement('span'); scSp.textContent='Sun color'; scSp.style.minWidth='86px';
+    const sc=document.createElement('input'); sc.type='color'; sc.value='#'+((worldCfg.sunColor>>>0)&0xffffff).toString(16).padStart(6,'0'); sc.style.cssText='width:48px;height:24px;background:#0c1418;border:1px solid #2a3a42;border-radius:4px;cursor:pointer;';
+    sc.addEventListener('mousedown', ()=>pushUndoSnapshot());
+    sc.oninput=()=>{ worldCfg.sunColor = parseInt(sc.value.slice(1),16)||0; applyWorldCfg(); };
+    scRow.appendChild(scSp); scRow.appendChild(sc); worldHost.appendChild(scRow);
     // loot box model
     const lh=document.createElement('div'); lh.className='hint'; lh.style.margin='6px 0 4px'; lh.innerHTML='<b>Loot box</b> — GLB model URL (blank = built-in chest)';
     worldHost.appendChild(lh);
@@ -8028,7 +8104,8 @@ function renderEditorFields(){
     const mk = (label, on, fn)=>{ const b=document.createElement('button'); b.textContent=label;
       if(on){ b.style.background='rgba(56,245,181,0.28)'; b.style.color='#eafff7'; }
       b.onclick=fn; return b; };
-    view.appendChild(mk(editorTopView?'◉ Top view':'○ Top view', editorTopView, ()=>{ editorTopView=!editorTopView; if(editorTopView){ topPanX=0; topPanZ=0; topZoom=75; } renderEditorFields(); }));
+    view.appendChild(mk(editorTopView?'◉ Top view':'○ Top view', editorTopView, ()=>{ editorTopView=!editorTopView; if(editorTopView){ editorFreeFly=false; topPanX=0; topPanZ=0; topZoom=75; } renderEditorFields(); }));
+    view.appendChild(mk(editorFreeFly?'◉ Fly mode':'○ Fly mode', editorFreeFly, ()=>{ editorFreeFly=!editorFreeFly; if(editorFreeFly){ editorTopView=false; flyInit=false; } renderEditorFields(); }));
     view.appendChild(mk(editorHideEnemies?'◉ Hide enemies':'○ Hide enemies', editorHideEnemies, ()=>{ editorHideEnemies=!editorHideEnemies; renderEditorFields(); }));
     view.appendChild(mk(editorShowColliders?'◉ Show colliders':'○ Show colliders', editorShowColliders, ()=>{ editorShowColliders=!editorShowColliders; renderEditorFields(); }));
   }
@@ -8785,7 +8862,7 @@ function startGame(){
   buffs.damage=0; buffs.speed=0; buffs.shield=0;
   // reset aim/shake state
   firing=false; ads=false; adsBlend=0; shake=0;
-  editorOpen=false; editorAimPreview=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
+  editorOpen=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
   camera.fov = BASE_FOV; camera.updateProjectionMatrix(); camera.rotation.z = 0;
   // clear entities
   enemies.slice().forEach(e=>scene.remove(e.mesh)); enemies.length=0;
@@ -8822,7 +8899,7 @@ function startGame(){
 function endGame(){
   gameOn=false; gameOver=true; document.exitPointerLock();
   firing=false; ads=false; shopOpen=false;
-  editorOpen=false; editorAimPreview=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
+  editorOpen=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
   $('shop').classList.add('hidden');
   $('prompt').style.display='none';
   const ov=$('overlay'); ov.classList.remove('hidden');
