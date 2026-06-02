@@ -5918,6 +5918,8 @@ const enemyGeo = new THREE.CapsuleGeometry(0.7, 1.4, 4, 10);
 let enemyModelUrl   = (savedLevel && savedLevel.enemy && savedLevel.enemy.url)   || '';
 let enemyModelScale = (savedLevel && savedLevel.enemy && savedLevel.enemy.scale) || 1;
 let enemyFaceOffset = (savedLevel && savedLevel.enemy && savedLevel.enemy.face != null) ? savedLevel.enemy.face : 0;   // radians added after lookAt so the model faces the player (0 / π / ±π·0.5)
+let enemyColliderR  = (savedLevel && savedLevel.enemy && savedLevel.enemy.cr   != null) ? savedLevel.enemy.cr   : 0;   // collision footprint radius; 0 = auto (measured from the model bounds)
+let enemyYOffset    = (savedLevel && savedLevel.enemy && savedLevel.enemy.yoff != null) ? savedLevel.enemy.yoff : 0;   // vertical nudge for the visual model (fixes models that hover or sink)
 function swapEnemyModel(url){ enemyModelUrl = (url||'').trim(); }
 
 // Build the visual for one enemy body Group: the uploaded GLB (animated) if set, else the capsule.
@@ -5931,7 +5933,7 @@ function buildEnemyVisual(body){
     const eye = new THREE.Mesh(new THREE.SphereGeometry(.18,8,8), new THREE.MeshBasicMaterial({color:0xffd166}));
     eye.position.set(0, 0.7, -0.55);   // slightly forward so you can read facing
     cap.add(eye);
-    body.add(cap); body.userData.visual = cap; body.userData.modelY = 0; body.userData.footprint = 0.9;
+    body.add(cap); body.userData.visual = cap; body.userData.modelY = 0; body.userData.footprint = enemyColliderR > 0 ? enemyColliderR : 0.9;
   };
   if(!enemyModelUrl){ useCapsule(); return; }
   useCapsule();   // show the capsule immediately; replace it when the GLB arrives
@@ -5949,11 +5951,12 @@ function buildEnemyVisual(body){
       const box = new THREE.Box3().setFromObject(model);
       if(isFinite(box.min.y) && isFinite(box.min.x)){
         const cx = (box.min.x+box.max.x)/2, cz = (box.min.z+box.max.z)/2;
-        model.position.set(model.position.x - cx, model.position.y - box.min.y - 1.4, model.position.z - cz);
+        model.position.set(model.position.x - cx, model.position.y - box.min.y - 1.4 + enemyYOffset, model.position.z - cz);
         // collision footprint: the model's real half-width in XZ (min 0.9 so small models still match
         // the capsule). Used by the AI for obstacle + enemy-enemy spacing so big models don't clip.
         body.userData.footprint = Math.max(0.9, Math.min(3.5, Math.max((box.max.x-box.min.x)/2, (box.max.z-box.min.z)/2)));
       }
+      if(enemyColliderR > 0) body.userData.footprint = enemyColliderR;   // manual collider-radius override
       body.userData.visual = model;
       body.userData.modelY = 0;
       const mx = playModelAnimations(model, gltf, 'loop');   // auto-loop idle/walk clips
@@ -6162,6 +6165,11 @@ function loadLevelFromNet(level){
     level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p);  if(p.att) obj.userData.attribution=p.att; if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));
   }
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
+  if(level.enemy){   // adopt the host's enemy model + collider/offset so clients render the same hostiles
+    enemyModelUrl = level.enemy.url||''; enemyModelScale = level.enemy.scale||1; enemyFaceOffset = level.enemy.face||0;
+    enemyColliderR = level.enemy.cr||0; enemyYOffset = level.enemy.yoff||0;
+    for(const id in NET.enemyMeshes) buildEnemyVisual(NET.enemyMeshes[id].mesh);   // re-skin any already-spawned remote hostiles
+  }
 }
 
 // ---- remote avatars ----
@@ -6898,7 +6906,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 30 · 2026-06-02';
+const BUILD_VERSION = 'build 32 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7126,6 +7134,7 @@ function buildPhysWorld(){
   physAccum = 0;
 }
 function destroyPhysWorld(){
+  if(typeof clearFragments==='function') clearFragments();   // drop transient debris first, so its bodies aren't left dangling after free()
   if(physWorld){ try{ physWorld.free(); }catch(e){} physWorld = null; }
   for(const o of dynamicProps){ if(o.userData.phys) o.userData.phys.body = null; }
   physAccum = 0;
@@ -7289,7 +7298,7 @@ function updateFragments(){
   const fdt = Math.min(0.05, (now - (updateFragments._last||now))/1000); updateFragments._last = now;
   for(let i=fragments.length-1;i>=0;i--){
     const f = fragments[i];
-    if(f.body){ const t=f.body.translation(), r=f.body.rotation(); f.mesh.position.set(t.x,t.y,t.z); f.mesh.quaternion.set(r.x,r.y,r.z,r.w); }
+    if(f.body && physWorld){ const t=f.body.translation(), r=f.body.rotation(); f.mesh.position.set(t.x,t.y,t.z); f.mesh.quaternion.set(r.x,r.y,r.z,r.w); }
     else if(f.vel){   // client-side: simple integrate + floor bounce
       f.vel.y -= 22*fdt;
       f.mesh.position.addScaledVector(f.vel, fdt);
@@ -8444,7 +8453,7 @@ function serializeLevel(){
     station: { url: stationModelUrl, state: Object.assign({}, editorTargets.station.state) },
     world:   Object.assign({}, worldCfg),
     chest:   { url: chestModelUrl, scale: chestModelScale },
-    enemy:   { url: enemyModelUrl, scale: enemyModelScale, face: enemyFaceOffset },
+    enemy:   { url: enemyModelUrl, scale: enemyModelScale, face: enemyFaceOffset, cr: enemyColliderR, yoff: enemyYOffset },
     props:   propModels.filter(Boolean).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
   };
@@ -8494,7 +8503,7 @@ function restoreLevel(level){
   // world + loot
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }
   if(level.chest){ chestModelUrl = level.chest.url||''; chestModelScale = level.chest.scale||1; }
-  if(level.enemy){ enemyModelUrl = level.enemy.url||''; enemyModelScale = level.enemy.scale||1; enemyFaceOffset = level.enemy.face||0; for(const en of enemies) buildEnemyVisual(en.mesh); }   // re-skin any live enemies
+  if(level.enemy){ enemyModelUrl = level.enemy.url||''; enemyModelScale = level.enemy.scale||1; enemyFaceOffset = level.enemy.face||0; enemyColliderR = level.enemy.cr||0; enemyYOffset = level.enemy.yoff||0; for(const en of enemies) buildEnemyVisual(en.mesh); }   // re-skin any live enemies
   selProps.length = 0;
   editorTargets.props.idx = Math.max(0, Math.min(editorTargets.props.idx, propModels.length-1));
   if(typeof syncSelToIdx==='function') syncSelToIdx();
@@ -8862,7 +8871,25 @@ function renderEditorFields(){
     for(const [lab,val] of [['Front (0°)','0'],['Back (180°)',String(Math.PI)],['Right (90°)',String(Math.PI/2)],['Left (-90°)',String(-Math.PI/2)]]){ const o=document.createElement('option'); o.value=val; o.textContent=lab; if(Math.abs(parseFloat(val)-enemyFaceOffset)<0.01) o.selected=true; efSel.appendChild(o); }
     efSel.onchange=()=>{ enemyFaceOffset=parseFloat(efSel.value)||0; };
     eFaceRow.appendChild(efSp); eFaceRow.appendChild(efSel); eHost.appendChild(eFaceRow);
-    hint(eHost, '', '3px 0 0').textContent = 'If the model faces away from you while chasing, change Facing. Apply re-skins enemies already in the arena.';
+    // collider radius — how far enemies stay off walls/props and each other (0 = auto-fit to the model)
+    const ecRow=document.createElement('label'); ecRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
+    const ecSp=document.createElement('span'); ecSp.textContent='Collider radius'; ecSp.style.minWidth='86px';
+    const ecR=document.createElement('input'); ecR.type='range'; ecR.min='0'; ecR.max='4'; ecR.step='0.1'; ecR.value=enemyColliderR; ecR.style.cssText='flex:1;accent-color:#ff8a5b;';
+    const ecN=document.createElement('input'); ecN.type='number'; ecN.min='0'; ecN.max='4'; ecN.step='0.1'; ecN.value=enemyColliderR; ecN.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+    const applyEc=(v)=>{ const m=Math.max(0,Math.min(4,Math.round((parseFloat(v)||0)*10)/10)); ecR.value=m; ecN.value=m; enemyColliderR=m; for(const en of enemies) buildEnemyVisual(en.mesh); };
+    ecR.addEventListener('mousedown',()=>pushUndoSnapshot()); ecN.addEventListener('focus',()=>pushUndoSnapshot());
+    ecR.oninput=()=>applyEc(ecR.value); ecN.onchange=()=>applyEc(ecN.value);
+    ecRow.appendChild(ecSp); ecRow.appendChild(ecR); ecRow.appendChild(ecN); eHost.appendChild(ecRow);
+    // vertical offset — raise/lower the visual model to fix hovering or sinking
+    const eyRow=document.createElement('label'); eyRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
+    const eySp=document.createElement('span'); eySp.textContent='Vertical offset'; eySp.style.minWidth='86px';
+    const eyR=document.createElement('input'); eyR.type='range'; eyR.min='-3'; eyR.max='3'; eyR.step='0.05'; eyR.value=enemyYOffset; eyR.style.cssText='flex:1;accent-color:#ff8a5b;';
+    const eyN=document.createElement('input'); eyN.type='number'; eyN.min='-5'; eyN.max='5'; eyN.step='0.05'; eyN.value=enemyYOffset; eyN.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+    const applyEy=(v)=>{ const m=Math.max(-5,Math.min(5,Math.round((parseFloat(v)||0)*100)/100)); eyR.value=Math.max(-3,Math.min(3,m)); eyN.value=m; enemyYOffset=m; for(const en of enemies) buildEnemyVisual(en.mesh); };
+    eyR.addEventListener('mousedown',()=>pushUndoSnapshot()); eyN.addEventListener('focus',()=>pushUndoSnapshot());
+    eyR.oninput=()=>applyEy(eyR.value); eyN.onchange=()=>applyEy(eyN.value);
+    eyRow.appendChild(eySp); eyRow.appendChild(eyR); eyRow.appendChild(eyN); eHost.appendChild(eyRow);
+    hint(eHost, '', '3px 0 0').textContent = 'If the model faces away while chasing, change Facing. Collider radius 0 = auto-fit; raise it if a wide model clips, lower it if it stops too far away. Vertical offset raises (+) or lowers (−) a model that hovers or sinks. Apply re-skins enemies already in the arena.';
 
     // ===== LOOT section =====
     const lHost = lootHost || worldHost;
