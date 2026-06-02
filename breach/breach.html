@@ -18,13 +18,24 @@
 
   /* Transform editor */
   #editor {
-    position: absolute; top: 0; right: 0; width: 300px; max-height: 100vh;
+    position: absolute; top: 0; right: 0; width: 320px; min-width: 260px; max-width: 92vw; max-height: 100vh;
     overflow-y: auto; pointer-events: auto;
     background: rgba(7,13,18,0.92); border-left: 1px solid rgba(56,245,181,0.35);
     color: #d6f5e8; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
     padding: 12px 14px; z-index: 30;
     box-shadow: -6px 0 24px rgba(0,0,0,0.5);
   }
+  /* drag-to-resize handle on the left edge */
+  #editorResize {
+    position: absolute; top: 0; left: -3px; width: 7px; height: 100%;
+    cursor: ew-resize; z-index: 31; pointer-events: auto;
+  }
+  #editorResize::after {
+    content: ''; position: absolute; top: 50%; left: 1px; transform: translateY(-50%);
+    width: 3px; height: 46px; border-radius: 3px; background: rgba(56,245,181,0.4);
+  }
+  #editorResize:hover::after, #editor.resizing #editorResize::after { background: rgba(56,245,181,0.85); }
+  #editor.resizing { user-select: none; }
   #editor h3 { margin: 0 0 6px; font-size: 13px; color: #38f5b5; letter-spacing: .04em; }
   #editor .hint { color: #5a7d72; font-size: 11px; margin-bottom: 10px; }
   #editor .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
@@ -4821,9 +4832,22 @@ THREE.cloneSkinned = function(source){
     const n = Math.min(orig.children.length, copy.children.length);
     for(let i=0;i<n;i++) parallel(orig.children[i], copy.children[i]);
   })(source, clone);
+  // Map a source bone to its clone. If a bone wasn't reached by the structural walk (orphaned or
+  // oddly-parented bones exist in many exported rigs), clone it on the fly and attach it INSIDE the clone
+  // hierarchy — never fall back to the source bone, which lives in the un-added source tree at the world
+  // origin and would drag the whole model there (the "model stuck at the camera/origin" bug).
+  function mapBone(b){
+    let c = cloneLookup.get(b);
+    if(c) return c;
+    c = b.clone(false);                    // standalone clone of the bone
+    cloneLookup.set(b, c);
+    const parentClone = (b.parent && cloneLookup.get(b.parent)) || clone;   // keep it within the clone's space
+    parentClone.add(c);
+    return c;
+  }
   for(const [orig, copy] of skinnedPairs){
     const skeleton = orig.skeleton;
-    const cloneBones = skeleton.bones.map(b=> cloneLookup.get(b) || b);     // each bone -> its clone
+    const cloneBones = skeleton.bones.map(mapBone);                          // every bone -> a clone (never the source)
     copy.bind(new THREE.Skeleton(cloneBones, skeleton.boneInverses.slice()),
               orig.bindMatrix ? orig.bindMatrix.clone() : copy.bindMatrix);
   }
@@ -6633,7 +6657,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 19 · 2026-06-01';
+const BUILD_VERSION = 'build 21 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8028,28 +8052,10 @@ function ppSearch(query, cb, errcb){
 function renderModelBrowser(host){
   host.innerHTML = '';
   const head = document.createElement('div'); head.className='hint'; head.style.margin='8px 0 4px';
-  head.innerHTML = '<b>Poly Pizza</b> — search thousands of free models, click one to add it. Needs an API key + network.';
+  head.innerHTML = '<b>Poly Pizza</b> — search thousands of free models, click one to add it.';
   host.appendChild(head);
 
-  // API key row
-  const keyRow = document.createElement('div'); keyRow.className='row2'; keyRow.style.marginBottom='4px';
-  const keyInp = document.createElement('input'); keyInp.type='text'; keyInp.placeholder='Paste API key'; keyInp.value=ppGetKey();
-  keyInp.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
-  keyInp.oninput=()=>ppSetKey(keyInp.value.trim());
-  keyRow.appendChild(keyInp); host.appendChild(keyRow);
-  const keyHint = document.createElement('div'); keyHint.className='hint'; keyHint.style.cssText='margin:-2px 0 6px;font-size:10px;opacity:.75';
-  keyHint.textContent = 'Free key at poly.pizza/settings/api — stored in this browser only.';
-  host.appendChild(keyHint);
-
-  // CORS proxy row (Poly Pizza blocks direct browser calls; a Cloudflare Worker relays them)
-  const proxyRow = document.createElement('div'); proxyRow.className='row2'; proxyRow.style.marginBottom='2px';
-  const proxyInp = document.createElement('input'); proxyInp.type='text'; proxyInp.placeholder='CORS proxy URL (Cloudflare Worker)'; proxyInp.value=ppProxy();
-  proxyInp.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
-  proxyInp.oninput=()=>ppSetProxy(proxyInp.value);
-  proxyRow.appendChild(proxyInp); host.appendChild(proxyRow);
-  const proxyHint = document.createElement('div'); proxyHint.className='hint'; proxyHint.style.cssText='margin:-2px 0 6px;font-size:10px;opacity:.75';
-  proxyHint.textContent = "Required — Poly Pizza blocks direct browser calls. Deploy the included polypizza-proxy.js as a free Cloudflare Worker and paste its URL here.";
-  host.appendChild(proxyHint);
+  // (API key + CORS proxy use baked-in defaults; advanced overrides remain via localStorage 'pp_api_key' / 'pp_proxy'.)
 
   // search row
   const sRow = document.createElement('div'); sRow.className='row2'; sRow.style.marginBottom='4px';
@@ -8111,8 +8117,9 @@ function buildEditorPanel(){
     '<div class="edSection" data-sec="'+key+'">'
     + '<div class="edSecHead"><span class="edCaret">▾</span>'+title+'</div>'
     + '<div class="edSecBody">'+innerHtml+'</div></div>';
-  p.innerHTML = '<h3>LEVEL / TRANSFORM EDITOR</h3>'
-    + '<div class="hint">Click any object in the scene to select it. <b>Shift+click</b> props to select several and move/rotate/scale them as a group. Pick <b>Move / Rotate / Scale</b>, drag the handles, or type values. <b>Shift+D</b> duplicates; <b>Delete</b> removes. Section headers below collapse. Press P to close.</div>'
+  p.innerHTML = '<div id="editorResize" title="Drag to resize"></div>'
+    + '<h3>LEVEL / TRANSFORM EDITOR</h3>'
+    + '<div class="hint">Click an object to select it. <b>Shift+click</b> props to multi-select. Use <b>Move / Rotate / Scale</b> + the handles, or type values. <b>Shift+D</b> duplicates, <b>Delete</b> removes. Drag the left edge to resize. Press <b>P</b> to close.</div>'
     + '<div class="tabs" id="edTabs"></div>'
     + '<div class="row2" id="edView" style="margin-bottom:8px"></div>'
     + sec('Gizmo', 'gizmo', '<div id="edGizmo"></div>')
@@ -8120,19 +8127,33 @@ function buildEditorPanel(){
     + sec('Material', 'material', '<div id="edMaterial"></div>')
     + sec('Transform', 'transform', '<div id="edFields"></div>')
     + sec('World &amp; loot', 'world', '<div id="edWorld"></div>')
-    + '<div class="row2" style="margin-top:6px"><button id="edReset">Reset target</button><button id="edCopy">Copy code</button></div>'
-    + '<div class="row2" style="margin-top:6px"><button id="edSave">💾 Save level</button><button id="edClear">Clear save</button></div>'
-    + '<div class="row2" style="margin-top:6px"><button id="edExport">⬇ Export .json</button><button id="edImport">⬆ Import .json</button></div>'
-    + '<input type="file" id="edImportFile" accept=".json,application/json" style="display:none">'
-    + '<div class="copied" id="edCopied"></div>'
-    + '<textarea id="edOut" readonly></textarea>';
+    + sec('Level file', 'levelfile',
+        '<div class="row2"><button id="edSave">💾 Save</button><button id="edClear">Clear save</button></div>'
+      + '<div class="row2" style="margin-top:6px"><button id="edExport">⬇ Export .json</button><button id="edImport">⬆ Import .json</button></div>'
+      + '<input type="file" id="edImportFile" accept=".json,application/json" style="display:none">'
+      + '<div class="row2" style="margin-top:6px"><button id="edReset">Reset target</button><button id="edCopy">Copy code</button></div>'
+      + '<div class="copied" id="edCopied"></div>'
+      + '<textarea id="edOut" readonly></textarea>')
+    ;
   document.body.appendChild(p);
   editorEl = p;
+  // restore saved width + wire drag-to-resize (drag the left edge; wider = more room for the crowded panels)
+  try{ const w = parseInt(localStorage.getItem('breach_editor_width')||'',10); if(w>=260 && w<=window.innerWidth*0.92) p.style.width = w+'px'; }catch(e){}
+  (function(){
+    const h = p.querySelector('#editorResize'); if(!h) return;
+    let dragging=false;
+    h.addEventListener('pointerdown', (e)=>{ dragging=true; p.classList.add('resizing'); h.setPointerCapture(e.pointerId); e.preventDefault(); });
+    h.addEventListener('pointermove', (e)=>{ if(!dragging) return; const w=Math.max(260, Math.min(window.innerWidth*0.92, window.innerWidth - e.clientX)); p.style.width = w+'px'; });
+    const end=()=>{ if(!dragging) return; dragging=false; p.classList.remove('resizing'); try{ localStorage.setItem('breach_editor_width', parseInt(p.style.width,10)||320); }catch(e){} };
+    h.addEventListener('pointerup', end); h.addEventListener('pointercancel', end);
+  })();
   // collapsible section headers (state persists in localStorage so it survives reopening the editor)
   let secState = {}; try{ secState = JSON.parse(localStorage.getItem('breach_editor_sections')||'{}') || {}; }catch(e){}
+  const defaultCollapsed = { material:true, world:true, levelfile:true };   // keep Gizmo/Object/Transform open by default
   p.querySelectorAll('.edSection').forEach(s=>{
     const k = s.dataset.sec;
-    if(secState[k] === true) s.classList.add('collapsed');   // default expanded; only collapse if saved
+    const collapsed = (k in secState) ? secState[k]===true : !!defaultCollapsed[k];
+    if(collapsed) s.classList.add('collapsed');
     s.querySelector('.edSecHead').onclick = ()=>{
       s.classList.toggle('collapsed');
       secState[k] = s.classList.contains('collapsed');
