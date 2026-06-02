@@ -6746,7 +6746,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 23 · 2026-06-01';
+const BUILD_VERSION = 'build 24 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8241,7 +8241,9 @@ function buildEditorPanel(){
     + sec('Object &amp; selection', 'object', '<div id="edPicker"></div><div id="edLibrary"></div><div id="edModels"></div><div id="edAnim"></div><div id="edUrl"></div>')
     + sec('Material', 'material', '<div id="edMaterial"></div>')
     + sec('Transform', 'transform', '<div id="edFields"></div>')
-    + sec('World &amp; loot', 'world', '<div id="edWorld"></div>')
+    + sec('World', 'world', '<div id="edWorld"></div>')
+    + sec('Enemies', 'enemies', '<div id="edEnemies"></div>')
+    + sec('Loot', 'loot', '<div id="edLoot"></div>')
     + sec('Level file', 'levelfile',
         '<div class="row2"><button id="edSave">💾 Save</button><button id="edClear">Clear save</button></div>'
       + '<div class="row2" style="margin-top:6px"><button id="edExport">⬇ Export .json</button><button id="edImport">⬆ Import .json</button></div>'
@@ -8264,7 +8266,7 @@ function buildEditorPanel(){
   })();
   // collapsible section headers (state persists in localStorage so it survives reopening the editor)
   let secState = {}; try{ secState = JSON.parse(localStorage.getItem('breach_editor_sections')||'{}') || {}; }catch(e){}
-  const defaultCollapsed = { material:true, world:true, levelfile:true };   // keep Gizmo/Object/Transform open by default
+  const defaultCollapsed = { material:true, world:true, enemies:true, loot:true, levelfile:true };   // keep Gizmo/Object/Transform open by default
   p.querySelectorAll('.edSection').forEach(s=>{
     const k = s.dataset.sec;
     const collapsed = (k in secState) ? secState[k]===true : !!defaultCollapsed[k];
@@ -8334,11 +8336,16 @@ function renderEditorFields(){
   editorEl.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.key===editorActive));
   const tgt = editorTargets[editorActive];
 
-  // ---- World & loot (global settings; independent of the selected object) ----
-  const worldHost = editorEl.querySelector('#edWorld');
+  // ---- World / Enemies / Loot (global settings; independent of the selected object) ----
+  const worldHost   = editorEl.querySelector('#edWorld');
+  const enemyHost   = editorEl.querySelector('#edEnemies');
+  const lootHost    = editorEl.querySelector('#edLoot');
   if(worldHost){
     worldHost.innerHTML = '';
-    const slider = (label, key, min, max, step, suffix)=>{
+    if(enemyHost) enemyHost.innerHTML = '';
+    if(lootHost) lootHost.innerHTML = '';
+    // helpers take an explicit host so they can populate any of the three sections
+    const slider = (host, label, key, min, max, step)=>{
       const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:5px 0;';
       const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='86px';
       const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=worldCfg[key]; rng.style.cssText='flex:1;accent-color:#38f5b5;';
@@ -8346,108 +8353,96 @@ function renderEditorFields(){
       const apply=(v)=>{ worldCfg[key]=parseFloat(v)||0; applyWorldCfg(); rng.value=worldCfg[key]; num.value=+(+worldCfg[key]).toFixed(2); };
       rng.oninput=()=>apply(rng.value); num.onchange=()=>apply(num.value);
       rng.addEventListener('mousedown', ()=>pushUndoSnapshot()); num.addEventListener('focus', ()=>pushUndoSnapshot());
-      row.appendChild(sp); row.appendChild(rng); row.appendChild(num); worldHost.appendChild(row);
+      row.appendChild(sp); row.appendChild(rng); row.appendChild(num); host.appendChild(row);
     };
-    const mh=document.createElement('div'); mh.className='hint'; mh.style.margin='2px 0 4px'; mh.innerHTML='<b>Movement</b> — applies live; saved with the level';
-    worldHost.appendChild(mh);
-    slider('Walk speed','walk', 4, 60, 1);
-    slider('Run speed','run', 4, 100, 1);
-    slider('Crouch speed','crouch', 1, 40, 1);
-    slider('Jump','jump', 0, 30, 0.5);
-    slider('Gravity','grav', 5, 80, 1);
-    const gnote=document.createElement('div'); gnote.className='hint'; gnote.style.margin='1px 0 8px'; gnote.textContent='Crouch: hold Ctrl or C (R3 on a controller). Gravity change affects props on next Deploy.';
-    worldHost.appendChild(gnote);
-    // global lighting
-    const lgh=document.createElement('div'); lgh.className='hint'; lgh.style.margin='6px 0 4px'; lgh.innerHTML='<b>Lighting</b> — applies live; saved with the level';
-    worldHost.appendChild(lgh);
-    slider('Sun (directional)','sun', 0, 4, 0.05);
-    slider('Sky (ambient fill)','sky', 0, 3, 0.05);
-    slider('Brightness lift','ambient', 0, 2, 0.05);
-    const scRow=document.createElement('label'); scRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 8px;';
-    const scSp=document.createElement('span'); scSp.textContent='Sun color'; scSp.style.minWidth='86px';
-    const sc=document.createElement('input'); sc.type='color'; sc.value='#'+((worldCfg.sunColor>>>0)&0xffffff).toString(16).padStart(6,'0'); sc.style.cssText='width:48px;height:24px;background:#0c1418;border:1px solid #2a3a42;border-radius:4px;cursor:pointer;';
-    sc.addEventListener('mousedown', ()=>pushUndoSnapshot());
-    sc.oninput=()=>{ worldCfg.sunColor = parseInt(sc.value.slice(1),16)||0; applyWorldCfg(); };
-    scRow.appendChild(scSp); scRow.appendChild(sc); worldHost.appendChild(scRow);
-
-    // helpers for the surface/sky rows below
+    const hint = (host, html, margin)=>{ const d=document.createElement('div'); d.className='hint'; d.style.margin=margin||'6px 0 4px'; d.innerHTML=html; host.appendChild(d); return d; };
     const hexStr = (n)=> '#'+((n>>>0)&0xffffff).toString(16).padStart(6,'0');
-    const colorRow = (labelText, key)=>{
+    const colorRow = (host, labelText, key)=>{
       const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;';
       const sp=document.createElement('span'); sp.textContent=labelText; sp.style.minWidth='86px';
       const inp=document.createElement('input'); inp.type='color'; inp.value=hexStr(worldCfg[key]); inp.style.cssText='width:48px;height:24px;background:#0c1418;border:1px solid #2a3a42;border-radius:4px;cursor:pointer;';
       inp.addEventListener('mousedown', ()=>pushUndoSnapshot());
       inp.oninput=()=>{ worldCfg[key]=parseInt(inp.value.slice(1),16)||0; applyWorldCfg(); };
-      row.appendChild(sp); row.appendChild(inp); worldHost.appendChild(row);
+      row.appendChild(sp); row.appendChild(inp); host.appendChild(row);
     };
-    const texRow = (placeholder, key)=>{
+    const texRow = (host, placeholder, key)=>{
       const row=document.createElement('div'); row.style.cssText='display:flex;gap:6px;align-items:center;margin:2px 0 6px;';
       const inp=document.createElement('input'); inp.type='text'; inp.placeholder=placeholder; inp.value=worldCfg[key]||''; inp.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
       const ab=document.createElement('button'); ab.textContent='Apply'; ab.style.flex='0 0 auto';
       const apply=()=>{ pushUndoSnapshot(); worldCfg[key]=inp.value.trim(); applyWorldCfg(); };
       ab.onclick=apply; inp.addEventListener('keydown', e=>{ if(e.code==='Enter'){ e.preventDefault(); apply(); } });
-      row.appendChild(inp); row.appendChild(ab); worldHost.appendChild(row);
+      row.appendChild(inp); row.appendChild(ab); host.appendChild(row);
     };
 
-    // arena size
-    const ah=document.createElement('div'); ah.className='hint'; ah.style.margin='10px 0 4px'; ah.innerHTML='<b>Arena</b> — playable half-size (rebuilds floor + walls live)';
-    worldHost.appendChild(ah);
-    slider('Arena size','arena', 15, 400, 1);
+    // ===== WORLD section: movement, lighting, arena, sky, floor/walls =====
+    hint(worldHost, '<b>Movement</b> — applies live; saved with the level', '2px 0 4px');
+    slider(worldHost, 'Walk speed','walk', 4, 60, 1);
+    slider(worldHost, 'Run speed','run', 4, 100, 1);
+    slider(worldHost, 'Crouch speed','crouch', 1, 40, 1);
+    slider(worldHost, 'Jump','jump', 0, 30, 0.5);
+    slider(worldHost, 'Gravity','grav', 5, 80, 1);
+    hint(worldHost, '', '1px 0 8px').textContent = 'Crouch: hold Ctrl or C (R3 on a controller). Gravity change affects props on next Deploy.';
 
-    // sky / HDRI
-    const skh=document.createElement('div'); skh.className='hint'; skh.style.margin='10px 0 4px'; skh.innerHTML='<b>Sky</b> — equirectangular panorama (.jpg/.png/.hdr). Lights reflections too. Blank = flat color.';
-    worldHost.appendChild(skh);
-    texRow('https://…/sky.jpg (equirectangular)', 'sky_hdri');
+    hint(worldHost, '<b>Lighting</b> — applies live; saved with the level');
+    slider(worldHost, 'Sun (directional)','sun', 0, 4, 0.05);
+    slider(worldHost, 'Sky (ambient fill)','sky', 0, 3, 0.05);
+    slider(worldHost, 'Brightness lift','ambient', 0, 2, 0.05);
+    const scRow=document.createElement('label'); scRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 8px;';
+    const scSp=document.createElement('span'); scSp.textContent='Sun color'; scSp.style.minWidth='86px';
+    const sc=document.createElement('input'); sc.type='color'; sc.value=hexStr(worldCfg.sunColor); sc.style.cssText='width:48px;height:24px;background:#0c1418;border:1px solid #2a3a42;border-radius:4px;cursor:pointer;';
+    sc.addEventListener('mousedown', ()=>pushUndoSnapshot());
+    sc.oninput=()=>{ worldCfg.sunColor = parseInt(sc.value.slice(1),16)||0; applyWorldCfg(); };
+    scRow.appendChild(scSp); scRow.appendChild(sc); worldHost.appendChild(scRow);
 
-    // floor material
-    const fh=document.createElement('div'); fh.className='hint'; fh.style.margin='10px 0 4px'; fh.innerHTML='<b>Floor</b> — color + optional tiling texture';
-    worldHost.appendChild(fh);
-    colorRow('Floor color', 'floorColor');
-    texRow('https://…/floor.jpg (tiles)', 'floorTex');
+    hint(worldHost, '<b>Arena</b> — playable half-size (rebuilds floor + walls live)', '10px 0 4px');
+    slider(worldHost, 'Arena size','arena', 15, 400, 1);
 
-    // wall material
-    const wh2=document.createElement('div'); wh2.className='hint'; wh2.style.margin='6px 0 4px'; wh2.innerHTML='<b>Walls</b> — color + optional tiling texture';
-    worldHost.appendChild(wh2);
-    colorRow('Wall color', 'wallColor');
-    texRow('https://…/wall.jpg (tiles)', 'wallTex');
+    hint(worldHost, '<b>Sky</b> — equirectangular panorama (.jpg/.png/.hdr). Lights reflections too. Blank = flat color.', '10px 0 4px');
+    texRow(worldHost, 'https://…/sky.jpg (equirectangular)', 'sky_hdri');
 
-    // loot box model
-    const lh=document.createElement('div'); lh.className='hint'; lh.style.margin='6px 0 4px'; lh.innerHTML='<b>Loot box</b> — GLB model URL (blank = built-in chest)';
-    worldHost.appendChild(lh);
-    const urlRow=document.createElement('div'); urlRow.style.cssText='display:flex;gap:6px;align-items:center;';
-    const url=document.createElement('input'); url.type='text'; url.placeholder='https://…/lootbox.glb'; url.value=chestModelUrl; url.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
-    const ab=document.createElement('button'); ab.textContent='Apply';
-    ab.onclick=()=>{ pushUndoSnapshot(); swapChestModel(url.value); for(const ch of chests.slice()){ scene.remove(ch.mesh); } chests.length=0; chestTimer=Math.min(chestTimer,2); };
-    urlRow.appendChild(url); urlRow.appendChild(ab); worldHost.appendChild(urlRow);
-    const sRow=document.createElement('label'); sRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 2px;';
-    const sSp=document.createElement('span'); sSp.textContent='Model scale'; sSp.style.minWidth='86px';
-    const sNum=document.createElement('input'); sNum.type='number'; sNum.min='0.05'; sNum.max='50'; sNum.step='0.05'; sNum.value=chestModelScale; sNum.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
-    sNum.onchange=()=>{ chestModelScale=Math.max(0.05,Math.min(50,parseFloat(sNum.value)||1)); };
-    sRow.appendChild(sSp); sRow.appendChild(sNum); worldHost.appendChild(sRow);
-    const lnote=document.createElement('div'); lnote.className='hint'; lnote.style.marginTop='3px'; lnote.textContent='Apply clears current loot boxes so the next spawn uses the new model.';
-    worldHost.appendChild(lnote);
+    hint(worldHost, '<b>Floor</b> — color + optional tiling texture', '10px 0 4px');
+    colorRow(worldHost, 'Floor color', 'floorColor');
+    texRow(worldHost, 'https://…/floor.jpg (tiles)', 'floorTex');
 
-    // enemy model
-    const eh=document.createElement('div'); eh.className='hint'; eh.style.margin='10px 0 4px'; eh.innerHTML='<b>Enemy model</b> — animated GLB URL (blank = default capsule). Looping clips auto-play.';
-    worldHost.appendChild(eh);
+    hint(worldHost, '<b>Walls</b> — color + optional tiling texture');
+    colorRow(worldHost, 'Wall color', 'wallColor');
+    texRow(worldHost, 'https://…/wall.jpg (tiles)', 'wallTex');
+
+    // ===== ENEMIES section =====
+    const eHost = enemyHost || worldHost;
+    hint(eHost, '<b>Enemy model</b> — animated GLB URL (blank = default capsule). Looping clips auto-play.', '2px 0 4px');
     const eRow=document.createElement('div'); eRow.style.cssText='display:flex;gap:6px;align-items:center;';
     const eUrl=document.createElement('input'); eUrl.type='text'; eUrl.placeholder='https://…/enemy.glb'; eUrl.value=enemyModelUrl; eUrl.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
-    const eAb=document.createElement('button'); eAb.textContent='Apply';
+    const eAb=document.createElement('button'); eAb.textContent='Apply'; eAb.style.flex='0 0 auto';
     eAb.onclick=()=>{ pushUndoSnapshot(); swapEnemyModel(eUrl.value); for(const en of enemies) buildEnemyVisual(en.mesh); };   // re-skin existing enemies immediately
-    eRow.appendChild(eUrl); eRow.appendChild(eAb); worldHost.appendChild(eRow);
+    eRow.appendChild(eUrl); eRow.appendChild(eAb); eHost.appendChild(eRow);
     const eScaleRow=document.createElement('label'); eScaleRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 2px;';
     const esSp=document.createElement('span'); esSp.textContent='Model scale'; esSp.style.minWidth='86px';
     const esNum=document.createElement('input'); esNum.type='number'; esNum.min='0.05'; esNum.max='50'; esNum.step='0.05'; esNum.value=enemyModelScale; esNum.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
     esNum.onchange=()=>{ enemyModelScale=Math.max(0.05,Math.min(50,parseFloat(esNum.value)||1)); for(const en of enemies) buildEnemyVisual(en.mesh); };
-    eScaleRow.appendChild(esSp); eScaleRow.appendChild(esNum); worldHost.appendChild(eScaleRow);
+    eScaleRow.appendChild(esSp); eScaleRow.appendChild(esNum); eHost.appendChild(eScaleRow);
     const eFaceRow=document.createElement('label'); eFaceRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
     const efSp=document.createElement('span'); efSp.textContent='Facing'; efSp.style.minWidth='86px';
     const efSel=document.createElement('select'); efSel.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
     for(const [lab,val] of [['Front (0°)','0'],['Back (180°)',String(Math.PI)],['Right (90°)',String(Math.PI/2)],['Left (-90°)',String(-Math.PI/2)]]){ const o=document.createElement('option'); o.value=val; o.textContent=lab; if(Math.abs(parseFloat(val)-enemyFaceOffset)<0.01) o.selected=true; efSel.appendChild(o); }
     efSel.onchange=()=>{ enemyFaceOffset=parseFloat(efSel.value)||0; };
-    eFaceRow.appendChild(efSp); eFaceRow.appendChild(efSel); worldHost.appendChild(eFaceRow);
-    const enote=document.createElement('div'); enote.className='hint'; enote.style.marginTop='3px'; enote.textContent='If the model faces away from you while chasing, change Facing. Apply re-skins enemies already in the arena.';
-    worldHost.appendChild(enote);
+    eFaceRow.appendChild(efSp); eFaceRow.appendChild(efSel); eHost.appendChild(eFaceRow);
+    hint(eHost, '', '3px 0 0').textContent = 'If the model faces away from you while chasing, change Facing. Apply re-skins enemies already in the arena.';
+
+    // ===== LOOT section =====
+    const lHost = lootHost || worldHost;
+    hint(lHost, '<b>Loot box</b> — GLB model URL (blank = built-in chest)', '2px 0 4px');
+    const urlRow=document.createElement('div'); urlRow.style.cssText='display:flex;gap:6px;align-items:center;';
+    const url=document.createElement('input'); url.type='text'; url.placeholder='https://…/lootbox.glb'; url.value=chestModelUrl; url.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+    const ab=document.createElement('button'); ab.textContent='Apply'; ab.style.flex='0 0 auto';
+    ab.onclick=()=>{ pushUndoSnapshot(); swapChestModel(url.value); for(const ch of chests.slice()){ scene.remove(ch.mesh); } chests.length=0; chestTimer=Math.min(chestTimer,2); };
+    urlRow.appendChild(url); urlRow.appendChild(ab); lHost.appendChild(urlRow);
+    const sRow=document.createElement('label'); sRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 2px;';
+    const sSp=document.createElement('span'); sSp.textContent='Model scale'; sSp.style.minWidth='86px';
+    const sNum=document.createElement('input'); sNum.type='number'; sNum.min='0.05'; sNum.max='50'; sNum.step='0.05'; sNum.value=chestModelScale; sNum.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+    sNum.onchange=()=>{ chestModelScale=Math.max(0.05,Math.min(50,parseFloat(sNum.value)||1)); };
+    sRow.appendChild(sSp); sRow.appendChild(sNum); lHost.appendChild(sRow);
+    hint(lHost, '', '3px 0 0').textContent = 'Apply clears current loot boxes so the next spawn uses the new model.';
   }
 
   // global view toggles (overhead camera, hide enemies)
