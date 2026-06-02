@@ -5551,7 +5551,6 @@ function swapGunModel(url, key){
     showWeaponModel(curWep);
   }
 }
-loadGunModel();
 
 // muzzle flash
 const muzzle = new THREE.PointLight(0xffcf6b, 0, 8);
@@ -5568,6 +5567,7 @@ const WEAPONS = {
 };
 let owned = ['rifle'];           // weapons the player has
 let curWep = 'rifle';            // current weapon key
+loadGunModel();                  // load the starting weapon's viewmodel (now that WEAPONS/curWep exist)
 function W(){ return WEAPONS[curWep]; }
 let reloading = false;
 let lastShot = 0, recoil = 0;
@@ -6546,7 +6546,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 15 · 2026-06-01';
+const BUILD_VERSION = 'build 16 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
