@@ -6780,7 +6780,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 25 · 2026-06-01';
+const BUILD_VERSION = 'build 26 · 2026-06-01';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8433,6 +8433,25 @@ function renderEditorFields(){
 
     hint(worldHost, '<b>Sky</b> — equirectangular panorama as <b>.jpg or .png</b> (not .hdr). Lights reflections too. Blank = flat color.', '10px 0 4px');
     texRow(worldHost, 'https://…/sky.jpg (equirectangular)', 'sky_hdri');
+    // one-tap presets — verified 2:1 equirectangular JPGs that load directly (CORS-open, no proxy needed)
+    const skyPresets = [
+      ['Park',     'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/2294472375_24a3b8ef46_o.jpg'],
+      ['Mountain', 'https://raw.githubusercontent.com/aframevr/aframe/master/examples/boilerplate/panorama/puydesancy.jpg'],
+      ['Room',     'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/kandao3.jpg'],
+      ['None',     ''],
+    ];
+    const presetRow = document.createElement('div'); presetRow.style.cssText='display:flex;flex-wrap:wrap;gap:5px;margin:2px 0 4px;';
+    for(const [label, purl] of skyPresets){
+      const b = document.createElement('button'); b.textContent = label; b.style.cssText = 'flex:0 0 auto;padding:4px 10px;font-size:11px;';
+      b.onclick = ()=>{
+        pushUndoSnapshot();
+        worldCfg.sky_hdri = purl;
+        applyWorldCfg();
+        renderEditorFields();   // re-render so the URL field shows the chosen preset
+      };
+      presetRow.appendChild(b);
+    }
+    worldHost.appendChild(presetRow);
     const skStatus=document.createElement('div'); skStatus.id='edSkyStatus'; skStatus.className='hint'; skStatus.style.cssText='margin:-2px 0 6px;font-size:10px;'; worldHost.appendChild(skStatus);
 
     hint(worldHost, '<b>Floor</b> — color + optional tiling texture', '10px 0 4px');
