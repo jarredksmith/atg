@@ -5975,7 +5975,7 @@ function showWeaponModel(key){
     if(gunPlaceholder) gunPlaceholder.visible = false;
     gunModel = existing;
     sight = null;
-    if(typeof editorTargets!=='undefined' && editorTargets.gun) editorTargets.gun.apply();
+    applyWepView(existing, key);   // show THIS weapon's own framing — never stamp the editor's (stale) state onto it
     return;
   }
   // not loaded yet — keep placeholder visible until it arrives
@@ -5991,7 +5991,7 @@ function showWeaponModel(key){
       model.visible = (key === curWep);          // only show if it's still the active weapon
       if(model.visible){ if(gunPlaceholder) gunPlaceholder.visible=false; gunModel = model; sight = null; }
       playModelAnimations(model, gltf);
-      if(model.visible && typeof editorTargets!=='undefined' && editorTargets.gun) editorTargets.gun.apply();
+      if(model.visible) applyWepView(model, key);   // reassert this weapon's own framing once it's live
       console.log('Weapon model loaded:', key, url);
     },
     (err)=>{ console.warn('Weapon model load failed for', key, '-', err && err.message); }   // placeholder stays
@@ -7172,7 +7172,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 43 · 2026-06-02';
+const BUILD_VERSION = 'build 44 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
