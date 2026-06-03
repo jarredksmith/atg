@@ -5563,7 +5563,7 @@ function removeSpawnMarker(idx){
   if(g.userData.routeViz){ g.userData.routeViz.traverse(o=>{ if(o.geometry) o.geometry.dispose(); if(o.material && o.material.dispose) o.material.dispose(); }); scene.remove(g.userData.routeViz); }
   scene.remove(g); spawnMarkers.splice(idx,1);
 }
-function setSpawnMarkersVisible(v){ for(const g of spawnMarkers){ g.visible = v; if(g.userData.routeViz) g.userData.routeViz.visible = v; } }
+function setSpawnMarkersVisible(v){ for(const g of spawnMarkers){ g.visible = v; if(g.userData.routeViz) g.userData.routeViz.visible = v; } if(playerSpawnMarker) playerSpawnMarker.visible = v; }
 for(const sp of ((savedLevel && Array.isArray(savedLevel.spawns)) ? savedLevel.spawns : [])) buildSpawnMarker(sp);
 
 // ---------- Enemy archetypes + wave/game config ----------
@@ -5602,6 +5602,31 @@ let gameCfg = {
   mode: (savedLevel && savedLevel.game && savedLevel.game.mode) || (spawnMarkers.length ? 'prebuilt' : 'random'),
   winWaves: (savedLevel && savedLevel.game && savedLevel.game.winWaves!=null) ? savedLevel.game.winWaves : 0,   // 0 = endless
 };
+
+// ---------- Player start (where you/co-op players spawn each run; authored in-editor) ----------
+let playerSpawn = {
+  x:   (savedLevel && savedLevel.pstart && savedLevel.pstart.x  !=null) ? savedLevel.pstart.x   : 0,
+  z:   (savedLevel && savedLevel.pstart && savedLevel.pstart.z  !=null) ? savedLevel.pstart.z   : 0,
+  yaw: (savedLevel && savedLevel.pstart && savedLevel.pstart.yaw!=null) ? savedLevel.pstart.yaw : 0,
+};
+let playerSpawnMarker = null;
+function buildPlayerSpawnMarker(){
+  const g = new THREE.Group();
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(0.95, 28), new THREE.MeshBasicMaterial({ color:0x0ea5e9, transparent:true, opacity:0.22, side:THREE.DoubleSide, depthTest:false }));
+  disc.rotation.x = -Math.PI/2; disc.position.y = 0.04; disc.renderOrder = 8999; g.add(disc);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.98, 0.08, 8, 30), new THREE.MeshBasicMaterial({ color:0x38bdf8, transparent:true, opacity:0.95, depthTest:false }));
+  ring.rotation.x = Math.PI/2; ring.position.y = 0.05; ring.renderOrder = 9000; g.add(ring);
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.7, 8), new THREE.MeshBasicMaterial({ color:0x38bdf8, transparent:true, opacity:0.8, depthTest:false }));
+  pole.position.y = 0.9; pole.renderOrder = 9000; g.add(pole);
+  const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.6, 10), new THREE.MeshBasicMaterial({ color:0xffffff, depthTest:false }));
+  arrow.rotation.x = Math.PI/2; arrow.position.set(0, 0.18, -1.1); arrow.renderOrder = 9001; g.add(arrow);   // points to the spawn facing (-Z forward)
+  g.userData.isPlayerStart = true; g.userData.post = pole;
+  g.position.set(playerSpawn.x, 0, playerSpawn.z); g.rotation.y = playerSpawn.yaw;
+  g.visible = false; scene.add(g);
+  return g;
+}
+function refreshPlayerSpawnMarker(){ if(playerSpawnMarker){ playerSpawnMarker.position.set(playerSpawn.x, 0, playerSpawn.z); playerSpawnMarker.rotation.y = playerSpawn.yaw; } }
+playerSpawnMarker = buildPlayerSpawnMarker();
 
 // ---------- Player / controls ----------
 const player = {
@@ -6396,6 +6421,7 @@ function loadLevelFromNet(level){
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns){ const g=buildSpawnMarker(sp); g.visible = editorOpen; } }
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; }
+  if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; refreshPlayerSpawnMarker(); }
   if(level.enemy){   // adopt the host's enemy model + collider/offset so clients render the same hostiles
     enemyModelUrl = level.enemy.url||''; enemyModelScale = level.enemy.scale||1; enemyFaceOffset = level.enemy.face||0;
     enemyColliderR = level.enemy.cr||0; enemyYOffset = level.enemy.yoff||0; enemyXOffset = level.enemy.xoff||0; enemyZOffset = level.enemy.zoff||0;
@@ -7137,7 +7163,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 39 · 2026-06-02';
+const BUILD_VERSION = 'build 40 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8587,6 +8613,12 @@ const editorTargets = {
       g.position.set(s.px, 0, s.pz); m.radius=Math.max(0,s.radius); m.detect=Math.max(1,s.detect); refreshSpawnRings(g); refreshRouteViz(g); },
     code(){ return '// ===== Enemy spawns ===== (authored in-editor; saved in the level JSON under "spawns")'; }
   },
+  pstart: {
+    label: 'Player start',
+    isPstart: true,
+    obj(){ return playerSpawnMarker; },
+    code(){ return '// ===== Player start ===== (saved in the level JSON under "pstart")'; }
+  },
 };
 let editorActive = 'gun';
 let editorEl = null;
@@ -8763,6 +8795,7 @@ function serializeLevel(){
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
     game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves },
+    pstart:  { x: playerSpawn.x, z: playerSpawn.z, yaw: playerSpawn.yaw },
   };
 }
 function saveLevel(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(serializeLevel())); return true; } catch(e){ return false; } }
@@ -8799,6 +8832,8 @@ function restoreLevel(level){
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns){ const g=buildSpawnMarker(sp); g.visible = editorOpen; } }
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; }
+  if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; } else { playerSpawn.x=0; playerSpawn.z=0; playerSpawn.yaw=0; }
+  refreshPlayerSpawnMarker();
   // gun / aim / station
   if(level.gun){ if(level.gun.url && level.gun.url!==gunModelUrl) swapGunModel(level.gun.url); Object.assign(editorTargets.gun.state, level.gun.state||{}); editorTargets.gun.apply(); }
   // per-weapon models + framing
@@ -9276,6 +9311,25 @@ function renderEditorFields(){
   // prop picker (only for the selectable Props target)
   const picker = editorEl.querySelector('#edPicker');
   picker.innerHTML = '';
+  if(tgt.isPstart){
+    const h=document.createElement('div'); h.className='hint'; h.style.margin='0 0 6px';
+    h.innerHTML='This is where you (and co-op players) spawn at the start of a run. Drag the <b>blue marker</b> with the move gizmo to position it; use the rotate gizmo or the slider below to set which way you face.';
+    picker.appendChild(h);
+    const fl=document.createElement('label'); fl.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
+    const fsp=document.createElement('span'); fsp.textContent='Facing°'; fsp.style.minWidth='70px';
+    const deg=Math.round(playerSpawn.yaw*180/Math.PI);
+    const fr=document.createElement('input'); fr.type='range'; fr.min='-180'; fr.max='180'; fr.step='1'; fr.value=deg; fr.style.cssText='flex:1;accent-color:#38bdf8;';
+    const fn=document.createElement('input'); fn.type='number'; fn.min='-180'; fn.max='180'; fn.step='1'; fn.value=deg; fn.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+    const apF=(v)=>{ const d=Math.max(-180,Math.min(180,Math.round(parseFloat(v)||0))); fr.value=d; fn.value=d; playerSpawn.yaw=d*Math.PI/180; refreshPlayerSpawnMarker(); };
+    fr.addEventListener('mousedown',()=>pushUndoSnapshot()); fn.addEventListener('focus',()=>pushUndoSnapshot());
+    fr.oninput=()=>apF(fr.value); fn.onchange=()=>apF(fn.value);
+    fl.appendChild(fsp); fl.appendChild(fr); fl.appendChild(fn); picker.appendChild(fl);
+    const pr=document.createElement('div'); pr.className='hint'; pr.style.margin='4px 0 6px'; pr.textContent='Position:  X '+playerSpawn.x.toFixed(1)+'   Z '+playerSpawn.z.toFixed(1)+'   (drag the gizmo to move)';
+    picker.appendChild(pr);
+    const ctr=document.createElement('button'); ctr.textContent='⌖ Reset to arena center';
+    ctr.onclick=()=>{ pushUndoSnapshot(); playerSpawn.x=0; playerSpawn.z=0; playerSpawn.yaw=0; refreshPlayerSpawnMarker(); renderEditorFields(); };
+    picker.appendChild(ctr);
+  }
   if(tgt.selectable){
     const noun = tgt.noun || (tgt.isLights ? 'Light' : 'Prop');
     const n = tgt.count();
@@ -9762,6 +9816,7 @@ function selectedSceneObject(){
   if(editorActive==='props') return editorTargets.props.obj();
   if(editorActive==='lights'){ const g=editorTargets.lights.obj(); return g && g.userData.marker; }
   if(editorActive==='spawns'){ const g=editorTargets.spawns.obj(); return g && g.userData.post; }
+  if(editorActive==='pstart'){ return playerSpawnMarker && playerSpawnMarker.userData.post; }
   return null;   // gun / aim have no selectable scene mesh
 }
 // live world position of the selected scene object (or null)
@@ -9771,6 +9826,7 @@ function getSelPos(){
   if(editorActive==='props'){ const o=editorTargets.props.obj(); return o?o.position:null; }
   if(editorActive==='lights'){ const g=editorTargets.lights.obj(); return g?g.position:null; }
   if(editorActive==='spawns'){ const g=editorTargets.spawns.obj(); return g?g.position:null; }
+  if(editorActive==='pstart'){ return playerSpawnMarker?playerSpawnMarker.position:null; }
   return null;
 }
 // move the selected object to a world position and sync its editor state + collider
@@ -9793,6 +9849,8 @@ function setSelPos(v){
     g.position.set(v.x, 0, v.z);   // spawns live on the floor
     const s=editorTargets.spawns.state; s.px=v.x; s.pz=v.z;
     if(typeof refreshRouteViz==='function') refreshRouteViz(g);
+  } else if(editorActive==='pstart'){
+    playerSpawn.x=v.x; playerSpawn.z=v.z; refreshPlayerSpawnMarker();   // player start lives on the floor
   }
 }
 // --- rotation (Euler, radians) of the selected object, for the rotate gizmo ---
@@ -9801,6 +9859,7 @@ function getSelRot(){
   if(editorActive==='props'){ const o=editorTargets.props.obj(); return o?o.rotation:null; }
   if(editorActive==='lights'){ const g=editorTargets.lights.obj(); return g?g.rotation:null; }
   if(editorActive==='spawns'){ const g=editorTargets.spawns.obj(); return g?g.rotation:null; }
+  if(editorActive==='pstart'){ return playerSpawnMarker?playerSpawnMarker.rotation:null; }
   return null;
 }
 // Recompute the station's collision boxes at its current transform — gizmo moves change the group/model
@@ -9822,6 +9881,8 @@ function setSelRot(euler){
   } else if(editorActive==='spawns'){
     const g=editorTargets.spawns.obj(); if(!g) return;
     g.rotation.set(0, euler.y, 0); g.userData.mark.face = euler.y;   // spawns only yaw (facing)
+  } else if(editorActive==='pstart'){
+    playerSpawn.yaw = euler.y; refreshPlayerSpawnMarker();   // player start only yaws (facing)
   }
 }
 // --- scale (Vector3) of the selected object, for the scale gizmo; lights have no meaningful scale ---
@@ -9897,7 +9958,7 @@ function buildGizmo(){
 function updateGizmo(){
   if(!gizmo) gizmo = buildGizmo();
   const gr = gizmo.userData.groups;
-  const movable = editorOpen && (editorActive==='props' || editorActive==='station' || editorActive==='lights' || editorActive==='spawns');
+  const movable = editorOpen && (editorActive==='props' || editorActive==='station' || editorActive==='lights' || editorActive==='spawns' || editorActive==='pstart');
   const pos = movable ? getSelPos() : null;
   if(!pos){ gr.translate.visible=gr.scale.visible=gr.rotate.visible=false; gizmo.visible = false; return; }
   gizmo.position.copy(pos);
@@ -9905,7 +9966,7 @@ function updateGizmo(){
   else { gizmo.scale.setScalar(Math.max(0.6, topZoom*0.03)); }
   // lights + spawns have no scale; force translate/rotate only for them
   let mode = gizmoMode;
-  if((editorActive==='lights'||editorActive==='spawns') && mode==='scale') mode='translate';
+  if((editorActive==='lights'||editorActive==='spawns'||editorActive==='pstart') && mode==='scale') mode='translate';
   gr.translate.visible = (mode==='translate');
   gr.scale.visible = (mode==='scale');
   gr.rotate.visible = (mode==='rotate');
@@ -10225,8 +10286,8 @@ function toggleEditor(){
 // ---------- Game state ----------
 function startGame(){
   initAudio();
-  player.hp=100; player.pos.set(0,EYE,0); player.vel.set(0,0,0);
-  player.yaw=0; player.pitch=0; player.onGround=true;
+  player.hp=100; player.pos.set(playerSpawn.x, EYE, playerSpawn.z); player.vel.set(0,0,0);
+  player.yaw=playerSpawn.yaw; player.pitch=0; player.onGround=true;
   // reset weapons
   owned = ['rifle']; curWep='rifle';
   WEAPONS.rifle.mag=30; WEAPONS.rifle.reserve=90;
