@@ -5087,6 +5087,10 @@ function rebuildArena(){
   const divs = Math.max(8, Math.round(ARENA*2/2.5));
   grid = new THREE.GridHelper(ARENA*2, divs, 0x1f4a44, 0x12302c);
   grid.position.y = 0.02; scene.add(grid);
+  // honor the saved grid-visibility toggle on every rebuild (incl. the deferred arena-resize rebuild,
+  // which otherwise recreates a visible grid after applyWorldCfg already hid it). try/catch guards the
+  // very first rebuildArena() call, which runs before worldCfg is initialized.
+  try { if(typeof worldCfg !== 'undefined' && worldCfg) grid.visible = (worldCfg.grid !== false); } catch(e){}
   // boundary walls — remove old (from scene + colliders), rebuild at the new extent
   for(const w of arenaWalls){ scene.remove(w); const ci=colliders.indexOf(w); if(ci>=0) colliders.splice(ci,1); if(w.geometry) w.geometry.dispose(); }
   arenaWalls.length = 0;
@@ -7280,7 +7284,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 52 · 2026-06-03';
+const BUILD_VERSION = 'build 53 · 2026-06-03';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
