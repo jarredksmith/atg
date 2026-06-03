@@ -7172,7 +7172,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 42 · 2026-06-02';
+const BUILD_VERSION = 'build 43 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8985,6 +8985,7 @@ function buildEditorPanel(){
   p.innerHTML = '<div id="editorResize" title="Drag to resize"></div>'
     + '<h3>LEVEL / TRANSFORM EDITOR</h3>'
     + '<div class="hint">Click an object to select it. <b>Shift+click</b> props to multi-select. Use <b>Move / Rotate / Scale</b> + the handles, or type values. <b>Shift+D</b> duplicates, <b>Delete</b> removes. Drag the left edge to resize. Press <b>P</b> to close.</div>'
+    + '<div class="row2" style="margin:0 0 8px"><button id="edPlay" style="background:rgba(56,245,181,0.22);color:#eafff7;font-weight:600">▶ Play level</button><button id="edMenu">⌂ Main menu</button></div>'
     + '<div class="tabs" id="edTabs"></div>'
     + '<div class="row2" id="edView" style="margin-bottom:8px"></div>'
     + sec('Gizmo', 'gizmo', '<div id="edGizmo"></div>')
@@ -9036,7 +9037,8 @@ function buildEditorPanel(){
     tabs.appendChild(b);
   }
   p.querySelector('#edReset').onclick = ()=>{ resetEditorTarget(editorActive); };
-  p.querySelector('#edCopy').onclick = ()=>{ copyEditorCode(); };
+  p.querySelector('#edPlay').onclick = ()=>{ startGame(); };           // test the live-built level immediately (no save/reload)
+  p.querySelector('#edMenu').onclick = ()=>{ editorToMenu(); };        // back to the start overlay  p.querySelector('#edCopy').onclick = ()=>{ copyEditorCode(); };
   p.querySelector('#edSave').onclick = ()=>{
     const note = editorEl.querySelector('#edCopied');
     note.textContent = saveLevel() ? 'Level saved — it will auto-load next time ✓' : 'Save failed (storage blocked here)';
@@ -10419,12 +10421,34 @@ function startJoin(){
   netStatus('Loading network…');
   ensurePeerJS(ok=>{ if(!ok){ netStatus('Could not load networking (are you offline?)'); return; } clientStart(code); });
 }
+let MENU_HTML = null;
 function bindMenu(){
+  if(MENU_HTML===null){ const ov0=document.getElementById('overlay'); if(ov0) MENU_HTML = ov0.innerHTML; }   // capture the full start menu once, before any death/win screen overwrites it
   const sb=document.getElementById('startBtn'); if(sb) sb.onclick=startGame;
   const eb=document.getElementById('editBtn'); if(eb) eb.onclick=enterEditor;
   const h=document.getElementById('mpHost'); if(h) h.onclick=startHost;
   const d=document.getElementById('mpDuel'); if(d) d.onclick=startDuel;
   const j=document.getElementById('mpJoin'); if(j) j.onclick=startJoin;
+}
+// Restore the full start page (Deploy / Build / multiplayer) — used by the editor's "Main menu" button.
+function showMainMenu(){
+  const ov=$('overlay'); if(!ov) return;
+  if(MENU_HTML!=null) ov.innerHTML = MENU_HTML;   // rebuild the original menu (death/win screens replace it with Redeploy-only)
+  ov.classList.remove('hidden');
+  $('hud').classList.add('hidden');
+  bindMenu();
+}
+// Leave the editor and return to the start page WITHOUT starting a wave, so Deploy replays the live build.
+function editorToMenu(){
+  if(editorOpen) toggleEditor();        // restore play rendering + physics; hide panel, markers, gizmo
+  editorFreeFly=false; editorTopView=false;
+  gameOn=false; gameOver=false; shopOpen=false; firing=false; ads=false;
+  wave=0; toSpawn=0; spawnQueue=[];
+  enemies.slice().forEach(e=>{ scene.remove(e.mesh); if(e.mesh.userData.mixer){ const mi=mixers.indexOf(e.mesh.userData.mixer); if(mi>=0) mixers.splice(mi,1); } }); enemies.length=0;
+  document.exitPointerLock();
+  $('shop').classList.add('hidden');
+  const pr=$('prompt'); if(pr) pr.style.display='none';
+  showMainMenu();
 }
 // Open the editor straight from the menu to build a level WITHOUT starting combat. Waves stay
 // suspended (wave 0) while the editor is open; closing it (P) begins wave 1. Solo only.
