@@ -6111,21 +6111,32 @@ const enemyGeo = new THREE.CapsuleGeometry(0.7, 1.4, 4, 10);
 // Optional uploaded enemy model (GLB, animated). When set, each enemy shows this model instead of the
 // capsule; saved with the level (under "enemy"). The logical body stays a capsule-sized Group so all the
 // AI / collision / networking code is unchanged — only the visual child swaps.
-let enemyModelUrl   = (savedLevel && savedLevel.enemy && savedLevel.enemy.url)   || '';
-let enemyModelScale = (savedLevel && savedLevel.enemy && savedLevel.enemy.scale) || 1;
-let enemyFaceOffset = (savedLevel && savedLevel.enemy && savedLevel.enemy.face != null) ? savedLevel.enemy.face : 0;   // radians added after lookAt so the model faces the player (0 / π / ±π·0.5)
-let enemyColliderR  = (savedLevel && savedLevel.enemy && savedLevel.enemy.cr   != null) ? savedLevel.enemy.cr   : 0;   // collision footprint radius; 0 = auto (measured from the model bounds)
-let enemyYOffset    = (savedLevel && savedLevel.enemy && savedLevel.enemy.yoff != null) ? savedLevel.enemy.yoff : 0;   // vertical nudge for the visual model (fixes models that hover or sink)
-let enemyXOffset    = (savedLevel && savedLevel.enemy && savedLevel.enemy.xoff != null) ? savedLevel.enemy.xoff : 0;   // sideways nudge to re-center an off-pivot model
-let enemyZOffset    = (savedLevel && savedLevel.enemy && savedLevel.enemy.zoff != null) ? savedLevel.enemy.zoff : 0;   // forward/back nudge to re-center an off-pivot model
+// Per-enemy-type model config: each type (grunt/runner/brute/gunner) gets its own GLB + framing.
+// Back-compat: an old single-model level (savedLevel.enemy) is applied to every type.
+const ENEMY_MODEL0 = { url:'', scale:1, face:0, cr:0, yoff:0, xoff:0, zoff:0 };
+const enemyModels = {};
+function enemyModelCfg(typeKey){
+  const k = (typeKey && ENEMY_TYPES[typeKey]) ? typeKey : 'grunt';
+  if(!enemyModels[k]) enemyModels[k] = Object.assign({}, ENEMY_MODEL0);
+  return enemyModels[k];
+}
+function applyEnemyModelData(perType, legacy){   // perType = new map, legacy = old single config
+  for(const k of ENEMY_TYPE_KEYS){
+    const src = (perType && perType[k]) || legacy || {};
+    enemyModels[k] = { url: src.url||'', scale: src.scale||1, face: src.face||0, cr: src.cr||0, yoff: src.yoff||0, xoff: src.xoff||0, zoff: src.zoff||0 };
+  }
+}
+applyEnemyModelData(savedLevel && savedLevel.enemies, savedLevel && savedLevel.enemy);
+let editorEnemyType = 'grunt';   // which type the editor's model fields are currently editing
 const _seatInv = new THREE.Matrix4();
-function swapEnemyModel(url){ enemyModelUrl = (url||'').trim(); }
+function swapEnemyModel(url, typeKey){ enemyModelCfg(typeKey||editorEnemyType).url = (url||'').trim(); }
 
 // Build the visual for one enemy body Group: the uploaded GLB (animated) if set, else the capsule.
 // modelY offsets a feet-origin GLB up so it isn't half-buried; the capsule is centered so it uses 0.
 function buildEnemyVisual(body){
   // clear any previous visual
   if(body.userData.visual){ if(body.userData.mixer){ const mi=mixers.indexOf(body.userData.mixer); if(mi>=0) mixers.splice(mi,1); body.userData.mixer=null; } body.remove(body.userData.visual); body.userData.visual=null; }
+  const mc = enemyModelCfg(body.userData.enemyType);
   const useCapsule = ()=>{
     const ty = ENEMY_TYPES[body.userData.enemyType] || ENEMY_TYPES.grunt;
     const mat = new THREE.MeshStandardMaterial({ color:0x4a1020, emissive:ty.tint, emissiveIntensity:.6, roughness:.6 });
@@ -6133,34 +6144,31 @@ function buildEnemyVisual(body){
     const eye = new THREE.Mesh(new THREE.SphereGeometry(.18,8,8), new THREE.MeshBasicMaterial({color:0xffd166}));
     eye.position.set(0, 0.7, -0.55);   // slightly forward so you can read facing
     cap.add(eye);
-    body.add(cap); body.userData.visual = cap; body.userData.modelY = 0; body.userData.footprint = enemyColliderR > 0 ? enemyColliderR : 0.9*ty.scale;
+    body.add(cap); body.userData.visual = cap; body.userData.modelY = 0; body.userData.hasModel = false; body.userData.footprint = mc.cr > 0 ? mc.cr : 0.9*ty.scale;
   };
-  if(!enemyModelUrl){ useCapsule(); return; }
+  if(!mc.url){ useCapsule(); return; }
   useCapsule();   // show the capsule immediately; replace it when the GLB arrives
-  loadGLTFCached(enemyModelUrl,
+  loadGLTFCached(mc.url,
     (gltf)=>{
-      // drop the placeholder capsule
+      if(enemyModelCfg(body.userData.enemyType).url !== mc.url) return;   // the type's URL changed before this load resolved — drop the stale model
       if(body.userData.visual){ body.remove(body.userData.visual); body.userData.visual=null; }
       const model = THREE.cloneSkinned(gltf.scene);
       const ty = ENEMY_TYPES[body.userData.enemyType] || ENEMY_TYPES.grunt;
-      model.scale.setScalar((enemyModelScale || 1) * ty.scale);
+      model.scale.setScalar((mc.scale || 1) * ty.scale);
       model.traverse(o=>{ if(o.isMesh){ o.castShadow = true; o.receiveShadow = false; if(o.frustumCulled!==undefined) o.frustumCulled = false; } });   // skinned meshes can be culled wrongly by their bind-pose bounds
       body.add(model);
-      // Measure in BODY-LOCAL space. setFromObject gives a WORLD box; using it to set the model's LOCAL
-      // position only works while the body sits at the origin — for an async (uncached) load the body is
-      // already at its spawn point, and the old math yanked the model to world origin (the "stuck on the
-      // player" bug). Transform the world box back into body space first.
       body.updateMatrixWorld(true); model.updateMatrixWorld(true);
       const wbox = new THREE.Box3().setFromObject(model);
       if(isFinite(wbox.min.y) && isFinite(wbox.min.x) && !wbox.isEmpty()){
         const lbox = wbox.clone().applyMatrix4(_seatInv.copy(body.matrixWorld).invert());   // model extent relative to the body
         const cx = (lbox.min.x+lbox.max.x)/2, cz = (lbox.min.z+lbox.max.z)/2;
-        model.position.set(model.position.x - cx + enemyXOffset, model.position.y - lbox.min.y - 1.4 + enemyYOffset, model.position.z - cz + enemyZOffset);
+        model.position.set(model.position.x - cx + mc.xoff, model.position.y - lbox.min.y - 1.4 + mc.yoff, model.position.z - cz + mc.zoff);
         body.userData.footprint = Math.max(0.9, Math.min(3.5, Math.max((lbox.max.x-lbox.min.x)/2, (lbox.max.z-lbox.min.z)/2)));   // collision radius from the real footprint
       }
-      if(enemyColliderR > 0) body.userData.footprint = enemyColliderR;   // manual collider-radius override
+      if(mc.cr > 0) body.userData.footprint = mc.cr;   // manual collider-radius override
       body.userData.visual = model;
       body.userData.modelY = 0;
+      body.userData.hasModel = true; body.userData.faceOff = mc.face;   // per-enemy facing nudge, read by the lookAt code
       model.userData.seat = { p:model.position.clone(), q:model.quaternion.clone(), s:model.scale.clone() };   // locked each frame so animation root-motion/scale tracks can't fling or shrink the model
       const mx = playEnemyClip(model, gltf);   // ONE looping clip (idle/walk/run) — not every clip at once
       if(mx) body.userData.mixer = mx;
@@ -6194,7 +6202,8 @@ function autoFitEnemyScale(){
   previewEnemy.updateMatrixWorld(true);
   const b = new THREE.Box3().setFromObject(v), h = b.max.y - b.min.y;
   if(!isFinite(h) || h <= 0.02) return false;
-  enemyModelScale = Math.max(0.05, Math.min(50, enemyModelScale * (2.6/h)));
+  const mc = enemyModelCfg(previewEnemy.userData.enemyType);
+  mc.scale = Math.max(0.05, Math.min(50, (mc.scale||1) * (2.6/h)));
   refreshEnemyVisuals();
   return true;
 }
@@ -6482,9 +6491,8 @@ function loadLevelFromNet(level){
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; refreshPlayerSpawnMarker(); }
   if(level.weapons){ for(const k in WEAPONS){ const wd=level.weapons[k]; if(wd){ WEAPONS[k].model=wd.model||''; WEAPONS[k].view=wd.view||null; } } }
   if(level.grenade){ const G=level.grenade; if(G.model!=null) GRENADE.model=G.model||''; if(G.scale!=null) GRENADE.scale=G.scale; if(G.radius!=null) GRENADE.radius=G.radius; if(G.damage!=null) GRENADE.damage=G.damage; if(G.fuse!=null) GRENADE.fuse=G.fuse; if(G.throwForce!=null) GRENADE.throwForce=G.throwForce; loadGrenadeModel(); if(editorTargets.grenade.sync) editorTargets.grenade.sync(); }
-  if(level.enemy){   // adopt the host's enemy model + collider/offset so clients render the same hostiles
-    enemyModelUrl = level.enemy.url||''; enemyModelScale = level.enemy.scale||1; enemyFaceOffset = level.enemy.face||0;
-    enemyColliderR = level.enemy.cr||0; enemyYOffset = level.enemy.yoff||0; enemyXOffset = level.enemy.xoff||0; enemyZOffset = level.enemy.zoff||0;
+  if(level.enemies || level.enemy){   // adopt the host's per-type enemy models so clients render the same hostiles
+    applyEnemyModelData(level.enemies, level.enemy);
     for(const id in NET.enemyMeshes) buildEnemyVisual(NET.enemyMeshes[id].mesh);   // re-skin any already-spawned remote hostiles
   }
 }
@@ -6530,7 +6538,7 @@ function upsertEnemyMesh(e){
   if(!em){
     const mesh=new THREE.Group();
     mesh.position.set(e.p[0], e.p[1], e.p[2]); mesh.userData.enemyId=e.id;
-    buildEnemyVisual(mesh);   // same model (or capsule) the host uses; enemyModelUrl arrives with the level sync
+    buildEnemyVisual(mesh);   // same per-type model (or capsule) the host uses; enemy models arrive with the level sync
     scene.add(mesh);
     em={ mesh, target:new THREE.Vector3(e.p[0],e.p[1],e.p[2]) }; NET.enemyMeshes[e.id]=em;
   }
@@ -6656,7 +6664,7 @@ function netInterpolate(dt){
     let dy=rp.yaw-rp.mesh.rotation.y; while(dy>Math.PI)dy-=2*Math.PI; while(dy<-Math.PI)dy+=2*Math.PI;
     rp.mesh.rotation.y += dy*k; }
   if(NET.mode==='client'){
-    for(const id in NET.enemyMeshes){ const em=NET.enemyMeshes[id]; em.mesh.position.lerp(em.target, k); em.mesh.lookAt(player.pos.x, em.mesh.position.y, player.pos.z); if(enemyModelUrl) em.mesh.rotateY(enemyFaceOffset); }
+    for(const id in NET.enemyMeshes){ const em=NET.enemyMeshes[id]; em.mesh.position.lerp(em.target, k); em.mesh.lookAt(player.pos.x, em.mesh.position.y, player.pos.z); if(em.mesh.userData.hasModel) em.mesh.rotateY(em.mesh.userData.faceOff||0); }
     for(const o of dynamicProps){ const tp=o.userData._netTarget; if(tp){ o.position.lerp(new THREE.Vector3(tp[0],tp[1],tp[2]), k); } }
   }
 }
@@ -7300,7 +7308,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 56 · 2026-06-03';
+const BUILD_VERSION = 'build 57 · 2026-06-03';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8613,7 +8621,7 @@ function loop(){
       en.mesh.position.y = 1.4 + Math.sin(t*4+en.id)*0.08;
       const fx = (en._faceX!=null) ? en._faceX : near.pos.x, fz = (en._faceZ!=null) ? en._faceZ : near.pos.z;
       en.mesh.lookAt(fx, en.mesh.position.y, fz);   // chasing -> face player; patrolling -> face where it walks
-      if(enemyModelUrl) en.mesh.rotateY(enemyFaceOffset);   // GLB characters vary in which way they face; nudge to face forward
+      if(en.mesh.userData.hasModel) en.mesh.rotateY(en.mesh.userData.faceOff||0);   // GLB characters vary in which way they face; nudge to face forward
       en.cooldown -= dt;
       if(en.ranged){
         en.shootCd -= dt;
@@ -9054,7 +9062,7 @@ function serializeLevel(){
     world:   Object.assign({}, worldCfg),
     chest:   { url: chestModelUrl, scale: chestModelScale },
     coin:    { url: coinCfg.url, scale: coinCfg.scale, on: coinCfg.on !== false },
-    enemy:   { url: enemyModelUrl, scale: enemyModelScale, face: enemyFaceOffset, cr: enemyColliderR, yoff: enemyYOffset, xoff: enemyXOffset, zoff: enemyZOffset },
+    enemies: ENEMY_TYPE_KEYS.reduce((a,k)=>{ const m=enemyModelCfg(k); a[k]={ url:m.url, scale:m.scale, face:m.face, cr:m.cr, yoff:m.yoff, xoff:m.xoff, zoff:m.zoff }; return a; }, {}),
     props:   propModels.filter(Boolean).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
@@ -9118,7 +9126,7 @@ function restoreLevel(level){
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }
   if(level.chest){ chestModelUrl = level.chest.url||''; chestModelScale = level.chest.scale||1; }
   if(level.coin){ const c=level.coin; coinCfg.url=c.url||''; coinCfg.scale=c.scale||1; coinCfg.on=c.on!==false; }
-  if(level.enemy){ enemyModelUrl = level.enemy.url||''; enemyModelScale = level.enemy.scale||1; enemyFaceOffset = level.enemy.face||0; enemyColliderR = level.enemy.cr||0; enemyYOffset = level.enemy.yoff||0; enemyXOffset = level.enemy.xoff||0; enemyZOffset = level.enemy.zoff||0; for(const en of enemies) buildEnemyVisual(en.mesh); }   // re-skin any live enemies
+  if(level.enemies || level.enemy){ applyEnemyModelData(level.enemies, level.enemy); for(const en of enemies) buildEnemyVisual(en.mesh); if(typeof refreshPreviewEnemy==='function') refreshPreviewEnemy(); }   // re-skin live enemies (legacy single-model falls back to all types)
   selProps.length = 0;
   editorTargets.props.idx = Math.max(0, Math.min(editorTargets.props.idx, propModels.length-1));
   if(typeof syncSelToIdx==='function') syncSelToIdx();
@@ -9488,38 +9496,46 @@ function renderEditorFields(){
 
     // ===== ENEMIES section =====
     const eHost = enemyHost || worldHost;
-    hint(eHost, '<b>Enemy model</b> — animated GLB URL (blank = default capsule). Looping clips auto-play.', '2px 0 4px');
+    hint(eHost, '<b>Per-type enemy models</b> — each type uses its own animated GLB (blank = capsule). Looping clips auto-play.', '2px 0 4px');
+    const etRow=document.createElement('div'); etRow.className='row2'; etRow.style.flexWrap='wrap';
+    const etBtn=(key)=>{ const b=document.createElement('button'); b.textContent=(enemyModelCfg(key).url?'● ':'○ ')+(ENEMY_TYPES[key].name||key); b.style.fontSize='11px';
+      if(editorEnemyType===key){ b.style.background='rgba(56,245,181,0.30)'; b.style.color='#eafff7'; }
+      b.onclick=()=>{ editorEnemyType=key; if(previewEnemy) buildPreviewEnemy(key); renderEditorFields(); }; return b; };
+    for(const _k of ENEMY_TYPE_KEYS) etRow.appendChild(etBtn(_k));
+    eHost.appendChild(etRow);
+    const mc = enemyModelCfg(editorEnemyType);
+    hint(eHost, '', '4px 0 4px').textContent = 'Editing '+(ENEMY_TYPES[editorEnemyType].name||editorEnemyType)+'  ·  ● model set, ○ capsule';
     const eRow=document.createElement('div'); eRow.style.cssText='display:flex;gap:6px;align-items:center;';
-    const eUrl=document.createElement('input'); eUrl.type='text'; eUrl.placeholder='https://…/enemy.glb'; eUrl.value=enemyModelUrl; eUrl.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+    const eUrl=document.createElement('input'); eUrl.type='text'; eUrl.placeholder='https://…/enemy.glb'; eUrl.value=mc.url; eUrl.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
     const eAb=document.createElement('button'); eAb.textContent='Apply'; eAb.style.flex='0 0 auto';
-    eAb.onclick=()=>{ pushUndoSnapshot(); swapEnemyModel(eUrl.value); refreshEnemyVisuals(); };   // re-skin existing enemies immediately
+    eAb.onclick=()=>{ pushUndoSnapshot(); swapEnemyModel(eUrl.value, editorEnemyType); refreshEnemyVisuals(); renderEditorFields(); };   // re-skin this type's enemies immediately
     eRow.appendChild(eUrl); eRow.appendChild(eAb); eHost.appendChild(eRow);
     const eScaleRow=document.createElement('label'); eScaleRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 2px;';
     const esSp=document.createElement('span'); esSp.textContent='Model scale'; esSp.style.minWidth='86px';
-    const esNum=document.createElement('input'); esNum.type='number'; esNum.min='0.05'; esNum.max='50'; esNum.step='0.05'; esNum.value=enemyModelScale; esNum.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
-    esNum.onchange=()=>{ enemyModelScale=Math.max(0.05,Math.min(50,parseFloat(esNum.value)||1)); refreshEnemyVisuals(); };
+    const esNum=document.createElement('input'); esNum.type='number'; esNum.min='0.05'; esNum.max='50'; esNum.step='0.05'; esNum.value=mc.scale; esNum.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+    esNum.onchange=()=>{ mc.scale=Math.max(0.05,Math.min(50,parseFloat(esNum.value)||1)); refreshEnemyVisuals(); };
     eScaleRow.appendChild(esSp); eScaleRow.appendChild(esNum); eHost.appendChild(eScaleRow);
     const eFaceRow=document.createElement('label'); eFaceRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
     const efSp=document.createElement('span'); efSp.textContent='Facing'; efSp.style.minWidth='86px';
     const efSel=document.createElement('select'); efSel.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
-    for(const [lab,val] of [['Front (0°)','0'],['Back (180°)',String(Math.PI)],['Right (90°)',String(Math.PI/2)],['Left (-90°)',String(-Math.PI/2)]]){ const o=document.createElement('option'); o.value=val; o.textContent=lab; if(Math.abs(parseFloat(val)-enemyFaceOffset)<0.01) o.selected=true; efSel.appendChild(o); }
-    efSel.onchange=()=>{ enemyFaceOffset=parseFloat(efSel.value)||0; };
+    for(const [lab,val] of [['Front (0°)','0'],['Back (180°)',String(Math.PI)],['Right (90°)',String(Math.PI/2)],['Left (-90°)',String(-Math.PI/2)]]){ const o=document.createElement('option'); o.value=val; o.textContent=lab; if(Math.abs(parseFloat(val)-mc.face)<0.01) o.selected=true; efSel.appendChild(o); }
+    efSel.onchange=()=>{ mc.face=parseFloat(efSel.value)||0; refreshEnemyVisuals(); };
     eFaceRow.appendChild(efSp); eFaceRow.appendChild(efSel); eHost.appendChild(eFaceRow);
     // collider radius — how far enemies stay off walls/props and each other (0 = auto-fit to the model)
     const ecRow=document.createElement('label'); ecRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
     const ecSp=document.createElement('span'); ecSp.textContent='Collider radius'; ecSp.style.minWidth='86px';
-    const ecR=document.createElement('input'); ecR.type='range'; ecR.min='0'; ecR.max='4'; ecR.step='0.1'; ecR.value=enemyColliderR; ecR.style.cssText='flex:1;accent-color:#ff8a5b;';
-    const ecN=document.createElement('input'); ecN.type='number'; ecN.min='0'; ecN.max='4'; ecN.step='0.1'; ecN.value=enemyColliderR; ecN.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
-    const applyEc=(v)=>{ const m=Math.max(0,Math.min(4,Math.round((parseFloat(v)||0)*10)/10)); ecR.value=m; ecN.value=m; enemyColliderR=m; refreshEnemyVisuals(); };
+    const ecR=document.createElement('input'); ecR.type='range'; ecR.min='0'; ecR.max='4'; ecR.step='0.1'; ecR.value=mc.cr; ecR.style.cssText='flex:1;accent-color:#ff8a5b;';
+    const ecN=document.createElement('input'); ecN.type='number'; ecN.min='0'; ecN.max='4'; ecN.step='0.1'; ecN.value=mc.cr; ecN.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+    const applyEc=(v)=>{ const m=Math.max(0,Math.min(4,Math.round((parseFloat(v)||0)*10)/10)); ecR.value=m; ecN.value=m; mc.cr=m; refreshEnemyVisuals(); };
     ecR.addEventListener('mousedown',()=>pushUndoSnapshot()); ecN.addEventListener('focus',()=>pushUndoSnapshot());
     ecR.oninput=()=>applyEc(ecR.value); ecN.onchange=()=>applyEc(ecN.value);
     ecRow.appendChild(ecSp); ecRow.appendChild(ecR); ecRow.appendChild(ecN); eHost.appendChild(ecRow);
     // vertical offset — raise/lower the visual model to fix hovering or sinking
     const eyRow=document.createElement('label'); eyRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
     const eySp=document.createElement('span'); eySp.textContent='Vertical offset'; eySp.style.minWidth='86px';
-    const eyR=document.createElement('input'); eyR.type='range'; eyR.min='-3'; eyR.max='3'; eyR.step='0.05'; eyR.value=enemyYOffset; eyR.style.cssText='flex:1;accent-color:#ff8a5b;';
-    const eyN=document.createElement('input'); eyN.type='number'; eyN.min='-5'; eyN.max='5'; eyN.step='0.05'; eyN.value=enemyYOffset; eyN.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
-    const applyEy=(v)=>{ const m=Math.max(-5,Math.min(5,Math.round((parseFloat(v)||0)*100)/100)); eyR.value=Math.max(-3,Math.min(3,m)); eyN.value=m; enemyYOffset=m; refreshEnemyVisuals(); };
+    const eyR=document.createElement('input'); eyR.type='range'; eyR.min='-3'; eyR.max='3'; eyR.step='0.05'; eyR.value=mc.yoff; eyR.style.cssText='flex:1;accent-color:#ff8a5b;';
+    const eyN=document.createElement('input'); eyN.type='number'; eyN.min='-5'; eyN.max='5'; eyN.step='0.05'; eyN.value=mc.yoff; eyN.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+    const applyEy=(v)=>{ const m=Math.max(-5,Math.min(5,Math.round((parseFloat(v)||0)*100)/100)); eyR.value=Math.max(-3,Math.min(3,m)); eyN.value=m; mc.yoff=m; refreshEnemyVisuals(); };
     eyR.addEventListener('mousedown',()=>pushUndoSnapshot()); eyN.addEventListener('focus',()=>pushUndoSnapshot());
     eyR.oninput=()=>applyEy(eyR.value); eyN.onchange=()=>applyEy(eyN.value);
     eyRow.appendChild(eySp); eyRow.appendChild(eyR); eyRow.appendChild(eyN); eHost.appendChild(eyRow);
@@ -9534,15 +9550,15 @@ function renderEditorFields(){
       rng.oninput=()=>ap(rng.value); num.onchange=()=>ap(num.value);
       row.appendChild(sp); row.appendChild(rng); row.appendChild(num); eHost.appendChild(row);
     };
-    offRow('Offset X', ()=>enemyXOffset, v=>enemyXOffset=v);
-    offRow('Offset Z', ()=>enemyZOffset, v=>enemyZOffset=v);
+    offRow('Offset X', ()=>mc.xoff, v=>mc.xoff=v);
+    offRow('Offset Z', ()=>mc.zoff, v=>mc.zoff=v);
     // preview + auto-fit
     const pvRow=document.createElement('div'); pvRow.className='row2'; pvRow.style.marginTop='6px';
     const pv=document.createElement('button'); pv.textContent = previewEnemy ? '👁 Hide preview' : '👁 Preview enemy';
     if(previewEnemy){ pv.style.background='rgba(56,245,181,0.30)'; pv.style.color='#eafff7'; }
-    pv.onclick=()=>{ if(previewEnemy) clearPreviewEnemy(); else buildPreviewEnemy('grunt'); renderEditorFields(); };
+    pv.onclick=()=>{ if(previewEnemy) clearPreviewEnemy(); else buildPreviewEnemy(editorEnemyType); renderEditorFields(); };
     const af=document.createElement('button'); af.textContent='⤢ Auto-fit size';
-    af.onclick=()=>{ if(!previewEnemy) buildPreviewEnemy('grunt'); const ok=autoFitEnemyScale(); const note=$('edCopied'); if(note) note.textContent = ok ? ('Auto-fit ✓ scale '+(+enemyModelScale).toFixed(2)) : 'Load a model + open the preview first (give it a moment to load).'; renderEditorFields(); };
+    af.onclick=()=>{ if(!previewEnemy) buildPreviewEnemy(editorEnemyType); const ok=autoFitEnemyScale(); const note=$('edCopied'); if(note) note.textContent = ok ? ('Auto-fit ✓ scale '+(+enemyModelCfg(editorEnemyType).scale).toFixed(2)) : 'Load a model + open the preview first (give it a moment to load).'; renderEditorFields(); };
     pvRow.appendChild(pv); pvRow.appendChild(af); eHost.appendChild(pvRow);
     hint(eHost, '', '3px 0 0').textContent = 'Preview shows the model + its collider (green cylinder) at a fixed spot in front of the arena centre. Offsets re-center an off-pivot model; Vertical offset fixes hover/sink; Collider radius 0 = auto-fit. Auto-fit size rescales the model to ~human height.';
 
