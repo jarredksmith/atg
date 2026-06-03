@@ -5122,6 +5122,33 @@ const SAVE_KEY = 'breach_level_v1';
 function readSave(){ try { const s = localStorage.getItem(SAVE_KEY); return s ? JSON.parse(s) : null; } catch(e){ return null; } }
 let savedLevel = readSave();
 
+// ---- Shareable level links: serializeLevel() -> (gzip) -> base64url, carried in the URL hash (#lvl=) ----
+function _b64urlFromBytes(bytes){ let s=''; for(let i=0;i<bytes.length;i++) s+=String.fromCharCode(bytes[i]); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
+function _bytesFromB64url(str){ str=str.replace(/-/g,'+').replace(/_/g,'/'); while(str.length%4) str+='='; const bin=atob(str); const a=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) a[i]=bin.charCodeAt(i); return a; }
+async function _gzip(bytes){ const cs=new CompressionStream('gzip'); const w=cs.writable.getWriter(); w.write(bytes); w.close(); return new Uint8Array(await new Response(cs.readable).arrayBuffer()); }
+async function _gunzip(bytes){ const ds=new DecompressionStream('gzip'); const w=ds.writable.getWriter(); w.write(bytes); w.close(); return new Uint8Array(await new Response(ds.readable).arrayBuffer()); }
+async function encodeLevel(level){
+  const enc = new TextEncoder().encode(JSON.stringify(level));
+  if(typeof CompressionStream !== 'undefined'){ try{ return 'g' + _b64urlFromBytes(await _gzip(enc)); }catch(e){} }   // 'g' = gzipped
+  return 'r' + _b64urlFromBytes(enc);                                                                                  // 'r' = raw fallback
+}
+async function decodeLevel(str){
+  if(!str) return null;
+  const tag = str[0], bytes = _bytesFromB64url(str.slice(1));
+  const jsonBytes = (tag === 'g') ? await _gunzip(bytes) : bytes;
+  return JSON.parse(new TextDecoder().decode(jsonBytes));
+}
+function buildShareLink(enc){ return location.origin + location.pathname + '#lvl=' + enc; }
+function levelCodeFromUrl(){ const m = (location.hash||'').match(/[#&]lvl=([^&]+)/); return m ? decodeURIComponent(m[1]) : null; }
+function flashToast(msg){
+  let t = document.getElementById('toast');
+  if(!t){ t = document.createElement('div'); t.id='toast';
+    t.style.cssText='position:absolute;top:18px;left:50%;transform:translateX(-50%);z-index:70;background:rgba(8,18,22,.92);border:1px solid rgba(56,245,181,.45);color:#cfeee2;padding:9px 16px;border-radius:8px;font-size:13px;letter-spacing:1px;pointer-events:none;transition:opacity .3s;';
+    document.body.appendChild(t); }
+  t.textContent = msg; t.style.opacity='1';
+  clearTimeout(t._t); t._t = setTimeout(()=>{ t.style.opacity='0'; }, 2600);
+}
+
 // ---------- Hosted 3D model props (.glb) ----------
 // Loads a .glb from a URL and scatters clones around the arena as solid, climbable,
 // shootable props. Each spot is a full transform so the level editor can move/rotate/scale
@@ -7253,7 +7280,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 49 · 2026-06-02';
+const BUILD_VERSION = 'build 50 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9200,6 +9227,7 @@ function buildEditorPanel(){
     + sec('Loot', 'loot', '<div id="edLoot"></div>')
     + sec('Level file', 'levelfile',
         '<div class="row2"><button id="edSave">💾 Save</button><button id="edClear">Clear save</button></div>'
+      + '<div class="row2" style="margin-top:6px"><button id="edShare">🔗 Copy share link</button></div>'
       + '<div class="row2" style="margin-top:6px"><button id="edExport">⬇ Export .json</button><button id="edImport">⬆ Import .json</button></div>'
       + '<input type="file" id="edImportFile" accept=".json,application/json" style="display:none">'
       + '<div class="row2" style="margin-top:6px"><button id="edReset">Reset target</button><button id="edCopy">Copy code</button></div>'
@@ -9245,6 +9273,18 @@ function buildEditorPanel(){
     const note = editorEl.querySelector('#edCopied');
     note.textContent = saveLevel() ? 'Level saved — it will auto-load next time ✓' : 'Save failed (storage blocked here)';
     clearTimeout(note._t); note._t = setTimeout(()=>{ note.textContent=''; }, 2800);
+  };
+  p.querySelector('#edShare').onclick = async ()=>{
+    const note = editorEl.querySelector('#edCopied');
+    note.textContent = 'Building link…';
+    try{
+      const link = buildShareLink(await encodeLevel(serializeLevel()));
+      let copied = false;
+      try{ await navigator.clipboard.writeText(link); copied = true; }catch(e){}
+      const out = editorEl.querySelector('#edOut'); if(out){ out.value = link; out.focus(); out.select(); }   // always show it so it's copyable by hand
+      note.textContent = copied ? ('Share link copied ✓  (' + link.length + ' chars)') : 'Link is in the box below — select + copy it';
+    }catch(e){ note.textContent = 'Could not build a share link here'; }
+    clearTimeout(note._t); note._t = setTimeout(()=>{ note.textContent=''; }, 5000);
   };
   p.querySelector('#edClear').onclick = ()=>{
     const note = editorEl.querySelector('#edCopied');
@@ -10666,8 +10706,16 @@ function enterEditor(){
   const note=$('edCopied'); if(note){ note.textContent='Build mode — place props, lights & enemy spawns, then press P to start wave 1.'; }
 }
 bindMenu();
+// If the page was opened with a shared level in the URL (#lvl=...), decode it and rebuild the scene.
+(async ()=>{
+  const code = levelCodeFromUrl();
+  if(!code) return;
+  try{
+    const lvl = await decodeLevel(code);
+    if(lvl && typeof restoreLevel==='function'){ restoreLevel(lvl); flashToast('Shared level loaded — press Deploy'); }
+  }catch(e){ console.warn('Could not load shared level from URL:', e && e.message); flashToast('Shared level link looks invalid'); }
+})();
 };
-// GAME_START is invoked by the CDN loader once window.THREE is available.
 </script>
 </body>
 </html>
