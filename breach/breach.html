@@ -7280,7 +7280,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 50 · 2026-06-02';
+const BUILD_VERSION = 'build 51 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7953,7 +7953,7 @@ function shoot(){
 
 function killEnemy(en){
   spark(en.mesh.position, 0xff2d55); SFX.kill();
-  if(!NET.mode) hitStop = Math.max(hitStop, 0.07);   // brief impact freeze (solo only — avoids desyncing co-op)
+  if(NET.mode==='off') hitStop = Math.max(hitStop, 0.07);   // brief impact freeze (solo only — avoids desyncing co-op)
   // drop 1-2 coins worth scaling slightly with wave
   const drops = Math.random()<0.35 ? 2 : 1;
   for(let i=0;i<drops;i++){
@@ -8489,7 +8489,7 @@ function loop(){
       if(spawnTimer<=0){ spawnEnemy(spawnQueue.length ? spawnQueue.shift() : null); toSpawn--; spawnTimer=0.6; updateHUD(); }
     } else if(enemies.length===0){
       if(gameCfg.winWaves>0 && wave>=gameCfg.winWaves){ if(typeof gameWon==='function') gameWon(); }
-      else if(!NET.mode){ beginUpgradeChoice(); }   // solo: pick an upgrade between waves
+      else if(NET.mode==='off'){ beginUpgradeChoice(); }   // solo: pick an upgrade between waves
       else { wave++; SFX.wave(); startWave(); }
     }
   }
