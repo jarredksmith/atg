@@ -5153,12 +5153,9 @@ const MODEL_LIBRARY = [
 // primitive) and a transform t = [posX, posY, posZ, rotX, rotY, rotZ, scale] (rotation in radians).
 // The level editor can move/rotate/scale/swap/add/delete these and export the whole list.
 const SCENE_PROPS = [
-  { src: PROP_MODEL_URL, t: [16.00000, 0.00000, 14.00000, 0.00000, 0.30000, 0.00000, 1.60000] },
-  { src: PROP_MODEL_URL, t: [-18.00000, 0.00000, 10.00000, 0.00000, 1.10000, 0.00000, 2.00000] },
-  { src: PROP_MODEL_URL, t: [12.00000, 0.00000, -20.00000, 0.00000, 2.40000, 0.00000, 1.80157] },
-  { src: PROP_MODEL_URL, t: [-14.00000, 0.00000, -12.72846, -1.48466, 0.80000, 0.00000, 1.72325] },
-  { src: PROP_MODEL_URL, t: [24.00000, 0.00000, -6.00000, 0.00000, 3.00000, 0.00000, 1.60000] },
-  { src: PROP_MODEL_URL, t: [-26.00000, 0.00000, -2.00000, 0.00000, 0.20000, 0.00000, 2.20000] },
+  { src: "https://static.poly.pizza/78846e47-3be2-48f2-a7ce-6b50c09358bb.glb", t: [-65.37017, 0.00000, 64.04345, 0.00000, 0.00000, 0.00000, 1.00000, 1.00000, 1.00000] },
+  { src: "https://static.poly.pizza/74ec40fe-8c6f-4946-8053-38899c85af88.glb", t: [-63.67971, 0.00000, 66.01733, 0.00000, 0.00000, 0.00000, 4.70229, 4.70229, 4.70229] },
+  { src: "https://static.poly.pizza/cc2ce213-28b2-4aed-a6f7-4b9cf8f80568.glb", t: [-59.64975, 0.00000, 63.21095, 0.00000, 0.00000, 0.00000, 1.00000, 1.00000, 1.00000] },
 ];
 const propModels = [];   // live prop Object3Ds (parallel to the editor's prop list)
 // ---------- Model animation ----------
@@ -5920,9 +5917,9 @@ addEventListener('mouseup', e=>{ if(e.button===0){ editorDragLook = false; edito
 // The `gun` group is what the render loop animates (sway, recoil, ADS). We load a hosted
 // .glb into a holder inside it, with tunable offsets so it sits naturally in first-person view.
 const GUN_MODEL_URL = 'https://jarredksmith.github.io/atg/scifi_gun.glb';
-const GUN_OFFSET = new THREE.Vector3(0.32000, -0.34000, -0.60000);
-const GUN_SCALE = 0.00045;                                 // tweak to fit the frame
-const GUN_ROT = new THREE.Euler(0.00000, 1.53388, 0.00000);            // face the muzzle forward (−z)
+const GUN_OFFSET = new THREE.Vector3(0.26180, -0.34000, -0.23504);
+const GUN_SCALE = 1.85417;                                 // tweak to fit the frame
+const GUN_ROT = new THREE.Euler(0.06636, 1.53388, 0.00000);            // face the muzzle forward (−z)
 const gun = new THREE.Group();
 let sight = null;  // kept for weapon-tint compatibility; set if the model exposes an emissive part
 let gunModel = null;  // the loaded GLB viewmodel (null until it loads / when offline placeholder is used)
@@ -6830,9 +6827,9 @@ function updateGrenades(dt){
 
 // ---------- Ammo Station (loads a hosted .glb model) ----------
 const STATION_MODEL_URL = 'https://jarredksmith.github.io/atg/scifi_terminal.glb';
-const STATION_POS = new THREE.Vector3(8, 0, 8);
-const STATION_SCALE = 2.0;                          // tweak if the model imports too large/small
-const STATION_ROT = new THREE.Euler(0, Math.PI, 0); // face the terminal toward spawn (origin)
+const STATION_POS = new THREE.Vector3(8.00000, 0.00000, 7.82061);
+const STATION_SCALE = 0.25297;                          // tweak if the model imports too large/small
+const STATION_ROT = new THREE.Euler(0.00000, 3.14159, 0.00000); // face the terminal toward spawn (origin)
 let station = null;
 function buildStation(){
   // Create the station record + glow immediately so proximity/buying work even before the model loads.
@@ -7158,7 +7155,7 @@ let firing = false, firingLatch = false;
 let ads = false;          // is right mouse held
 let adsBlend = 0;         // 0 = hip, 1 = fully aimed (smoothed each frame)
 let editorAimPreview = false;  // editor forces the aimed pose so the Aim tab is visible while tuning
-const BASE_FOV = 78, ADS_FOV = 31.70;   // gentler zoom — the gun moving to center is the main cue
+const BASE_FOV = 78, ADS_FOV = 38.20;   // gentler zoom — the gun moving to center is the main cue
 let adsFovLive = ADS_FOV;            // editor-adjustable copy the loop actually reads
 
 // ---------- Gamepad / controller support ----------
@@ -7197,7 +7194,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 45 · 2026-06-02';
+const BUILD_VERSION = 'build 47 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7270,9 +7267,9 @@ function pollGamepad(dt){
 
 // Where the gun settles on screen when aiming, relative to centered. y just below the crosshair,
 // z pulls it closer to the eye. Tunable in the editor (Aim tab).
-const ADS_AIM = new THREE.Vector3(0.00783, -0.24282, -0.18930);
+const ADS_AIM = new THREE.Vector3(0.20866, -0.47289, -0.04449);
 // Extra rotation applied to the gun while aimed (radians, blended in by adsBlend). Tunable in the Aim tab.
-const ADS_ROT = new THREE.Euler(0, 0, 0);
+const ADS_ROT = new THREE.Euler(0.13820, 0.13102, 0.00939);
 // apply saved aim pose if present
 if(savedLevel && savedLevel.aim && savedLevel.aim.state){
   const a = savedLevel.aim.state, D2R = Math.PI/180;
@@ -7852,9 +7849,12 @@ function shoot(){
         let node = hit.object, en = null;
         while(node && !en){ en = enemies.find(e=>e.mesh===node); node = node.parent; }
         if(en){
-          en.hp -= w.dmg*dmgMul;
+          const dealt = w.dmg*dmgMul;
+          en.hp -= dealt;
           spark(hit.point, 0xff6b6b);
-          if(p===0){ showHitmarker(); SFX.hit(); }
+          spawnDamageNumber(hit.point, dealt, en.hp<=0);
+          flashEnemy(en);
+          if(p===0){ showHitmarker(en.hp<=0); SFX.hit(); }
           if(en.hp<=0) killEnemy(en);
         } else {
           spark(hit.point, 0x9fd8ff);
@@ -7867,6 +7867,7 @@ function shoot(){
 
 function killEnemy(en){
   spark(en.mesh.position, 0xff2d55); SFX.kill();
+  if(!NET.mode) hitStop = Math.max(hitStop, 0.07);   // brief impact freeze (solo only — avoids desyncing co-op)
   // drop 1-2 coins worth scaling slightly with wave
   const drops = Math.random()<0.35 ? 2 : 1;
   for(let i=0;i<drops;i++){
@@ -7947,10 +7948,51 @@ function updateHUD(){
   $('waveNum').textContent = 'WAVE '+wave;
   $('enemyCount').textContent = 'HOSTILES: '+(enemies.length+toSpawn);
 }
-function showHitmarker(){
+function showHitmarker(kill){
   const hm = $('hitmarker');
-  hm.style.transition='none'; hm.style.opacity='1'; hm.style.transform='translate(-50%,-50%) scale(1)';
+  hm.textContent = kill ? '✖' : '✕';
+  hm.style.color = kill ? '#ff4d6d' : '#fff';
+  hm.style.textShadow = kill ? '0 0 12px #ff4d6d' : '0 0 8px #38f5b5';
+  hm.style.transition='none'; hm.style.opacity='1'; hm.style.transform='translate(-50%,-50%) scale('+(kill?1.4:1)+')';
   requestAnimationFrame(()=>{ hm.style.transition='all .25s'; hm.style.opacity='0'; hm.style.transform='translate(-50%,-50%) scale(.6)'; });
+}
+// ---- Combat feel: floating damage numbers, enemy hit-flash, hitstop ----
+let hitStop = 0;                 // brief time-scale dip on a kill (solo only), counted down in real time
+const dmgNumbers = [];           // world-space sprites that rise + fade
+function spawnDamageNumber(pos, amount, kill){
+  const n = Math.max(1, Math.round(amount));
+  const cv = document.createElement('canvas'); cv.width = 128; cv.height = 64;
+  const cx = cv.getContext('2d');
+  cx.font = 'bold 44px system-ui, sans-serif'; cx.textAlign='center'; cx.textBaseline='middle';
+  cx.lineWidth = 6; cx.strokeStyle = 'rgba(0,0,0,0.85)'; cx.fillStyle = kill ? '#ff6b6b' : '#ffe08a';
+  const txt = kill ? (n + '!') : ('' + n);
+  cx.strokeText(txt, 64, 32); cx.fillText(txt, 64, 32);
+  const tex = new THREE.CanvasTexture(cv); tex.minFilter = THREE.LinearFilter;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, transparent:true, depthTest:false, depthWrite:false }));
+  sp.renderOrder = 9500;
+  const sc = kill ? 1.1 : 0.8;
+  sp.position.set(pos.x + (Math.random()-0.5)*0.5, pos.y + 0.3 + (Math.random()-0.5)*0.3, pos.z + (Math.random()-0.5)*0.5);
+  sp.scale.set(sc, sc*0.5, 1);
+  scene.add(sp);
+  dmgNumbers.push({ sp, tex, born: performance.now(), life: kill?900:650, vy: 1.4 + Math.random()*0.6, sc });
+}
+function flashEnemy(en){
+  const v = en.mesh.userData.visual;
+  if(v && v.material && v.material.emissive){            // capsule enemies tint-flash on hit
+    if(en._emi0 == null) en._emi0 = v.material.emissiveIntensity;
+    v.material.emissiveIntensity = 2.4; en._flash = 0.12;
+  }
+}
+function updateFloaters(dt){
+  const now = performance.now();
+  for(let i=dmgNumbers.length-1;i>=0;i--){
+    const f = dmgNumbers[i], age = (now - f.born) / f.life;
+    if(age >= 1){ scene.remove(f.sp); f.sp.material.dispose(); f.tex.dispose(); dmgNumbers.splice(i,1); continue; }
+    f.sp.position.y += f.vy * dt;
+    f.sp.material.opacity = age < 0.6 ? 1 : (1 - (age-0.6)/0.4);
+    const s = f.sc * (1 + age*0.4); f.sp.scale.set(s, s*0.5, 1);
+  }
+  for(const en of enemies){ if(en._flash > 0){ en._flash -= dt; if(en._flash <= 0){ const v=en.mesh.userData.visual; if(v && v.material && en._emi0!=null) v.material.emissiveIntensity = en._emi0; } } }
 }
 function flashDamage(){
   const d = $('damage');
@@ -8122,7 +8164,9 @@ const clock = new THREE.Clock();
 
 function loop(){
   requestAnimationFrame(loop);
-  const dt = Math.min(clock.getDelta(), 0.05);
+  const rawDt = Math.min(clock.getDelta(), 0.05);
+  let dt = rawDt;
+  if(hitStop > 0){ hitStop -= rawDt; dt = rawDt * 0.12; }   // impact freeze: slow the sim briefly (real-time countdown)
   if(!gameOn) { pollGamepad(dt); renderScene(scene,camera); return; }
   if(shopOpen) { pollGamepad(dt); renderScene(scene,camera); return; }  // freeze world while shopping
 
@@ -8329,6 +8373,7 @@ function loop(){
   if(!isClient && !duelMode) updateCoins(dt);   // coins are host-owned; clients see them via snapshots
   updateBuffs(dt);
   updateGrenades(dt);
+  updateFloaters(dt);   // floating damage numbers + enemy hit-flash decay
   updateChests(dt);
   checkProximity();   // runs in all modes; in duel it only considers trigger-animation props
 
