@@ -5639,6 +5639,7 @@ function descFromMarker(g){ const m=g.userData.mark; return { x:g.position.x, z:
 let gameCfg = {
   mode: (savedLevel && savedLevel.game && savedLevel.game.mode) || (spawnMarkers.length ? 'prebuilt' : 'random'),
   winWaves: (savedLevel && savedLevel.game && savedLevel.game.winWaves!=null) ? savedLevel.game.winWaves : 0,   // 0 = endless
+  upgrades: (savedLevel && savedLevel.game && savedLevel.game.upgrades!=null) ? !!savedLevel.game.upgrades : true,   // solo between-wave card picks
 };
 
 // ---------- Player start (where you/co-op players spawn each run; authored in-editor) ----------
@@ -6278,10 +6279,24 @@ let nextCoinId = 1;
 const coins = [];
 const coinGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.1, 14);
 const coinMat = new THREE.MeshStandardMaterial({ color:0xffd166, emissive:0xffaa00, emissiveIntensity:0.6, metalness:0.8, roughness:0.3 });
+// Coin look/behavior is authorable: a GLB model URL (blank = built-in token), scale, and an on/off switch.
+let coinCfg = { url:'', scale:1, on:true };
+if(savedLevel && savedLevel.coin){ const c=savedLevel.coin; if(c.url!=null) coinCfg.url=c.url; if(c.scale) coinCfg.scale=+c.scale; if(c.on!=null) coinCfg.on=!!c.on; }
+// Build one coin's visual — a GLB clone (async) or the built-in cylinder. Shared by solo + co-op rendering.
+function makeCoinMesh(){
+  if(coinCfg.url){
+    const g = new THREE.Group();
+    loadGLTFCached(coinCfg.url,
+      (gltf)=>{ const model=THREE.cloneSkinned(gltf.scene); model.scale.setScalar(coinCfg.scale||1); model.traverse(o=>{ if(o.isMesh) o.castShadow=true; }); g.add(model); if(typeof playModelAnimations==='function') playModelAnimations(model, gltf); },
+      (err)=>{ console.warn('Coin model load failed, using built-in coin:', err && err.message); const c=new THREE.Mesh(coinGeo, coinMat); c.rotation.x=Math.PI/2; g.add(c); });
+    return g;
+  }
+  const m = new THREE.Mesh(coinGeo, coinMat); m.rotation.x = Math.PI/2; return m;
+}
 function spawnCoin(x, z, value){
-  const mesh = new THREE.Mesh(coinGeo, coinMat);
+  if(!coinCfg.on) return;                       // coins disabled -> no drops (and no credits from kills)
+  const mesh = makeCoinMesh();
   mesh.position.set(x, 0.9, z);
-  mesh.rotation.x = Math.PI/2;
   scene.add(mesh);
   coins.push({ id: nextCoinId++, mesh, spin: Math.random()*Math.PI*2, life: 25, value });
 }
@@ -6462,7 +6477,8 @@ function loadLevelFromNet(level){
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns){ const g=buildSpawnMarker(sp); g.visible = editorOpen; } }
-  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; }
+  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; }
+  if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; refreshPlayerSpawnMarker(); }
   if(level.weapons){ for(const k in WEAPONS){ const wd=level.weapons[k]; if(wd){ WEAPONS[k].model=wd.model||''; WEAPONS[k].view=wd.view||null; } } }
   if(level.grenade){ const G=level.grenade; if(G.model!=null) GRENADE.model=G.model||''; if(G.scale!=null) GRENADE.scale=G.scale; if(G.radius!=null) GRENADE.radius=G.radius; if(G.damage!=null) GRENADE.damage=G.damage; if(G.fuse!=null) GRENADE.fuse=G.fuse; if(G.throwForce!=null) GRENADE.throwForce=G.throwForce; loadGrenadeModel(); if(editorTargets.grenade.sync) editorTargets.grenade.sync(); }
@@ -6522,7 +6538,7 @@ function upsertEnemyMesh(e){
 }
 function upsertCoinMesh(c){
   let m=NET.coinMeshes[c.id];
-  if(!m){ m=new THREE.Mesh(coinGeo, coinMat); m.rotation.x=Math.PI/2; scene.add(m); NET.coinMeshes[c.id]=m; }
+  if(!m){ m=makeCoinMesh(); scene.add(m); NET.coinMeshes[c.id]=m; }
   m.position.set(c.p[0], 0.9, c.p[1]);
 }
 
@@ -7284,7 +7300,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 53 · 2026-06-03';
+const BUILD_VERSION = 'build 56 · 2026-06-03';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8050,18 +8066,24 @@ function showHitmarker(kill){
 // ---- Combat feel: floating damage numbers, enemy hit-flash, hitstop ----
 let hitStop = 0;                 // brief time-scale dip on a kill (solo only), counted down in real time
 const dmgNumbers = [];           // world-space sprites that rise + fade
+// Floating hit-number look is authorable in the editor (on/off, font size, hit + kill colors) and saved.
+let dmgNumCfg = { on:true, size:44, hitColor:'#ffe08a', killColor:'#ff6b6b' };
+if(savedLevel && savedLevel.dmgNum){ const d=savedLevel.dmgNum; if(d.on!=null) dmgNumCfg.on=!!d.on; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
 function spawnDamageNumber(pos, amount, kill){
+  if(!dmgNumCfg.on) return;
   const n = Math.max(1, Math.round(amount));
-  const cv = document.createElement('canvas'); cv.width = 128; cv.height = 64;
+  const fs = Math.max(10, Math.min(120, dmgNumCfg.size||44));
+  const cv = document.createElement('canvas'); cv.width = Math.ceil(fs*2.9); cv.height = Math.ceil(fs*1.5);
   const cx = cv.getContext('2d');
-  cx.font = 'bold 44px system-ui, sans-serif'; cx.textAlign='center'; cx.textBaseline='middle';
-  cx.lineWidth = 6; cx.strokeStyle = 'rgba(0,0,0,0.85)'; cx.fillStyle = kill ? '#ff6b6b' : '#ffe08a';
+  cx.font = 'bold '+fs+'px system-ui, sans-serif'; cx.textAlign='center'; cx.textBaseline='middle';
+  cx.lineWidth = Math.max(3, fs*0.14); cx.strokeStyle = 'rgba(0,0,0,0.85)';
+  cx.fillStyle = kill ? (dmgNumCfg.killColor||'#ff6b6b') : (dmgNumCfg.hitColor||'#ffe08a');
   const txt = kill ? (n + '!') : ('' + n);
-  cx.strokeText(txt, 64, 32); cx.fillText(txt, 64, 32);
+  cx.strokeText(txt, cv.width/2, cv.height/2); cx.fillText(txt, cv.width/2, cv.height/2);
   const tex = new THREE.CanvasTexture(cv); tex.minFilter = THREE.LinearFilter;
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, transparent:true, depthTest:false, depthWrite:false }));
   sp.renderOrder = 9500;
-  const sc = kill ? 1.1 : 0.8;
+  const sc = (fs/44) * (kill ? 1.1 : 0.8);
   sp.position.set(pos.x + (Math.random()-0.5)*0.5, pos.y + 0.3 + (Math.random()-0.5)*0.3, pos.z + (Math.random()-0.5)*0.5);
   sp.scale.set(sc, sc*0.5, 1);
   scene.add(sp);
@@ -8493,7 +8515,7 @@ function loop(){
       if(spawnTimer<=0){ spawnEnemy(spawnQueue.length ? spawnQueue.shift() : null); toSpawn--; spawnTimer=0.6; updateHUD(); }
     } else if(enemies.length===0){
       if(gameCfg.winWaves>0 && wave>=gameCfg.winWaves){ if(typeof gameWon==='function') gameWon(); }
-      else if(NET.mode==='off'){ beginUpgradeChoice(); }   // solo: pick an upgrade between waves
+      else if(NET.mode==='off' && gameCfg.upgrades !== false){ beginUpgradeChoice(); }   // solo + enabled: pick an upgrade between waves
       else { wave++; SFX.wave(); startWave(); }
     }
   }
@@ -9031,11 +9053,13 @@ function serializeLevel(){
     station: { url: stationModelUrl, state: Object.assign({}, editorTargets.station.state) },
     world:   Object.assign({}, worldCfg),
     chest:   { url: chestModelUrl, scale: chestModelScale },
+    coin:    { url: coinCfg.url, scale: coinCfg.scale, on: coinCfg.on !== false },
     enemy:   { url: enemyModelUrl, scale: enemyModelScale, face: enemyFaceOffset, cr: enemyColliderR, yoff: enemyYOffset, xoff: enemyXOffset, zoff: enemyZOffset },
     props:   propModels.filter(Boolean).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
-    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves },
+    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false },
+    dmgNum:  { on: dmgNumCfg.on !== false, size: dmgNumCfg.size, hit: dmgNumCfg.hitColor, kill: dmgNumCfg.killColor },
     pstart:  { x: playerSpawn.x, z: playerSpawn.z, yaw: playerSpawn.yaw },
     grenade: { model: GRENADE.model, scale: GRENADE.scale, radius: GRENADE.radius, damage: GRENADE.damage, fuse: GRENADE.fuse, throwForce: GRENADE.throwForce },
   };
@@ -9073,7 +9097,8 @@ function restoreLevel(level){
   // enemy spawns
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns){ const g=buildSpawnMarker(sp); g.visible = editorOpen; } }
-  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; }
+  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; }
+  if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; } else { playerSpawn.x=0; playerSpawn.z=0; playerSpawn.yaw=0; }
   refreshPlayerSpawnMarker();
   if(level.grenade){ const G=level.grenade; if(G.model!=null) GRENADE.model=G.model||''; if(G.scale!=null) GRENADE.scale=G.scale; if(G.radius!=null) GRENADE.radius=G.radius; if(G.damage!=null) GRENADE.damage=G.damage; if(G.fuse!=null) GRENADE.fuse=G.fuse; if(G.throwForce!=null) GRENADE.throwForce=G.throwForce; loadGrenadeModel(); if(editorTargets.grenade.sync) editorTargets.grenade.sync(); }
@@ -9092,6 +9117,7 @@ function restoreLevel(level){
   // world + loot
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }
   if(level.chest){ chestModelUrl = level.chest.url||''; chestModelScale = level.chest.scale||1; }
+  if(level.coin){ const c=level.coin; coinCfg.url=c.url||''; coinCfg.scale=c.scale||1; coinCfg.on=c.on!==false; }
   if(level.enemy){ enemyModelUrl = level.enemy.url||''; enemyModelScale = level.enemy.scale||1; enemyFaceOffset = level.enemy.face||0; enemyColliderR = level.enemy.cr||0; enemyYOffset = level.enemy.yoff||0; enemyXOffset = level.enemy.xoff||0; enemyZOffset = level.enemy.zoff||0; for(const en of enemies) buildEnemyVisual(en.mesh); }   // re-skin any live enemies
   selProps.length = 0;
   editorTargets.props.idx = Math.max(0, Math.min(editorTargets.props.idx, propModels.length-1));
@@ -9536,6 +9562,32 @@ function renderEditorFields(){
     wwN.onchange=()=>{ gameCfg.winWaves=Math.max(0,Math.min(99,parseInt(wwN.value,10)||0)); renderEditorFields(); };
     wwLab.appendChild(wwSp); wwLab.appendChild(wwN); gHost.appendChild(wwLab);
     hint(gHost, '', '2px 0 0').textContent = (gameCfg.winWaves>0) ? ('Clear '+gameCfg.winWaves+' wave'+(gameCfg.winWaves===1?'':'s')+' to win (MISSION COMPLETE).') : '0 = endless survival.';
+    const ugLab=document.createElement('label'); ugLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:8px 0 2px;cursor:pointer;';
+    const ugCb=document.createElement('input'); ugCb.type='checkbox'; ugCb.checked=(gameCfg.upgrades!==false); ugCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+    ugCb.onchange=()=>{ pushUndoSnapshot(); gameCfg.upgrades=ugCb.checked; };
+    const ugSp=document.createElement('span'); ugSp.textContent='Between-wave upgrade cards (solo)';
+    ugLab.appendChild(ugCb); ugLab.appendChild(ugSp); gHost.appendChild(ugLab);
+    hint(gHost, '', '2px 0 0').textContent = 'On: clearing a wave in solo lets you pick 1 of 3 upgrades. Off: waves flow straight through.';
+    // hit-number look
+    hint(gHost, '<b>Hit numbers</b>', '12px 0 4px');
+    const hnLab=document.createElement('label'); hnLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;cursor:pointer;';
+    const hnCb=document.createElement('input'); hnCb.type='checkbox'; hnCb.checked=(dmgNumCfg.on!==false); hnCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+    hnCb.onchange=()=>{ pushUndoSnapshot(); dmgNumCfg.on=hnCb.checked; renderEditorFields(); };
+    const hnSp=document.createElement('span'); hnSp.textContent='Show floating damage numbers';
+    hnLab.appendChild(hnCb); hnLab.appendChild(hnSp); gHost.appendChild(hnLab);
+    if(dmgNumCfg.on!==false){
+      const szLab=document.createElement('label'); szLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;';
+      const szSp=document.createElement('span'); szSp.textContent='Font size'; szSp.style.minWidth='86px';
+      const szN=document.createElement('input'); szN.type='number'; szN.min='10'; szN.max='120'; szN.step='2'; szN.value=dmgNumCfg.size; szN.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+      szN.onchange=()=>{ dmgNumCfg.size=Math.max(10,Math.min(120,parseInt(szN.value,10)||44)); };
+      szLab.appendChild(szSp); szLab.appendChild(szN); gHost.appendChild(szLab);
+      const colRow=document.createElement('div'); colRow.style.cssText='display:flex;gap:16px;margin:4px 0 0;';
+      const mkCol=(label,val,set)=>{ const w=document.createElement('label'); w.style.cssText='display:flex;align-items:center;gap:6px;color:#9fe6cf;font-size:12px;cursor:pointer;'; const i=document.createElement('input'); i.type='color'; i.value=val; i.style.cssText='width:30px;height:22px;border:none;background:none;cursor:pointer;'; i.oninput=()=>set(i.value); const sp=document.createElement('span'); sp.textContent=label; w.appendChild(i); w.appendChild(sp); return w; };
+      colRow.appendChild(mkCol('Hit', dmgNumCfg.hitColor, v=>dmgNumCfg.hitColor=v));
+      colRow.appendChild(mkCol('Kill', dmgNumCfg.killColor, v=>dmgNumCfg.killColor=v));
+      gHost.appendChild(colRow);
+    }
+    hint(gHost, '', '4px 0 0').textContent = 'Numbers pop at each hit and float up. Kills show the red color with a "!".';
 
     // ===== LOOT section =====
     const lHost = lootHost || worldHost;
@@ -9551,6 +9603,26 @@ function renderEditorFields(){
     sNum.onchange=()=>{ chestModelScale=Math.max(0.05,Math.min(50,parseFloat(sNum.value)||1)); };
     sRow.appendChild(sSp); sRow.appendChild(sNum); lHost.appendChild(sRow);
     hint(lHost, '', '3px 0 0').textContent = 'Apply clears current loot boxes so the next spawn uses the new model.';
+    // coins
+    hint(lHost, '<b>Coins</b> — drops collected for credits', '12px 0 4px');
+    const cnLab=document.createElement('label'); cnLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;cursor:pointer;';
+    const cnCb=document.createElement('input'); cnCb.type='checkbox'; cnCb.checked=(coinCfg.on!==false); cnCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+    cnCb.onchange=()=>{ pushUndoSnapshot(); coinCfg.on=cnCb.checked; renderEditorFields(); };
+    const cnSp=document.createElement('span'); cnSp.textContent='Spawn coins on kills';
+    cnLab.appendChild(cnCb); cnLab.appendChild(cnSp); lHost.appendChild(cnLab);
+    if(coinCfg.on!==false){
+      const cuRow=document.createElement('div'); cuRow.style.cssText='display:flex;gap:6px;align-items:center;margin-top:4px;';
+      const cu=document.createElement('input'); cu.type='text'; cu.placeholder='https://…/coin.glb (blank = built-in)'; cu.value=coinCfg.url; cu.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+      const cab=document.createElement('button'); cab.textContent='Apply'; cab.style.flex='0 0 auto';
+      cab.onclick=()=>{ pushUndoSnapshot(); coinCfg.url=cu.value.trim(); for(const c of coins.slice()){ scene.remove(c.mesh); } coins.length=0; };
+      cuRow.appendChild(cu); cuRow.appendChild(cab); lHost.appendChild(cuRow);
+      const csLab=document.createElement('label'); csLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 2px;';
+      const csSp=document.createElement('span'); csSp.textContent='Model scale'; csSp.style.minWidth='86px';
+      const csN=document.createElement('input'); csN.type='number'; csN.min='0.05'; csN.max='50'; csN.step='0.05'; csN.value=coinCfg.scale; csN.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+      csN.onchange=()=>{ coinCfg.scale=Math.max(0.05,Math.min(50,parseFloat(csN.value)||1)); };
+      csLab.appendChild(csSp); csLab.appendChild(csN); lHost.appendChild(csLab);
+    }
+    hint(lHost, '', '4px 0 0').textContent = (coinCfg.on!==false) ? 'Apply clears current coins so new drops use the new model.' : 'Coins off: kills drop no credits, so the ammo station can not be used.';
   }
 
   // global view toggles (overhead camera, hide enemies)
