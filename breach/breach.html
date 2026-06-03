@@ -7137,7 +7137,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 38 · 2026-06-02';
+const BUILD_VERSION = 'build 39 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7593,7 +7593,8 @@ function damageProp(obj, dmg, point, dir, power){
 }
 // Step the simulation (fixed timestep) and sync dynamic meshes from their bodies. Host/solo only.
 function updatePhysics(dt){
-  if(!physWorld || !dynamicProps.length) return;
+  if(!physWorld) return;
+  if(!dynamicProps.length && !fragments.length){ physAccum = 0; return; }   // nothing dynamic to simulate (debris counts!)
   physAccum += Math.min(dt, 0.1);
   let n = 0;
   while(physAccum >= PHYS_DT && n < PHYS_MAX_SUBSTEPS){ physWorld.step(); physAccum -= PHYS_DT; n++; }
