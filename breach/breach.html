@@ -6743,6 +6743,63 @@ function updateBuffs(dt){
   $('buffs').innerHTML = html;
 }
 
+// ---------- Between-wave upgrades (roguelite picks; solo only) ----------
+const RUN0 = { dmgMul:1, fireMul:1, speedMul:1, coinMul:1, lifesteal:0, regen:0, grenadePerWave:0 };
+let run = { ...RUN0 };                 // run-scoped modifiers; stays neutral (RUN0) in co-op
+let choosingUpgrade = false;
+const UPGRADES = [
+  { id:'dmg',   icon:'🔥', name:'High-Velocity Rounds', desc:'+25% weapon damage',         apply(){ run.dmgMul *= 1.25; } },
+  { id:'rof',   icon:'⚡', name:'Trigger Job',          desc:'+15% fire rate',             apply(){ run.fireMul *= 0.85; } },
+  { id:'hp',    icon:'❤️', name:'Reinforced Plating',   desc:'+25 max HP (and heal up)',   apply(){ player.maxHp += 25; player.hp = Math.min(player.maxHp, player.hp + 25); } },
+  { id:'speed', icon:'🥾', name:'Combat Stims',         desc:'+12% move speed',            apply(){ run.speedMul *= 1.12; } },
+  { id:'leech', icon:'🩸', name:'Vampiric Rounds',      desc:'Heal 4 HP per kill',         apply(){ run.lifesteal += 4; } },
+  { id:'coin',  icon:'◆',  name:'Scavenger',            desc:'+30% credits from kills',    apply(){ run.coinMul *= 1.3; } },
+  { id:'regen', icon:'✚',  name:'Field Medic',          desc:'Heal 25 HP each wave',       apply(){ run.regen += 25; } },
+  { id:'nade',  icon:'💣', name:'Munitions Cache',      desc:'+1 grenade now & each wave', apply(){ run.grenadePerWave += 1; grenadeCount += 1; updateHUD(); } },
+];
+function pickUpgrades(n){
+  const pool = UPGRADES.slice(), out = [];
+  for(let i=0;i<n && pool.length;i++) out.push(pool.splice(Math.floor(Math.random()*pool.length),1)[0]);
+  return out;
+}
+function advanceWave(){
+  wave++; SFX.wave();
+  if(run.regen>0) player.hp = Math.min(player.maxHp, player.hp + run.regen);   // per-wave perks
+  if(run.grenadePerWave>0) grenadeCount += run.grenadePerWave;
+  updateHUD(); startWave();
+}
+function closeUpgradePicker(){ const e=document.getElementById('upgrade'); if(e) e.remove(); choosingUpgrade=false; }
+function beginUpgradeChoice(){
+  if(choosingUpgrade) return;
+  choosingUpgrade = true; document.exitPointerLock();
+  showUpgradePicker(pickUpgrades(3), (u)=>{
+    if(u && u.apply) u.apply();
+    choosingUpgrade = false;
+    advanceWave();
+    try{ renderer.domElement.requestPointerLock(); }catch(e){}
+  });
+}
+function showUpgradePicker(opts, onPick){
+  closeUpgradePicker();
+  const el = document.createElement('div'); el.id='upgrade';
+  el.style.cssText = 'position:absolute;inset:0;z-index:60;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:rgba(4,10,12,.72);backdrop-filter:blur(3px);';
+  const h = document.createElement('div'); h.textContent = 'WAVE '+wave+' CLEARED — CHOOSE AN UPGRADE';
+  h.style.cssText = 'color:#38f5b5;letter-spacing:3px;font-weight:700;font-size:20px;text-shadow:0 0 20px rgba(56,245,181,.5)';
+  el.appendChild(h);
+  const row = document.createElement('div'); row.style.cssText='display:flex;gap:16px;flex-wrap:wrap;justify-content:center';
+  for(const u of opts){
+    const c = document.createElement('button');
+    c.style.cssText = 'width:200px;min-height:150px;background:linear-gradient(160deg,rgba(10,22,26,.95),rgba(8,16,20,.9));border:1px solid rgba(56,245,181,.35);border-radius:10px;color:#cfeee2;padding:18px;cursor:pointer;display:flex;flex-direction:column;gap:10px;align-items:center;text-align:center;transition:all .12s;';
+    c.onmouseenter=()=>{ c.style.borderColor='#38f5b5'; c.style.transform='translateY(-4px)'; };
+    c.onmouseleave=()=>{ c.style.borderColor='rgba(56,245,181,.35)'; c.style.transform='none'; };
+    c.innerHTML = '<div style="font-size:40px">'+u.icon+'</div><div style="font-weight:700;font-size:15px;color:#eafff7">'+u.name+'</div><div style="font-size:13px;color:#9fe6cf;line-height:1.4">'+u.desc+'</div>';
+    c.onclick=()=>{ el.remove(); onPick(u); };
+    row.appendChild(c);
+  }
+  el.appendChild(row);
+  document.body.appendChild(el);
+}
+
 // ---------- Grenades (throwable) ----------
 const grenades = [];
 const nadeGeo = new THREE.SphereGeometry(0.22, 10, 10);
@@ -7196,7 +7253,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 48 · 2026-06-02';
+const BUILD_VERSION = 'build 49 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7777,7 +7834,7 @@ function teardownInstancing(){
 function shoot(){
   const w = W();
   const now = performance.now();
-  if(now - lastShot < w.fireRate || reloading) return;
+  if(now - lastShot < w.fireRate * run.fireMul || reloading) return;
   if(w.mag<=0){ SFX.empty(); reload(); return; }
   if(!w.auto && firingLatch) return;     // semi-auto: one shot per click
   firingLatch = true;
@@ -7788,7 +7845,7 @@ function shoot(){
   player.pitch += (0.010 + Math.random()*0.006) * (adsBlend>0.5?0.5:1);
   muzzle.intensity = 6; flashMat.opacity = 1;
 
-  const dmgMul = buffs.damage ? 2 : 1;
+  const dmgMul = (buffs.damage ? 2 : 1) * run.dmgMul;
   const clientMode = NET.mode==='client';
   const duelMode = NET.gameMode==='duel';
   if(duelMode && duelDead) return;   // no shooting while waiting to respawn
@@ -7874,8 +7931,9 @@ function killEnemy(en){
   const drops = Math.random()<0.35 ? 2 : 1;
   for(let i=0;i<drops;i++){
     const ox=(Math.random()-0.5)*1.5, oz=(Math.random()-0.5)*1.5;
-    spawnCoin(en.mesh.position.x+ox, en.mesh.position.z+oz, 15 + Math.floor(wave*2));
+    spawnCoin(en.mesh.position.x+ox, en.mesh.position.z+oz, Math.round((15 + Math.floor(wave*2)) * run.coinMul));
   }
+  if(run.lifesteal>0) player.hp = Math.min(player.maxHp, player.hp + run.lifesteal);   // vampiric rounds
   scene.remove(en.mesh);
   if(en.mesh.userData.mixer){ const mi=mixers.indexOf(en.mesh.userData.mixer); if(mi>=0) mixers.splice(mi,1); }   // stop animating a dead enemy
   enemies.splice(enemies.indexOf(en),1);
@@ -8207,7 +8265,7 @@ function loop(){
   let dt = rawDt;
   if(hitStop > 0){ hitStop -= rawDt; dt = rawDt * 0.12; }   // impact freeze: slow the sim briefly (real-time countdown)
   if(!gameOn) { pollGamepad(dt); renderScene(scene,camera); return; }
-  if(shopOpen) { pollGamepad(dt); renderScene(scene,camera); return; }  // freeze world while shopping
+  if(shopOpen || choosingUpgrade) { pollGamepad(dt); renderScene(scene,camera); return; }  // freeze world while shopping / picking an upgrade
 
   pollGamepad(dt);   // controller input feeds the same flags as keyboard/mouse
   updateColliderViz(dt);   // debug overlay of collision boxes (toggle in editor)
@@ -8255,7 +8313,7 @@ function loop(){
   crouchT += ((crouching?1:0) - crouchT) * Math.min(1, dt*12);
   let speedBase = (keys['ShiftLeft']||padSprint) ? SPEED*SPRINT : SPEED;
   if(crouching) speedBase = CROUCH_SPEED;          // crouch overrides sprint
-  const sp = speedBase * (buffs.speed>0?1.4:1) * moveScale;
+  const sp = speedBase * (buffs.speed>0?1.4:1) * moveScale * run.speedMul;
   player.vel.x = wish.x * sp;
   player.vel.z = wish.z * sp;
 
@@ -8404,6 +8462,7 @@ function loop(){
       if(spawnTimer<=0){ spawnEnemy(spawnQueue.length ? spawnQueue.shift() : null); toSpawn--; spawnTimer=0.6; updateHUD(); }
     } else if(enemies.length===0){
       if(gameCfg.winWaves>0 && wave>=gameCfg.winWaves){ if(typeof gameWon==='function') gameWon(); }
+      else if(!NET.mode){ beginUpgradeChoice(); }   // solo: pick an upgrade between waves
       else { wave++; SFX.wave(); startWave(); }
     }
   }
@@ -10463,7 +10522,7 @@ function toggleEditor(){
 // ---------- Game state ----------
 function startGame(){
   initAudio();
-  player.hp=100; player.pos.set(playerSpawn.x, EYE, playerSpawn.z); player.vel.set(0,0,0);
+  player.hp=100; player.maxHp=100; run = { ...RUN0 }; if(typeof closeUpgradePicker==='function') closeUpgradePicker(); player.pos.set(playerSpawn.x, EYE, playerSpawn.z); player.vel.set(0,0,0);
   player.yaw=playerSpawn.yaw; player.pitch=0; player.onGround=true;
   // reset weapons
   owned = ['rifle']; curWep='rifle';
@@ -10512,6 +10571,7 @@ function startGame(){
 }
 function gameWon(){
   if(!gameOn) return;
+  if(typeof closeUpgradePicker==='function') closeUpgradePicker();
   gameOn=false; gameOver=true; document.exitPointerLock();
   firing=false; ads=false; shopOpen=false;
   if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false);
@@ -10526,7 +10586,7 @@ function gameWon(){
   document.getElementById('startBtn').onclick = startGame;
 }
 function endGame(){
-  gameOn=false; gameOver=true; document.exitPointerLock();
+  gameOn=false; gameOver=true; document.exitPointerLock(); if(typeof closeUpgradePicker==='function') closeUpgradePicker();
   firing=false; ads=false; shopOpen=false;
   editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
   $('shop').classList.add('hidden');
@@ -10585,6 +10645,7 @@ function showMainMenu(){
 // Leave the editor and return to the start page WITHOUT starting a wave, so Deploy replays the live build.
 function editorToMenu(){
   if(editorOpen) toggleEditor();        // restore play rendering + physics; hide panel, markers, gizmo
+  if(typeof closeUpgradePicker==='function') closeUpgradePicker();
   editorFreeFly=false; editorTopView=false;
   gameOn=false; gameOver=false; shopOpen=false; firing=false; ads=false;
   wave=0; toSpawn=0; spawnQueue=[];
