@@ -6028,6 +6028,9 @@ const WEAPONS = {
   smg:     { name:'SMG',     mag:40, magSize:40, reserve:120, reserveMax:360, fireRate:55,  dmg:8,  pellets:1, spread:0.02, auto:true,  reloadMs:1000, color:0xa8e6ff, refillAmt:80, refillCost:50, model:'', view:null },
   shotgun: { name:'SHOTGUN', mag:6,  magSize:6,  reserve:24,  reserveMax:72,  fireRate:650, dmg:9,  pellets:8, spread:0.08, auto:false, reloadMs:1300, color:0xffb86b, refillAmt:18, refillCost:60, model:'', view:null },
 };
+// Restore per-weapon model + framing saved to localStorage (serialized under "weapons"). Without this the
+// hardcoded model:''/view:null above would wipe gun edits on every reload.
+if(savedLevel && savedLevel.weapons){ for(const k in WEAPONS){ const wd = savedLevel.weapons[k]; if(wd){ WEAPONS[k].model = wd.model || ''; WEAPONS[k].view = wd.view || null; } } }
 let owned = ['rifle'];           // weapons the player has
 let curWep = 'rifle';            // current weapon key
 loadGunModel();                  // load the starting weapon's viewmodel (now that WEAPONS/curWep exist)
@@ -6431,6 +6434,8 @@ function loadLevelFromNet(level){
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns){ const g=buildSpawnMarker(sp); g.visible = editorOpen; } }
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; refreshPlayerSpawnMarker(); }
+  if(level.weapons){ for(const k in WEAPONS){ const wd=level.weapons[k]; if(wd){ WEAPONS[k].model=wd.model||''; WEAPONS[k].view=wd.view||null; } } }
+  if(level.grenade){ const G=level.grenade; if(G.model!=null) GRENADE.model=G.model||''; if(G.scale!=null) GRENADE.scale=G.scale; if(G.radius!=null) GRENADE.radius=G.radius; if(G.damage!=null) GRENADE.damage=G.damage; if(G.fuse!=null) GRENADE.fuse=G.fuse; if(G.throwForce!=null) GRENADE.throwForce=G.throwForce; loadGrenadeModel(); if(editorTargets.grenade.sync) editorTargets.grenade.sync(); }
   if(level.enemy){   // adopt the host's enemy model + collider/offset so clients render the same hostiles
     enemyModelUrl = level.enemy.url||''; enemyModelScale = level.enemy.scale||1; enemyFaceOffset = level.enemy.face||0;
     enemyColliderR = level.enemy.cr||0; enemyYOffset = level.enemy.yoff||0; enemyXOffset = level.enemy.xoff||0; enemyZOffset = level.enemy.zoff||0;
@@ -6743,16 +6748,36 @@ function updateBuffs(dt){
 const grenades = [];
 const nadeGeo = new THREE.SphereGeometry(0.22, 10, 10);
 const nadeMat = new THREE.MeshStandardMaterial({ color:0x2a3a2a, emissive:0x44ff66, emissiveIntensity:0.3, metalness:0.6, roughness:0.5 });
+// Editable grenade config (model + tuning), persisted under "grenade".
+const GRENADE = {
+  model:      (savedLevel && savedLevel.grenade && savedLevel.grenade.model) || '',
+  scale:      (savedLevel && savedLevel.grenade && savedLevel.grenade.scale      != null) ? savedLevel.grenade.scale      : 1,
+  radius:     (savedLevel && savedLevel.grenade && savedLevel.grenade.radius     != null) ? savedLevel.grenade.radius     : 8,
+  damage:     (savedLevel && savedLevel.grenade && savedLevel.grenade.damage     != null) ? savedLevel.grenade.damage     : 80,
+  fuse:       (savedLevel && savedLevel.grenade && savedLevel.grenade.fuse       != null) ? savedLevel.grenade.fuse       : 1.5,
+  throwForce: (savedLevel && savedLevel.grenade && savedLevel.grenade.throwForce != null) ? savedLevel.grenade.throwForce : 26,
+};
+let grenadeGltf = null;
+function loadGrenadeModel(){
+  grenadeGltf = null;
+  if(!GRENADE.model) return;
+  loadGLTFCached(GRENADE.model, (gltf)=>{ grenadeGltf = gltf; }, (err)=>{ console.warn('Grenade model load failed:', err && err.message); });
+}
+function makeGrenadeMesh(){
+  if(grenadeGltf){ const m = THREE.cloneSkinned(grenadeGltf.scene); m.scale.setScalar(GRENADE.scale || 1); m.traverse(o=>{ if(o.isMesh) o.castShadow = true; }); return m; }
+  return new THREE.Mesh(nadeGeo, nadeMat);   // fallback: built-in frag sphere
+}
+loadGrenadeModel();   // preload a saved grenade model (GRENADE is now defined)
 function throwGrenade(){
   if(grenadeCount<=0 || shopOpen) return;
   grenadeCount--; SFX.throw(); updateHUD();
-  const mesh = new THREE.Mesh(nadeGeo, nadeMat);
+  const mesh = makeGrenadeMesh();
   const origin = new THREE.Vector3(); camera.getWorldPosition(origin);
   mesh.position.copy(origin);
   const dir = new THREE.Vector3(); camera.getWorldDirection(dir);
-  const vel = dir.multiplyScalar(26); vel.y += 5; // arc
+  const vel = dir.multiplyScalar(GRENADE.throwForce); vel.y += 5; // arc
   scene.add(mesh);
-  grenades.push({ mesh, vel, fuse: 1.5 });
+  grenades.push({ mesh, vel, fuse: GRENADE.fuse });
 }
 function explodeGrenade(g){
   SFX.explode();
@@ -6760,19 +6785,19 @@ function explodeGrenade(g){
   const pd = player.pos.distanceTo(g.mesh.position);
   const shakeAmt = Math.max(0, 1 - pd/22);   // 0 far away, ~1 right on top of it
   addShake(shakeAmt * 0.9);
-  // visual blast
+  // visual blast (scales with the configured radius)
+  const R = GRENADE.radius;
   const blast = new THREE.Mesh(new THREE.SphereGeometry(1,16,16),
     new THREE.MeshBasicMaterial({color:0xffaa44, transparent:true, opacity:0.8}));
   blast.position.copy(g.mesh.position); scene.add(blast);
-  const bl = new THREE.PointLight(0xffaa44, 30, 20); bl.position.copy(g.mesh.position); scene.add(bl);
-  explosions.push({ mesh:blast, light:bl, life:0.35 });
+  const bl = new THREE.PointLight(0xffaa44, 30, Math.max(12, R*2.5)); bl.position.copy(g.mesh.position); scene.add(bl);
+  explosions.push({ mesh:blast, light:bl, life:0.35, maxR:R });
   for(let i=0;i<14;i++) { const sp=g.mesh.position.clone(); spark(sp, 0xffaa44); }
-  // AoE damage
-  const R = 8;
+  // AoE damage: full at the center, linear falloff to 0 at the radius
   for(const en of enemies.slice()){
     const d = en.mesh.position.distanceTo(g.mesh.position);
     if(d < R){
-      const dmg = 80 * (1 - d/R);
+      const dmg = GRENADE.damage * (1 - d/R);
       en.hp -= dmg;
       if(en.hp<=0) killEnemy(en);
     }
@@ -6795,8 +6820,8 @@ function updateGrenades(dt){
   }
   for(let i=explosions.length-1;i>=0;i--){
     const e=explosions[i]; e.life-=dt;
-    const s = 1 + (0.35-e.life)*18;
-    e.mesh.scale.setScalar(s);
+    const prog = (0.35 - e.life) / 0.35;                 // 0 -> 1 over its life
+    e.mesh.scale.setScalar(Math.max(0.4, prog * (e.maxR || 8)));   // expand out to the blast radius
     e.mesh.material.opacity = Math.max(0, e.life/0.35*0.8);
     e.light.intensity = Math.max(0, e.life/0.35*30);
     if(e.life<=0){ scene.remove(e.mesh); scene.remove(e.light); explosions.splice(i,1); }
@@ -7172,7 +7197,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 44 · 2026-06-02';
+const BUILD_VERSION = 'build 45 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8628,6 +8653,25 @@ const editorTargets = {
     obj(){ return playerSpawnMarker; },
     code(){ return '// ===== Player start ===== (saved in the level JSON under "pstart")'; }
   },
+  grenade: {
+    label: 'Grenade',
+    state: { radius:GRENADE.radius, damage:GRENADE.damage, fuse:GRENADE.fuse, force:GRENADE.throwForce, scale:GRENADE.scale },
+    fields: [
+      { k:'radius', label:'Blast radius', min:1,   max:25,  step:0.5 },
+      { k:'damage', label:'Max damage',   min:5,   max:300, step:5 },
+      { k:'fuse',   label:'Fuse (s)',     min:0.3, max:6,   step:0.1 },
+      { k:'force',  label:'Throw force',  min:5,   max:60,  step:1 },
+      { k:'scale',  label:'Model scale',  min:0.05,max:6,   step:0.05 },
+    ],
+    obj(){ return null; },   // a thrown projectile — no in-scene gizmo
+    urlField: true,
+    getUrl(){ return GRENADE.model; },
+    setUrl(u){ GRENADE.model = (u||'').trim(); loadGrenadeModel(); },
+    sync(){ const s=this.state; s.radius=GRENADE.radius; s.damage=GRENADE.damage; s.fuse=GRENADE.fuse; s.force=GRENADE.throwForce; s.scale=GRENADE.scale; },
+    apply(){ const s=this.state; GRENADE.radius=s.radius; GRENADE.damage=s.damage; GRENADE.fuse=s.fuse; GRENADE.throwForce=s.force; GRENADE.scale=s.scale; },
+    code(){ const s=this.state; return '// ===== Grenade ===== (saved under "grenade")\n'
+      + 'GRENADE.radius = '+fmt(s.radius)+'; GRENADE.damage = '+fmt(s.damage)+'; GRENADE.fuse = '+fmt(s.fuse)+'; GRENADE.throwForce = '+fmt(s.force)+';'; }
+  },
 };
 let editorActive = 'gun';
 let editorEl = null;
@@ -8806,6 +8850,7 @@ function serializeLevel(){
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
     game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves },
     pstart:  { x: playerSpawn.x, z: playerSpawn.z, yaw: playerSpawn.yaw },
+    grenade: { model: GRENADE.model, scale: GRENADE.scale, radius: GRENADE.radius, damage: GRENADE.damage, fuse: GRENADE.fuse, throwForce: GRENADE.throwForce },
   };
 }
 function saveLevel(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(serializeLevel())); return true; } catch(e){ return false; } }
@@ -8844,6 +8889,7 @@ function restoreLevel(level){
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; } else { playerSpawn.x=0; playerSpawn.z=0; playerSpawn.yaw=0; }
   refreshPlayerSpawnMarker();
+  if(level.grenade){ const G=level.grenade; if(G.model!=null) GRENADE.model=G.model||''; if(G.scale!=null) GRENADE.scale=G.scale; if(G.radius!=null) GRENADE.radius=G.radius; if(G.damage!=null) GRENADE.damage=G.damage; if(G.fuse!=null) GRENADE.fuse=G.fuse; if(G.throwForce!=null) GRENADE.throwForce=G.throwForce; loadGrenadeModel(); if(editorTargets.grenade.sync) editorTargets.grenade.sync(); }
   // gun / aim / station
   if(level.gun){ if(level.gun.url && level.gun.url!==gunModelUrl) swapGunModel(level.gun.url); Object.assign(editorTargets.gun.state, level.gun.state||{}); editorTargets.gun.apply(); }
   // per-weapon models + framing
@@ -9033,7 +9079,7 @@ function buildEditorPanel(){
   for(const key of Object.keys(editorTargets)){
     const b = document.createElement('div'); b.className='tab'; b.textContent = editorTargets[key].label;
     b.dataset.key = key;
-    b.onclick = ()=>{ editorActive = key; if(key==='gun' && editorTargets.gun.syncFromWeapon) editorTargets.gun.syncFromWeapon(); renderEditorFields(); };
+    b.onclick = ()=>{ editorActive = key; if(key==='gun' && editorTargets.gun.syncFromWeapon) editorTargets.gun.syncFromWeapon(); if(key==='grenade' && editorTargets.grenade.sync) editorTargets.grenade.sync(); renderEditorFields(); };
     tabs.appendChild(b);
   }
   p.querySelector('#edReset').onclick = ()=>{ resetEditorTarget(editorActive); };
