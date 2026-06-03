@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>BREACH // FPS</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=Major+Mono+Display&display=swap');
@@ -151,6 +151,27 @@
   #hitmarker { position: absolute; top:50%; left:50%; transform: translate(-50%,-50%) scale(.6);
     font-size: 30px; color:#fff; opacity:0; font-weight:700; text-shadow:0 0 8px #38f5b5; }
 
+  /* On-screen touch controls (shown on touch devices during play) */
+  canvas { touch-action: none; }
+  #touchUI { position:absolute; inset:0; z-index:40; display:none; pointer-events:none; -webkit-user-select:none; user-select:none; }
+  #touchUI > * { pointer-events:auto; }
+  #tLook { position:absolute; right:0; top:0; bottom:0; left:42%; touch-action:none; }
+  #tStick { position:absolute; left:26px; bottom:26px; width:132px; height:132px; border-radius:50%;
+    background:rgba(255,255,255,.05); border:2px solid rgba(56,245,181,.35); touch-action:none; }
+  #tThumb { position:absolute; left:50%; top:50%; width:56px; height:56px; margin:-28px 0 0 -28px; border-radius:50%;
+    background:rgba(56,245,181,.42); border:2px solid rgba(56,245,181,.85); }
+  .tBtn { position:absolute; border-radius:50%; background:rgba(8,18,22,.55); border:2px solid rgba(56,245,181,.4);
+    color:#cfeee2; font-size:12px; font-weight:700; letter-spacing:.5px; display:flex; align-items:center; justify-content:center;
+    touch-action:none; -webkit-tap-highlight-color:transparent; }
+  .tBtn.on { background:rgba(56,245,181,.35); color:#eafff7; border-color:#38f5b5; }
+  #tFire { right:28px; bottom:42px; width:94px; height:94px; font-size:14px; }
+  #tAim { right:138px; bottom:74px; width:66px; height:66px; }
+  #tJump { right:46px; bottom:150px; width:64px; height:64px; }
+  #tReload { right:124px; bottom:158px; width:54px; height:54px; font-size:20px; }
+  #tNade { right:30px; bottom:250px; width:54px; height:54px; font-size:18px; }
+  #tWeapon { left:172px; bottom:28px; width:58px; height:58px; font-size:18px; }
+  #tUse { left:172px; bottom:96px; width:58px; height:58px; }
+
   /* Overlay menu */
   #overlay {
     position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column;
@@ -245,6 +266,17 @@
   <canvas id="minimap" width="180" height="180"></canvas>
   <div id="crosshair"><span class="dot"></span></div>
   <div id="hitmarker">✕</div>
+  <div id="touchUI">
+    <div id="tLook"></div>
+    <div id="tStick"><div id="tThumb"></div></div>
+    <button class="tBtn" id="tFire">FIRE</button>
+    <button class="tBtn" id="tAim">AIM</button>
+    <button class="tBtn" id="tJump">JUMP</button>
+    <button class="tBtn" id="tReload">⟳</button>
+    <button class="tBtn" id="tNade">💣</button>
+    <button class="tBtn" id="tWeapon">⇄</button>
+    <button class="tBtn" id="tUse">USE</button>
+  </div>
 
   <div id="stats" class="panel">
     <div id="row">
@@ -5827,6 +5859,11 @@ applyWorldCfg();
 let crouching = false, crouchT = 0;
 const CROUCH_DIP = 0.8;     // how far the camera lowers when fully crouched
 const keys = {};
+// ---- Touch / mobile input ----
+let isTouch = (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches);   // primary input is a touchscreen
+addEventListener('touchstart', ()=>{ isTouch = true; }, { once:true, passive:true });          // or reveal as soon as a real touch happens
+let touchMoveX=0, touchMoveZ=0, touchSprint=false, touchFiring=false, touchAds=false, touchJump=false, touchLookDX=0, touchLookDY=0;
+const TOUCH_LOOK_SENS = 0.0042, TOUCH_ADS_SENS = 0.0022;
 function typingInField(e){
   const t = e.target, tag = (t && t.tagName) || '';
   return tag==='INPUT' || tag==='TEXTAREA' || tag==='SELECT' || (t && t.isContentEditable);
@@ -5904,7 +5941,7 @@ addEventListener('wheel', e=>{
 let locked = false;let lookFresh = false;   // set when pointer lock is (re)acquired -> drop the first mousemove (it can carry a huge catch-up delta)
 const MAX_LOOK_DELTA = 300;   // px per mousemove event; guards against spurious spikes that snap the view
 let editorDragLook = false, editorDragMoved = false, editorDragPan = false;   // editor mouse states
-renderer.domElement.addEventListener('click', ()=>{ if(gameOn && !locked && !shopOpen && !editorOpen) renderer.domElement.requestPointerLock(); });
+renderer.domElement.addEventListener('click', ()=>{ if(!isTouch && gameOn && !locked && !shopOpen && !editorOpen) renderer.domElement.requestPointerLock(); });
 document.addEventListener('pointerlockchange', ()=>{ const was=locked; locked = document.pointerLockElement === renderer.domElement; if(locked && !was) lookFresh = true; });
 // Ctrl+W (crouch + forward) is the browser's close-tab shortcut and can't be cancelled from a keydown.
 // While actively playing (pointer locked), ask the browser to confirm before unloading so an accidental
@@ -7308,7 +7345,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 57 · 2026-06-03';
+const BUILD_VERSION = 'build 58 · 2026-06-03';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7400,6 +7437,40 @@ addEventListener('mouseup', e=>{
   else if(e.button===2) ads = false;
 });
 addEventListener('contextmenu', e=>{ if(gameOn) e.preventDefault(); });
+
+// ---- On-screen touch controls: left thumbstick (move + sprint at the edge), right pad (look),
+//      and action buttons. Pointer events give clean multitouch (move + look + fire at once). ----
+(function setupTouchControls(){
+  const stick=document.getElementById('tStick'), thumb=document.getElementById('tThumb'), look=document.getElementById('tLook');
+  if(!stick || !look) return;
+  const R = 60;
+  // virtual joystick
+  let stickId=null, sx=0, sy=0;
+  stick.addEventListener('pointerdown', e=>{ isTouch=true; stickId=e.pointerId; const r=stick.getBoundingClientRect(); sx=r.left+r.width/2; sy=r.top+r.height/2; try{stick.setPointerCapture(e.pointerId);}catch(_){} e.preventDefault(); });
+  stick.addEventListener('pointermove', e=>{ if(e.pointerId!==stickId) return; const dx=e.clientX-sx, dy=e.clientY-sy; const d=Math.hypot(dx,dy)||1; const cl=Math.min(d,R), nx=dx/d*cl, ny=dy/d*cl; thumb.style.transform='translate('+nx+'px,'+ny+'px)'; touchMoveX=nx/R; touchMoveZ=ny/R; touchSprint=(d/R)>0.85; e.preventDefault(); });
+  const stickEnd=e=>{ if(e.pointerId!==stickId) return; stickId=null; touchMoveX=0; touchMoveZ=0; touchSprint=false; thumb.style.transform='translate(0,0)'; };
+  stick.addEventListener('pointerup', stickEnd); stick.addEventListener('pointercancel', stickEnd);
+  // look pad (drag anywhere on the right to aim)
+  let lookId=null, lx=0, ly=0;
+  look.addEventListener('pointerdown', e=>{ isTouch=true; lookId=e.pointerId; lx=e.clientX; ly=e.clientY; try{look.setPointerCapture(e.pointerId);}catch(_){} e.preventDefault(); });
+  look.addEventListener('pointermove', e=>{ if(e.pointerId!==lookId) return; touchLookDX+=(e.clientX-lx); touchLookDY+=(e.clientY-ly); lx=e.clientX; ly=e.clientY; e.preventDefault(); });
+  const lookEnd=e=>{ if(e.pointerId!==lookId) return; lookId=null; };
+  look.addEventListener('pointerup', lookEnd); look.addEventListener('pointercancel', lookEnd);
+  // helpers for buttons
+  const hold=(id,on,off)=>{ const b=document.getElementById(id); if(!b) return;
+    b.addEventListener('pointerdown', e=>{ on(); b.classList.add('on'); e.preventDefault(); });
+    const up=()=>{ off(); b.classList.remove('on'); };
+    b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up); };
+  const tap=(id,fn)=>{ const b=document.getElementById(id); if(!b) return; b.addEventListener('pointerdown', e=>{ fn(); e.preventDefault(); }); };
+  hold('tFire', ()=>touchFiring=true, ()=>touchFiring=false);
+  tap('tJump', ()=>{ touchJump=true; });
+  tap('tReload', ()=>{ if(typeof reload==='function') reload(); });
+  tap('tNade', ()=>{ if(typeof throwGrenade==='function') throwGrenade(); });
+  tap('tUse', ()=>{ if(typeof interact==='function') interact(); });
+  tap('tWeapon', ()=>{ if(typeof cycleWeapon==='function') cycleWeapon(1); });
+  const aim=document.getElementById('tAim');
+  if(aim) aim.addEventListener('pointerdown', e=>{ touchAds=!touchAds; aim.classList.toggle('on', touchAds); e.preventDefault(); });   // tap toggles aim-down-sights
+})();
 
 // ====================================================================================
 // ===============================  RIGID-BODY PHYSICS (Rapier)  =======================
@@ -8329,6 +8400,13 @@ function loop(){
   if(shopOpen || choosingUpgrade) { pollGamepad(dt); renderScene(scene,camera); return; }  // freeze world while shopping / picking an upgrade
 
   pollGamepad(dt);   // controller input feeds the same flags as keyboard/mouse
+  if(isTouch && !shopOpen && !editorOpen && !choosingUpgrade){   // touch look: applied here since there's no pointer lock on mobile
+    const tsens = (ads||touchAds) ? TOUCH_ADS_SENS : TOUCH_LOOK_SENS;
+    player.yaw   -= touchLookDX * tsens;
+    player.pitch  = Math.max(-1.5, Math.min(1.5, player.pitch - touchLookDY * tsens));
+  }
+  touchLookDX = 0; touchLookDY = 0;
+  if(isTouch){ const tu=document.getElementById('touchUI'); if(tu){ const d=(gameOn && !shopOpen && !editorOpen && !choosingUpgrade)?'block':'none'; if(tu.style.display!==d) tu.style.display=d; } }
   updateColliderViz(dt);   // debug overlay of collision boxes (toggle in editor)
 
   // advance any model animations (terminal/gun/prop idle loops, etc.)
@@ -8340,7 +8418,7 @@ function loop(){
     if(previewCollider && previewCollider.userData.cyl){ const r=previewEnemy.userData.footprint||0.9; previewCollider.userData.cyl.scale.set(r,1,r); } }
 
   // aim-down-sights: smoothly blend toward aimed state, drive FOV + crosshair
-  const adsTarget = (ads || padAds || editorAimPreview) ? 1 : 0;
+  const adsTarget = (ads || padAds || touchAds || editorAimPreview) ? 1 : 0;
   adsBlend += (adsTarget - adsBlend) * Math.min(1, dt*14);
   if(Math.abs(adsBlend - adsTarget) < 0.002) adsBlend = adsTarget;
   const hipFov = (worldCfg && worldCfg.fov) ? worldCfg.fov : BASE_FOV;
@@ -8358,10 +8436,11 @@ function loop(){
   const right = new THREE.Vector3(Math.cos(player.yaw),0,-Math.sin(player.yaw));
   const wish = new THREE.Vector3();
   let moveScale = 1;   // analog when using the stick, full when using keys
-  if(padMoveX || padMoveZ){
-    wish.add(right.clone().multiplyScalar(padMoveX));
-    wish.add(forward.clone().multiplyScalar(-padMoveZ));   // stick up (-Y) = forward
-    moveScale = Math.min(1, Math.hypot(padMoveX, padMoveZ));
+  const mvx = padMoveX || touchMoveX, mvz = padMoveZ || touchMoveZ;
+  if(mvx || mvz){
+    wish.add(right.clone().multiplyScalar(mvx));
+    wish.add(forward.clone().multiplyScalar(-mvz));   // stick up (-Y) = forward
+    moveScale = Math.min(1, Math.hypot(mvx, mvz));
   } else {
     if(keys['KeyW']) wish.add(forward);
     if(keys['KeyS']) wish.sub(forward);
@@ -8372,14 +8451,15 @@ function loop(){
   wish.normalize();
   crouching = gameOn && !shopOpen && !editorOpen && (keys['ControlLeft']||keys['ControlRight']||keys['KeyC']||padCrouch);
   crouchT += ((crouching?1:0) - crouchT) * Math.min(1, dt*12);
-  let speedBase = (keys['ShiftLeft']||padSprint) ? SPEED*SPRINT : SPEED;
+  let speedBase = (keys['ShiftLeft']||padSprint||touchSprint) ? SPEED*SPRINT : SPEED;
   if(crouching) speedBase = CROUCH_SPEED;          // crouch overrides sprint
   const sp = speedBase * (buffs.speed>0?1.4:1) * moveScale * run.speedMul;
   player.vel.x = wish.x * sp;
   player.vel.z = wish.z * sp;
 
   // jump + gravity
-  if((keys['Space']||padJump) && player.onGround){ player.vel.y = JUMP; player.onGround=false; SFX.jump(); }
+  if((keys['Space']||padJump||touchJump) && player.onGround){ player.vel.y = JUMP; player.onGround=false; SFX.jump(); }
+  touchJump = false;   // tap is consumed for one frame
   player.vel.y -= GRAV*dt;
   // one-shot vertical knock from physics props (e.g. a fast body launching the player)
   if(player.extVel.y){ player.vel.y += player.extVel.y; player.onGround=false; player.extVel.y = 0; }
@@ -8482,7 +8562,7 @@ function loop(){
   recoil *= 0.85;
   muzzle.intensity *= 0.6; flashMat.opacity *= 0.5;
 
-  if(firing || padFiring) shoot();
+  if(firing || padFiring || touchFiring) shoot();
 
   // tracers
   for(let i=tracers.length-1;i>=0;i--){
