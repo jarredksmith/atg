@@ -5579,14 +5579,15 @@ const ENEMY_TYPES = {
   grunt:  { name:'Grunt',  hp:30, speedMin:6,   speedMax:9,  scale:1.0, tint:0xff2d55, dmg:9 },
   runner: { name:'Runner', hp:16, speedMin:11,  speedMax:13, scale:0.8, tint:0xffd166, dmg:6 },
   brute:  { name:'Brute',  hp:90, speedMin:3.5, speedMax:5,  scale:1.5, tint:0x9b6cff, dmg:18 },
+  gunner: { name:'Gunner', hp:24, speedMin:4,   speedMax:6,  scale:1.0, tint:0x4dd2ff, dmg:7, ranged:true, standoff:11, fireCd:1.5, projSpeed:24 },
 };
-const ENEMY_TYPE_KEYS = ['grunt','runner','brute'];
-// Weighted random type — later waves bias toward tougher hostiles.
+const ENEMY_TYPE_KEYS = ['grunt','runner','brute','gunner'];
+// Weighted random type — later waves bias toward tougher + ranged hostiles.
 function pickEnemyType(waveNum, rng){
   rng = rng || Math.random; const r = rng();
-  if(waveNum>=5){ return r<0.45 ? 'grunt' : (r<0.80 ? 'runner' : 'brute'); }
-  if(waveNum>=3){ return r<0.60 ? 'grunt' : (r<0.90 ? 'runner' : 'brute'); }
-  return r<0.80 ? 'grunt' : (r<0.97 ? 'runner' : 'brute');
+  if(waveNum>=5){ return r<0.38 ? 'grunt' : (r<0.62 ? 'runner' : (r<0.82 ? 'gunner' : 'brute')); }
+  if(waveNum>=3){ return r<0.52 ? 'grunt' : (r<0.78 ? 'runner' : (r<0.92 ? 'gunner' : 'brute')); }
+  return r<0.74 ? 'grunt' : (r<0.92 ? 'runner' : (r<0.98 ? 'gunner' : 'brute'));
 }
 // Random-mode wave: N hostiles scattered around the arena edge, mixed types.
 function randomWaveDescriptors(waveNum, arena, rng){
@@ -6182,6 +6183,7 @@ function spawnEnemy(spawn){
   buildEnemyVisual(mesh);
   scene.add(mesh);
   const e = { id: nextEnemyId++, mesh, hp:ty.hp, maxHp:ty.hp, speed: ty.speedMin + Math.random()*(ty.speedMax-ty.speedMin), dmg:ty.dmg, type:typeKey, lastHit:0, cooldown:0,
+    ranged: !!ty.ranged, standoff: ty.standoff||11, fireCd: ty.fireCd||1.5, projSpeed: ty.projSpeed||24, shootCd: 0.4 + Math.random()*0.8,
     mode: (spawn && spawn.mode) ? spawn.mode : 'hunt',
     home: spawn ? { x:px, z:pz } : null,
     patrolR: (spawn && spawn.patrolR!=null) ? spawn.patrolR : 6,
@@ -7194,7 +7196,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 47 · 2026-06-02';
+const BUILD_VERSION = 'build 48 · 2026-06-02';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7994,6 +7996,43 @@ function updateFloaters(dt){
   }
   for(const en of enemies){ if(en._flash > 0){ en._flash -= dt; if(en._flash <= 0){ const v=en.mesh.userData.visual; if(v && v.material && en._emi0!=null) v.material.emissiveIntensity = en._emi0; } } }
 }
+// ---- Ranged enemies (Gunner) fire travelling projectiles; cover blocks line of sight ----
+const enemyShots = [];
+const enemyShotGeo = new THREE.SphereGeometry(0.16, 8, 8);
+const enemyShotMat = new THREE.MeshBasicMaterial({ color:0x6fe0ff });
+// True if a wall / static prop sits on the segment between two floor points (sampled at chest height).
+function segmentBlocked(ax, az, bx, bz, y){
+  const steps = 14;
+  for(let s=1; s<steps; s++){
+    const t = s/steps, x = ax+(bx-ax)*t, z = az+(bz-az)*t;
+    for(const c of colliders){ const b=c.userData.box; if(!b) continue;
+      if(x>=b.min.x && x<=b.max.x && z>=b.min.z && z<=b.max.z && y>=b.min.y && y<=b.max.y) return true; }
+  }
+  return false;
+}
+function fireEnemyShot(en, target){
+  flashEnemy(en);
+  const from = new THREE.Vector3(en.mesh.position.x, 1.4, en.mesh.position.z);
+  const dir = new THREE.Vector3(target.pos.x - from.x, 1.3 - from.y, target.pos.z - from.z).normalize();
+  const mesh = new THREE.Mesh(enemyShotGeo, enemyShotMat);
+  mesh.position.copy(from); scene.add(mesh);
+  enemyShots.push({ mesh, vel: dir.multiplyScalar(en.projSpeed), dmg: en.dmg, born: performance.now(), life: 3500 });
+  if(SFX && SFX.shoot) SFX.shoot();
+}
+function updateEnemyShots(dt){
+  if(!enemyShots.length) return;
+  const ps = (typeof allPlayers==='function') ? allPlayers() : [{ pos:player.pos, hurt:d=>applyEnemyDamageToSelf(d) }];
+  const now = performance.now();
+  for(let i=enemyShots.length-1;i>=0;i--){
+    const s = enemyShots[i];
+    s.mesh.position.addScaledVector(s.vel, dt);
+    const p = s.mesh.position;
+    let dead = (now - s.born) > s.life || p.y < 0.1;
+    if(!dead){ for(const pl of ps){ const dx=pl.pos.x-p.x, dy=((pl.pos.y!=null?pl.pos.y:1.4))-p.y, dz=pl.pos.z-p.z; if(dx*dx+dy*dy+dz*dz < 1.1*1.1){ if(pl.hurt) pl.hurt(s.dmg); dead=true; break; } } }
+    if(!dead){ for(const c of colliders){ const b=c.userData.box; if(!b) continue; if(p.x>=b.min.x&&p.x<=b.max.x&&p.y>=b.min.y&&p.y<=b.max.y&&p.z>=b.min.z&&p.z<=b.max.z){ dead=true; break; } } }
+    if(dead){ spark(p, 0x6fe0ff); scene.remove(s.mesh); enemyShots.splice(i,1); }
+  }
+}
 function flashDamage(){
   const d = $('damage');
   d.style.boxShadow='inset 0 0 200px rgba(255,40,70,.55)';
@@ -8374,6 +8413,7 @@ function loop(){
   updateBuffs(dt);
   updateGrenades(dt);
   updateFloaters(dt);   // floating damage numbers + enemy hit-flash decay
+  updateEnemyShots(dt); // ranged-enemy projectiles
   updateChests(dt);
   checkProximity();   // runs in all modes; in duel it only considers trigger-animation props
 
@@ -8407,7 +8447,12 @@ function loop(){
       en._reach = 1.5 + fp;                                // attack range scales with the body too (Phase 3)
       const stopAt = td.chase ? (fp + 0.9) : 0.5;          // patrol: stop on the waypoint; chase: body just shy of the player
       const spd = td.chase ? en.speed : en.speed*0.5;      // patrol/return at half pace
-      if(d > stopAt){ _eDir.set(dx,0,dz).multiplyScalar(1/d); en.mesh.position.addScaledVector(_eDir, spd*dt); }
+      if(en.ranged && td.chase){
+        // hold a standoff range: close in if too far, back off if the player crowds it, else hold + shoot
+        const toPx = near.pos.x - en.mesh.position.x, toPz = near.pos.z - en.mesh.position.z, pd = Math.hypot(toPx,toPz)||1;
+        if(pd > en.standoff + 1){ en.mesh.position.x += toPx/pd*en.speed*dt; en.mesh.position.z += toPz/pd*en.speed*dt; }
+        else if(pd < en.standoff*0.6){ en.mesh.position.x -= toPx/pd*en.speed*dt; en.mesh.position.z -= toPz/pd*en.speed*dt; }
+      } else if(d > stopAt){ _eDir.set(dx,0,dz).multiplyScalar(1/d); en.mesh.position.addScaledVector(_eDir, spd*dt); }
     }
     // Phase 2 — separation: shove overlapping enemies apart so they don't stack / clip through each
     // other. Desired spacing is the sum of the two footprints (capped). Runs before obstacle resolve
@@ -8458,7 +8503,14 @@ function loop(){
       en.mesh.lookAt(fx, en.mesh.position.y, fz);   // chasing -> face player; patrolling -> face where it walks
       if(enemyModelUrl) en.mesh.rotateY(enemyFaceOffset);   // GLB characters vary in which way they face; nudge to face forward
       en.cooldown -= dt;
-      if(en._chase && en._dist < (en._reach || 2.4) && en.cooldown<=0 && !editorOpen){   // aware/chasing enemy in reach attacks
+      if(en.ranged){
+        en.shootCd -= dt;
+        if(en._chase && en.shootCd<=0 && !editorOpen && en._dist < en.standoff*1.7
+           && !segmentBlocked(en.mesh.position.x, en.mesh.position.z, near.pos.x, near.pos.z, 1.4)){
+          fireEnemyShot(en, near);          // clear line of sight + in range -> shoot
+          en.shootCd = en.fireCd;
+        }
+      } else if(en._chase && en._dist < (en._reach || 2.4) && en.cooldown<=0 && !editorOpen){   // aware/chasing melee enemy in reach attacks
         en.cooldown = 0.8;
         near.hurt(en.dmg || 9);   // routes to the local player or, in co-op, the remote one
       }
@@ -9473,7 +9525,7 @@ function renderEditorFields(){
           picker.appendChild(tlab);
           const trow=document.createElement('div'); trow.className='row2';
           const tk=(key)=>{ const b=document.createElement('button'); b.textContent=ENEMY_TYPES[key].name; if((g.userData.mark.type||'grunt')===key){ b.style.background='rgba(56,245,181,0.30)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); g.userData.mark.type=key; renderEditorFields(); }; return b; };
-          trow.appendChild(tk('grunt')); trow.appendChild(tk('runner')); trow.appendChild(tk('brute'));
+          trow.appendChild(tk('grunt')); trow.appendChild(tk('runner')); trow.appendChild(tk('brute')); trow.appendChild(tk('gunner'));
           picker.appendChild(trow);
           const tt=ENEMY_TYPES[g.userData.mark.type||'grunt'];
           const th=document.createElement('div'); th.className='hint'; th.style.margin='3px 0 0';
@@ -10430,6 +10482,7 @@ function startGame(){
   coins.slice().forEach(c=>scene.remove(c.mesh)); coins.length=0;
   chests.slice().forEach(c=>scene.remove(c.mesh)); chests.length=0;
   grenades.slice().forEach(g=>scene.remove(g.mesh)); grenades.length=0;
+  if(typeof enemyShots!=='undefined'){ enemyShots.slice().forEach(s=>scene.remove(s.mesh)); enemyShots.length=0; }
   if(typeof netReset==='function') netReset();   // clear stale remote avatars / mirrored enemies & coins
   // client: adopt the host's level (props + lights) so everyone shares the same map
   if(NET.pendingLevel){ loadLevelFromNet(NET.pendingLevel); NET.pendingLevel=null; }
