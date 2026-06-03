@@ -5247,10 +5247,12 @@ function playModelAnimations(root, gltf, mode){
 }
 // Enemies play ONE looping clip (prefer idle/walk/run, else the first). Playing every clip at once —
 // as props do — makes character rigs fight over the root transform and look broken.
-function playEnemyClip(root, gltf){
+function playEnemyClip(root, gltf, clipName){
   if(!gltf || !gltf.animations || !gltf.animations.length) return null;
   const find = re => gltf.animations.find(c => re.test(c.name||''));
-  const clip = find(/idle/i) || find(/walk/i) || find(/run/i) || gltf.animations[0];
+  let clip = null;
+  if(clipName) clip = gltf.animations.find(c => (c.name||'') === clipName) || null;   // explicit choice
+  if(!clip) clip = find(/idle/i) || find(/walk/i) || find(/run/i) || gltf.animations[0];   // auto fallback (named clip missing or not set)
   const mixer = new THREE.AnimationMixer(root);
   const a = mixer.clipAction(clip); a.loop = THREE.LoopRepeat; a.play();
   mixers.push(mixer); root.userData.mixer = mixer;
@@ -6150,8 +6152,9 @@ const enemyGeo = new THREE.CapsuleGeometry(0.7, 1.4, 4, 10);
 // AI / collision / networking code is unchanged — only the visual child swaps.
 // Per-enemy-type model config: each type (grunt/runner/brute/gunner) gets its own GLB + framing.
 // Back-compat: an old single-model level (savedLevel.enemy) is applied to every type.
-const ENEMY_MODEL0 = { url:'', scale:1, face:0, cr:0, yoff:0, xoff:0, zoff:0 };
+const ENEMY_MODEL0 = { url:'', scale:1, face:0, cr:0, yoff:0, xoff:0, zoff:0, clip:'' };   // clip='' = auto-pick idle/walk/run
 const enemyModels = {};
+const enemyModelClips = {};   // typeKey -> animation clip names discovered when its model loads
 function enemyModelCfg(typeKey){
   const k = (typeKey && ENEMY_TYPES[typeKey]) ? typeKey : 'grunt';
   if(!enemyModels[k]) enemyModels[k] = Object.assign({}, ENEMY_MODEL0);
@@ -6160,7 +6163,7 @@ function enemyModelCfg(typeKey){
 function applyEnemyModelData(perType, legacy){   // perType = new map, legacy = old single config
   for(const k of ENEMY_TYPE_KEYS){
     const src = (perType && perType[k]) || legacy || {};
-    enemyModels[k] = { url: src.url||'', scale: src.scale||1, face: src.face||0, cr: src.cr||0, yoff: src.yoff||0, xoff: src.xoff||0, zoff: src.zoff||0 };
+    enemyModels[k] = { url: src.url||'', scale: src.scale||1, face: src.face||0, cr: src.cr||0, yoff: src.yoff||0, xoff: src.xoff||0, zoff: src.zoff||0, clip: src.clip||'' };
   }
 }
 applyEnemyModelData(savedLevel && savedLevel.enemies, savedLevel && savedLevel.enemy);
@@ -6188,6 +6191,7 @@ function buildEnemyVisual(body){
   loadGLTFCached(mc.url,
     (gltf)=>{
       if(enemyModelCfg(body.userData.enemyType).url !== mc.url) return;   // the type's URL changed before this load resolved — drop the stale model
+      enemyModelClips[body.userData.enemyType] = (gltf.animations||[]).map(a=>a.name||'');   // expose clip names to the editor
       if(body.userData.visual){ body.remove(body.userData.visual); body.userData.visual=null; }
       const model = THREE.cloneSkinned(gltf.scene);
       const ty = ENEMY_TYPES[body.userData.enemyType] || ENEMY_TYPES.grunt;
@@ -6207,8 +6211,9 @@ function buildEnemyVisual(body){
       body.userData.modelY = 0;
       body.userData.hasModel = true; body.userData.faceOff = mc.face;   // per-enemy facing nudge, read by the lookAt code
       model.userData.seat = { p:model.position.clone(), q:model.quaternion.clone(), s:model.scale.clone() };   // locked each frame so animation root-motion/scale tracks can't fling or shrink the model
-      const mx = playEnemyClip(model, gltf);   // ONE looping clip (idle/walk/run) — not every clip at once
+      const mx = playEnemyClip(model, gltf, mc.clip);   // chosen clip if set, else auto idle/walk/run
       if(mx) body.userData.mixer = mx;
+      if(body===previewEnemy && typeof refreshEnemyClipOptions==='function') refreshEnemyClipOptions();   // populate the editor dropdown now clips are known
     },
     (err)=>{ console.warn('Enemy model load failed, using capsule:', err && err.message); }   // capsule stays
   );
@@ -6232,6 +6237,18 @@ function buildPreviewEnemy(typeKey){
 }
 function refreshPreviewEnemy(){ if(previewEnemy) buildPreviewEnemy(previewEnemy.userData.enemyType); }
 function refreshEnemyVisuals(){ for(const en of enemies) buildEnemyVisual(en.mesh); if(previewEnemy) refreshPreviewEnemy(); }
+function enemyClipOptionList(typeKey){   // discovered clips + a saved pick that hasn't been discovered yet
+  const mc = enemyModelCfg(typeKey); const names = (enemyModelClips[typeKey]||[]).slice();
+  if(mc.clip && names.indexOf(mc.clip)<0) names.push(mc.clip);
+  return names;
+}
+function refreshEnemyClipOptions(){
+  const sel = document.getElementById('edEnemyClip'); if(!sel) return;
+  const mc = enemyModelCfg(editorEnemyType), names = enemyClipOptionList(editorEnemyType);
+  sel.innerHTML='';
+  const auto=document.createElement('option'); auto.value=''; auto.textContent = names.length ? 'Auto (idle / walk / run)' : 'Auto — preview to list clips'; if(!mc.clip) auto.selected=true; sel.appendChild(auto);
+  for(const nm of names){ const o=document.createElement('option'); o.value=nm; o.textContent=nm||'(unnamed)'; if(mc.clip===nm) o.selected=true; sel.appendChild(o); }
+}
 // Scale the model so it stands ~2.6u tall (capsule height) — fixes "too big/tiny to see". Needs a loaded model.
 function autoFitEnemyScale(){
   const v = previewEnemy && previewEnemy.userData.visual;
@@ -7345,7 +7362,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 58 · 2026-06-03';
+const BUILD_VERSION = 'build 59 · 2026-06-03';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9142,7 +9159,7 @@ function serializeLevel(){
     world:   Object.assign({}, worldCfg),
     chest:   { url: chestModelUrl, scale: chestModelScale },
     coin:    { url: coinCfg.url, scale: coinCfg.scale, on: coinCfg.on !== false },
-    enemies: ENEMY_TYPE_KEYS.reduce((a,k)=>{ const m=enemyModelCfg(k); a[k]={ url:m.url, scale:m.scale, face:m.face, cr:m.cr, yoff:m.yoff, xoff:m.xoff, zoff:m.zoff }; return a; }, {}),
+    enemies: ENEMY_TYPE_KEYS.reduce((a,k)=>{ const m=enemyModelCfg(k); a[k]={ url:m.url, scale:m.scale, face:m.face, cr:m.cr, yoff:m.yoff, xoff:m.xoff, zoff:m.zoff, clip:m.clip }; return a; }, {}),
     props:   propModels.filter(Boolean).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
@@ -9601,6 +9618,13 @@ function renderEditorFields(){
     for(const [lab,val] of [['Front (0°)','0'],['Back (180°)',String(Math.PI)],['Right (90°)',String(Math.PI/2)],['Left (-90°)',String(-Math.PI/2)]]){ const o=document.createElement('option'); o.value=val; o.textContent=lab; if(Math.abs(parseFloat(val)-mc.face)<0.01) o.selected=true; efSel.appendChild(o); }
     efSel.onchange=()=>{ mc.face=parseFloat(efSel.value)||0; refreshEnemyVisuals(); };
     eFaceRow.appendChild(efSp); eFaceRow.appendChild(efSel); eHost.appendChild(eFaceRow);
+    // animation clip — choose which baked clip loops (idle/walk/run/etc.); list fills in once the model is previewed
+    const eClipRow=document.createElement('label'); eClipRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
+    const eclSp=document.createElement('span'); eclSp.textContent='Animation'; eclSp.style.minWidth='86px';
+    const eclSel=document.createElement('select'); eclSel.id='edEnemyClip'; eclSel.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+    eclSel.onchange=()=>{ mc.clip = eclSel.value; refreshEnemyVisuals(); };
+    eClipRow.appendChild(eclSp); eClipRow.appendChild(eclSel); eHost.appendChild(eClipRow);
+    refreshEnemyClipOptions();
     // collider radius — how far enemies stay off walls/props and each other (0 = auto-fit to the model)
     const ecRow=document.createElement('label'); ecRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
     const ecSp=document.createElement('span'); ecSp.textContent='Collider radius'; ecSp.style.minWidth='86px';
