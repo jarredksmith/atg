@@ -9,7 +9,7 @@
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #05070a; font-family: 'Chakra Petch', monospace; }
-  canvas { display: block; }
+  canvas { display:block; position:fixed; top:0; left:0; width:100%; height:100%; z-index:0; }
 
   #hud {
     position: fixed; inset: 0; pointer-events: none; z-index: 10;
@@ -5099,7 +5099,7 @@ scene.fog = SCENE_FOG;
 const camera = new THREE.PerspectiveCamera(78, innerWidth/innerHeight, 0.1, 400);
 const IS_COARSE = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches);   // touch/mobile -> trade visual polish for frame rate
 const renderer = new THREE.WebGLRenderer({ antialias: !IS_COARSE });   // MSAA is expensive on mobile GPUs
-renderer.setSize(innerWidth, innerHeight);
+renderer.setSize(innerWidth, innerHeight, false);
 renderer.setPixelRatio(Math.min(devicePixelRatio, IS_COARSE ? 1.0 : 1.5));   // cap supersampling on hi-DPI screens — big FPS win (1x on mobile)
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = IS_COARSE ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
@@ -5189,11 +5189,10 @@ function renderScene(scn, cam){
   renderer.render(_dofScene, _dofCam);
 }
 
-addEventListener('resize', () => {
-  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-  if(typeof resizeDof==='function') resizeDof();   // DoF render targets must match the new size
-});
+function _fitViewport(){ camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight, false); if(typeof resizeDof==='function') resizeDof(); }
+addEventListener('resize', _fitViewport);
+addEventListener('load', _fitViewport);                 // a fresh tab/window can mis-report height until fully laid out
+setTimeout(_fitViewport, 200); setTimeout(_fitViewport, 800);   // catch late layout/devtools docking
 
 // ---------- Lighting ----------
 const skyLight = new THREE.HemisphereLight(0x4a6c7a, 0x0a0f14, 0.55);
@@ -7546,7 +7545,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 76 · 2026-06-04';
+const BUILD_VERSION = 'build 77 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11262,7 +11261,8 @@ function openSounds(){
 function closeSounds(){ const p=$('soundPanel'); if(p) p.classList.add('hidden'); }
 
 function bindMenu(){
-  if(MENU_HTML===null){ const ov0=document.getElementById('overlay'); if(ov0) MENU_HTML = ov0.innerHTML; }   // capture the full start menu once, before any death/win screen overwrites it  const sb=document.getElementById('startBtn'); if(sb) sb.onclick=startGame;
+  if(MENU_HTML===null){ const ov0=document.getElementById('overlay'); if(ov0) MENU_HTML = ov0.innerHTML; }   // capture the full start menu once, before any death/win screen overwrites it
+  const sb=document.getElementById('startBtn'); if(sb) sb.onclick=startGame;
   const eb=document.getElementById('editBtn'); if(eb) eb.onclick=enterEditor;
   const h=document.getElementById('mpHost'); if(h) h.onclick=startHost;
   const d=document.getElementById('mpDuel'); if(d) d.onclick=startDuel;
