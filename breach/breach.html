@@ -6206,6 +6206,7 @@ function renderViewmodel(){
 // (gunModelUrl / gunModel) track the CURRENT weapon so the editor and existing code keep working.
 let gunModelUrl = (savedLevel && savedLevel.gun && savedLevel.gun.url) || GUN_MODEL_URL;   // editor-swappable; exported as GUN_MODEL_URL
 const gunModelByWep = {};   // weapon key -> loaded Object3D (cached)
+const _gunLoading = {};      // weapon key -> true while a model load is in flight (prevents duplicate viewmodels)
 // Resolve a weapon's effective model URL: its own override, else the shared default gun url.
 function wepModelUrl(key){ const w=WEAPONS[key]; return (w && w.model) ? w.model : gunModelUrl; }
 // Default per-weapon transform (falls back to the shared GUN_* framing when a weapon has no saved view).
@@ -6232,9 +6233,13 @@ function showWeaponModel(key){
   }
   // not loaded yet — keep placeholder visible until it arrives
   if(gunPlaceholder) gunPlaceholder.visible = true;
+  if(_gunLoading[key]) return;          // a load for this weapon is already in flight — don't start a second (the cause of duplicate viewmodels)
+  _gunLoading[key] = true;
   const url = wepModelUrl(key);
   loadGLTFCached(url,
     (gltf)=>{
+      _gunLoading[key] = false;
+      if(gunModelByWep[key]){ try{ gun.remove(gunModelByWep[key]); }catch(e){} const om=gunModelByWep[key].userData && gunModelByWep[key].userData.mixer; if(om){ const mi=mixers.indexOf(om); if(mi>=0) mixers.splice(mi,1); } }   // never keep two models for one weapon
       const model = THREE.cloneSkinned(gltf.scene);
       applyWepView(model, key);
       model.traverse(o=>{ if(o.isMesh){ o.castShadow=false; o.frustumCulled=false; o.renderOrder=999; if(o.material){ o.material.depthTest=true; } } });
@@ -6246,7 +6251,7 @@ function showWeaponModel(key){
       if(model.visible) applyWepView(model, key);   // reassert this weapon's own framing once it's live
       console.log('Weapon model loaded:', key, url);
     },
-    (err)=>{ console.warn('Weapon model load failed for', key, '-', err && err.message); }   // placeholder stays
+    (err)=>{ _gunLoading[key]=false; console.warn('Weapon model load failed for', key, '-', err && err.message); }   // placeholder stays
   );
 }
 
@@ -6257,12 +6262,12 @@ function loadGunModel(){ showWeaponModel(curWep); }
 function swapGunModel(url, key){
   if(key){
     const w = WEAPONS[key]; if(w) w.model = url || '';
-    if(gunModelByWep[key]){ gun.remove(gunModelByWep[key]); const m=gunModelByWep[key].userData && gunModelByWep[key].userData.mixer; if(m){ const mi=mixers.indexOf(m); if(mi>=0) mixers.splice(mi,1); } gunModelByWep[key]=null; }
+    if(gunModelByWep[key]){ gun.remove(gunModelByWep[key]); const m=gunModelByWep[key].userData && gunModelByWep[key].userData.mixer; if(m){ const mi=mixers.indexOf(m); if(mi>=0) mixers.splice(mi,1); } gunModelByWep[key]=null; } _gunLoading[key]=false;
     if(key === curWep) showWeaponModel(key);
   } else {
     gunModelUrl = url || gunModelUrl;   // shared default
     // reload any weapon that has no explicit override (it falls back to the default)
-    for(const k in gunModelByWep){ if(!WEAPONS[k].model && gunModelByWep[k]){ gun.remove(gunModelByWep[k]); gunModelByWep[k]=null; } }
+    for(const k in gunModelByWep){ if(!WEAPONS[k].model && gunModelByWep[k]){ gun.remove(gunModelByWep[k]); gunModelByWep[k]=null; } _gunLoading[k]=false; }
     showWeaponModel(curWep);
   }
 }
@@ -7545,7 +7550,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 77 · 2026-06-04';
+const BUILD_VERSION = 'build 78 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9489,7 +9494,7 @@ function restoreLevel(level){
   if(level.weapons && typeof level.weapons==='object'){
     for(const k in WEAPONS){ const wd=level.weapons[k]; if(wd){ WEAPONS[k].model=wd.model||''; WEAPONS[k].view=wd.view||null; } else { WEAPONS[k].model=''; WEAPONS[k].view=null; } }
     // drop cached models so they reload with their (possibly new) urls
-    for(const k in gunModelByWep){ if(gunModelByWep[k]){ gun.remove(gunModelByWep[k]); gunModelByWep[k]=null; } }
+    for(const k in gunModelByWep){ if(gunModelByWep[k]){ gun.remove(gunModelByWep[k]); gunModelByWep[k]=null; } _gunLoading[k]=false; }
     if(editorTargets.gun.syncFromWeapon) editorTargets.gun.syncFromWeapon();
     showWeaponModel(curWep);
   }
