@@ -6533,9 +6533,9 @@ function buildEnemyVisual(body){
     const eye = new THREE.Mesh(new THREE.SphereGeometry(.18,8,8), new THREE.MeshBasicMaterial({color:0xffd166}));
     eye.position.set(0, 0.7, -0.55);   // slightly forward so you can read facing
     cap.add(eye);
-    body.add(cap); body.userData.visual = cap; body.userData.modelY = 0; body.userData.hasModel = false; body.userData.footprint = mc.cr > 0 ? mc.cr : 0.9*ty.scale;
+    body.add(cap); body.userData.visual = cap; body.userData.modelY = 0; body.userData.hasModel = false; body.userData.footprint = 0.9*ty.scale;   // MOVEMENT spacing (auto; independent of the damage cylinder)
     cap.traverse(o=>{ o.raycast = ()=>{}; });   // shots test the hit-proxy cylinder, not the capsule mesh
-    setEnemyHitProxy(body, body.userData.footprint, mc.ch > 0 ? mc.ch : 2.8*ty.scale);   // capsule is 2.8u tall
+    setEnemyHitProxy(body, mc.cr > 0 ? mc.cr : body.userData.footprint, mc.ch > 0 ? mc.ch : 2.8*ty.scale);   // capsule is 2.8u tall
   };
   if(!mc.url){ useCapsule(); return; }
   useCapsule();   // show the capsule immediately; replace it when the GLB arrives
@@ -6555,13 +6555,12 @@ function buildEnemyVisual(body){
         const lbox = wbox.clone().applyMatrix4(_seatInv.copy(body.matrixWorld).invert());   // model extent relative to the body
         const cx = (lbox.min.x+lbox.max.x)/2, cz = (lbox.min.z+lbox.max.z)/2;
         model.position.set(model.position.x - cx + mc.xoff, model.position.y - lbox.min.y - 1.4 + mc.yoff, model.position.z - cz + mc.zoff);
-        body.userData.footprint = Math.max(0.9, Math.min(3.5, Math.max((lbox.max.x-lbox.min.x)/2, (lbox.max.z-lbox.min.z)/2)));   // collision radius from the real footprint
+        body.userData.footprint = Math.max(0.9, Math.min(3.5, Math.max((lbox.max.x-lbox.min.x)/2, (lbox.max.z-lbox.min.z)/2)));   // MOVEMENT spacing from the real footprint (auto)
         body.userData.autoColH = Math.max(0.6, lbox.max.y - lbox.min.y);   // real model height -> default collider height
       }
-      if(mc.cr > 0) body.userData.footprint = mc.cr;   // manual collider-radius override
       body.userData.visual = model;
       model.traverse(o=>{ if(o.isMesh) o.raycast = ()=>{}; });   // shots test the hit-proxy cylinder, not the (skinned) model mesh
-      setEnemyHitProxy(body, body.userData.footprint, mc.ch > 0 ? mc.ch : (body.userData.autoColH || 2.6));
+      setEnemyHitProxy(body, mc.cr > 0 ? mc.cr : body.userData.footprint, mc.ch > 0 ? mc.ch : (body.userData.autoColH || 2.6));   // cr sizes the DAMAGE cylinder only, not movement
       body.userData.modelY = 0;
       body.userData.hasModel = true; body.userData.faceOff = mc.face;   // per-enemy facing nudge, read by the lookAt code
       model.userData.seat = { p:model.position.clone(), q:model.quaternion.clone(), s:model.scale.clone() };   // locked each frame so animation root-motion/scale tracks can't fling or shrink the model
@@ -7805,7 +7804,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 100 · 2026-06-04';
+const BUILD_VERSION = 'build 101 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10292,7 +10291,7 @@ function renderEditorFields(){
     eclSel.onchange=()=>{ mc.clip = eclSel.value; refreshEnemyVisuals(); };
     eClipRow.appendChild(eclSp); eClipRow.appendChild(eclSel); eHost.appendChild(eClipRow);
     refreshEnemyClipOptions();
-    // collider radius — how far enemies stay off walls/props and each other (0 = auto-fit to the model)
+    // collider radius — the WIDTH of the damage hit-cylinder shots test against (0 = auto-fit to the model). Movement spacing is separate + automatic.
     const ecRow=document.createElement('label'); ecRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
     const ecSp=document.createElement('span'); ecSp.textContent='Collider radius'; ecSp.style.minWidth='86px';
     const ecR=document.createElement('input'); ecR.type='range'; ecR.min='0'; ecR.max='4'; ecR.step='0.1'; ecR.value=mc.cr; ecR.style.cssText='flex:1;accent-color:#ff8a5b;';
@@ -10340,7 +10339,7 @@ function renderEditorFields(){
     const af=document.createElement('button'); af.textContent='⤢ Auto-fit size';
     af.onclick=()=>{ if(!previewEnemy) buildPreviewEnemy(editorEnemyType); const ok=autoFitEnemyScale(); const note=$('edCopied'); if(note) note.textContent = ok ? ('Auto-fit ✓ scale '+(+enemyModelCfg(editorEnemyType).scale).toFixed(2)) : 'Load a model + open the preview first (give it a moment to load).'; renderEditorFields(); };
     pvRow.appendChild(pv); pvRow.appendChild(af); eHost.appendChild(pvRow);
-    hint(eHost, '', '3px 0 0').textContent = 'Preview shows the model + its damage collider (green cylinder). Collider radius 0 = auto-fit width; Collider height 0 = auto-fit to the model. Toggle "Show colliders" (Game tab) to see the pink hit-cylinders on live enemies during play. Offsets re-center an off-pivot model; Vertical offset fixes hover/sink.';
+    hint(eHost, '', '3px 0 0').textContent = 'Collider radius + height size the DAMAGE hit-cylinder only (0 = auto-fit) — they no longer affect how enemies move or space out, so widening them won\u2019t make enemies bunch up. Toggle "Show colliders" (Game tab) to see the pink hit-cylinders on live enemies. Offsets re-center an off-pivot model; Vertical offset fixes hover/sink.';
 
     // ===== GAME / WAVES section =====
     const gHost = gameHost || worldHost;
