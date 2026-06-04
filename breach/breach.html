@@ -185,24 +185,26 @@
   #tUse { left:172px; bottom:96px; width:58px; height:58px; }
 
   /* Touch relayout: readouts move to the top band, controls own the bottom band, so nothing overlaps in landscape */
-  body.touch #stats { top: calc(8px + env(safe-area-inset-top)); left: calc(96px + env(safe-area-inset-left)); bottom:auto; min-width:0; }
-  body.touch #stats .big { font-size:24px; }
-  body.touch #ammoPanel { top: calc(80px + env(safe-area-inset-top)); left: calc(96px + env(safe-area-inset-left)); right:auto; bottom:auto; text-align:left; min-width:0; }
-  body.touch #ammoPanel .big { font-size:24px; }
+  body.touch #stats { top: calc(8px + env(safe-area-inset-top)); left: calc(82px + env(safe-area-inset-left)); bottom:auto; min-width:0; }
+  body.touch #stats .big { font-size:18px; }
+  body.touch #ammoPanel { top: calc(68px + env(safe-area-inset-top)); left: calc(82px + env(safe-area-inset-left)); right:auto; bottom:auto; text-align:left; min-width:0; }
+  body.touch #ammoPanel .big { font-size:18px; }
   body.touch #score { top: calc(12px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right)); }
-  body.touch #scoreVal { font-size:20px; }
-  body.touch #minimap { width:80px; height:80px; top: calc(8px + env(safe-area-inset-top)); left: calc(8px + env(safe-area-inset-left)); }
+  body.touch #scoreVal { font-size:16px; }
+  body.touch #creditsVal { font-size:16px; }
+  body.touch #score .label { font-size:9px; }
+  body.touch #minimap { width:66px; height:66px; top: calc(8px + env(safe-area-inset-top)); left: calc(8px + env(safe-area-inset-left)); }
   body.touch #wavePanel { top: calc(90px + env(safe-area-inset-top)); padding:3px 12px; }
-  body.touch #waveNum { font-size:15px; letter-spacing:2px; }
-  body.touch #enemyCount { font-size:10px; margin-top:1px; }
+  body.touch #waveNum { font-size:13px; letter-spacing:2px; }
+  body.touch #enemyCount { font-size:9px; margin-top:1px; }
   /* tidy mobile readouts: tight rounded panels (no angled clip), smaller numbers, no keyboard-only hints */
-  body.touch .panel { padding:7px 11px; clip-path:none; border-radius:10px; background:rgba(8,18,22,.7); }
-  body.touch #stats .big, body.touch #ammoPanel .big { font-size:22px; }
-  body.touch #stats { min-width:120px; }
-  body.touch #ammoPanel { min-width:120px; }
-  body.touch #stats .label, body.touch #ammoPanel .label { font-size:10px; letter-spacing:1.5px; }
+  body.touch .panel { padding:5px 9px; clip-path:none; border-radius:9px; background:rgba(8,18,22,.7); }
+  body.touch #stats .big, body.touch #ammoPanel .big { font-size:18px; }
+  body.touch #stats { min-width:96px; }
+  body.touch #ammoPanel { min-width:96px; }
+  body.touch #stats .label, body.touch #ammoPanel .label { font-size:9px; letter-spacing:1.2px; }
   body.touch #nadeKbd { display:none; }   /* "[G] THROW" is keyboard-only on mobile */
-  body.touch #stats .bar { height:5px; margin-top:6px; }
+  body.touch #stats .bar { height:4px; margin-top:4px; }
   /* controls, landscape-tuned + notch-safe */
   body.touch #tStick  { left: calc(20px + env(safe-area-inset-left));  bottom: calc(20px + env(safe-area-inset-bottom)); width:120px; height:120px; }
   body.touch #tFire   { right: calc(22px + env(safe-area-inset-right)); bottom: calc(22px + env(safe-area-inset-bottom)); width:88px; height:88px; }
@@ -382,18 +384,22 @@
     transition:opacity .3s; }
 
   /* Shop menu (chest / station) */
-  #shop { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
-    width:min(560px,90vw); background:linear-gradient(150deg,rgba(8,20,24,.97),rgba(6,14,18,.97));
+  #shop { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); z-index:72;
+    width:min(560px,90vw); background:linear-gradient(150deg,rgba(8,20,24,.98),rgba(6,14,18,.98));
     border:1px solid rgba(56,245,181,.4); padding:26px 30px; pointer-events:auto;
     clip-path:polygon(0 0,100% 0,100% 94%,97% 100%,0 100%);
     box-shadow:0 20px 80px rgba(0,0,0,.6); }
+  #shopClose { position:absolute; top:8px; right:10px; width:38px; height:38px; display:grid; place-items:center;
+    background:rgba(255,90,120,.16); border:1px solid rgba(255,90,120,.5); color:#ff8a9b; font-size:18px; line-height:1;
+    border-radius:9px; cursor:pointer; pointer-events:auto; z-index:2; }
+  #shopClose:hover { background:rgba(255,90,120,.3); }
   .shopTitle { font-family:'Major Mono Display',monospace; font-size:26px; color:#ffd166;
     letter-spacing:3px; text-shadow:0 0 20px rgba(255,209,102,.4); }
   .shopSub { color:#7fa99c; font-size:12px; letter-spacing:2px; margin:4px 0 18px; }
-  .shopItem { display:flex; align-items:center; gap:14px; padding:12px 14px; margin-bottom:8px;
+  .shopItem { display:flex; align-items:center; gap:14px; padding:12px 14px; margin-bottom:8px; cursor:pointer;
     background:rgba(255,255,255,.04); border:1px solid rgba(56,245,181,.15);
     transition:background .12s, border-color .12s; }
-  .shopItem.afford:hover { background:rgba(56,245,181,.1); }
+  .shopItem.afford:hover, .shopItem.afford:active { background:rgba(56,245,181,.14); border-color:rgba(56,245,181,.4); }
   .shopItem.broke { opacity:.45; }
   .shopKey { width:30px; height:30px; flex:none; display:grid; place-items:center;
     background:#38f5b5; color:#05070a; font-weight:700; font-size:16px;
@@ -462,10 +468,11 @@
   <div id="weaponWheel"></div>
 
   <div id="shop" class="hidden">
+    <button id="shopClose" type="button" aria-label="Close">✕</button>
     <div class="shopTitle" id="shopTitle">SUPPLY CACHE</div>
     <div class="shopSub" id="shopSub">Select an item — press its number key</div>
     <div id="shopItems"></div>
-    <div class="shopFoot">[ESC] or walk away to close</div>
+    <div class="shopFoot" id="shopFoot">[ESC] or walk away to close</div>
   </div>
 </div>
 
@@ -7739,7 +7746,9 @@ function openShop(chest){
   firing = false; ads = false;
   safeExitPointerLock();
   $('shopTitle').textContent = 'SUPPLY CACHE';
-  $('shopSub').textContent = `Credits: ◆${credits} — press a number to buy`;
+  $('shopSub').textContent = `Credits: ◆${credits} — ${isTouch ? 'tap an item to buy' : 'press a number to buy'}`;
+  const foot = $('shopFoot'); if(foot) foot.textContent = isTouch ? 'Tap ✕ or walk away to close' : '[ESC] or walk away to close';
+  const sc = $('shopClose'); if(sc) sc.onclick = ()=> closeShop();
   renderShopItems(chest.items);
   $('shop').classList.remove('hidden');
 }
@@ -7748,13 +7757,14 @@ function renderShopItems(items){
   let html='';
   items.forEach((it, idx)=>{
     const can = credits >= it.cost;
-    html += `<div class="shopItem ${can?'afford':'broke'}">
+    html += `<div class="shopItem ${can?'afford':'broke'}" data-idx="${idx}">
       <div class="shopKey">${idx+1}</div>
       <div class="shopInfo"><div class="shopName">${it.name}</div><div class="shopDesc">${it.desc}</div></div>
       <div class="shopCost">◆${it.cost}</div>
     </div>`;
   });
-  $('shopItems').innerHTML = html;
+  const host = $('shopItems'); host.innerHTML = html;
+  host.querySelectorAll('.shopItem').forEach((el)=>{ el.addEventListener('click', ()=> buyFromShop(+el.dataset.idx)); });   // tap to buy (touch + mouse)
 }
 
 function buyFromShop(index){
@@ -7870,7 +7880,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 103 · 2026-06-04';
+const BUILD_VERSION = 'build 104 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
