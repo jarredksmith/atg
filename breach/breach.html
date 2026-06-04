@@ -358,6 +358,11 @@
     <span style="color:#38c8f5">Press <b>P</b> in-game to open the model transform editor</span>
     <div id="padNote" style="display:none;margin-top:10px;color:#38f5b5">🎮 Controller connected — <b>L-stick</b> move · <b>R-stick</b> look · <b>RT</b> fire · <b>LT</b> aim · <b>A</b> jump · <b>X</b> reload · <b>Y</b> use · <b>B</b> grenade · <b>LB/RB</b> weapons · <b>L3</b> sprint · <b>any button</b> deploys &nbsp; <span style="color:#5a7d72">(press <b>`</b> for controller test)</span></div>
   </div>
+  <div id="audioCtl" style="margin-top:12px;font-size:12px;color:#9fe6cf;display:flex;gap:16px;align-items:center;justify-content:center;flex-wrap:wrap">
+    <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="muteCb" style="width:14px;height:14px;accent-color:#38f5b5;cursor:pointer">Mute</label>
+    <label style="display:flex;gap:7px;align-items:center">🔊<input type="range" id="volMaster" min="0" max="100" value="80" style="width:96px;accent-color:#38f5b5"></label>
+    <label style="display:flex;gap:7px;align-items:center">♪<input type="range" id="volMusic" min="0" max="100" value="60" style="width:96px;accent-color:#38f5b5"></label>
+  </div>
   <div id="mpBox">
     <div class="mpRow"><input id="mpName" type="text" maxlength="14" placeholder="your name" autocomplete="off"></div>
     <div class="mpRow">
@@ -4930,7 +4935,7 @@ const THREE = window.THREE;
 
 // ---------- Audio (procedural, no files — works fully offline) ----------
 let actx = null;
-function initAudio(){ if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)(); if(actx.state==='suspended') actx.resume(); }
+function initAudio(){ if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)(); if(actx.state==='suspended') actx.resume(); buildAudioBuses(); }
 function tone({freq=440, type='sine', dur=0.1, vol=0.2, slideTo=null, attack=0.005}={}){
   if(!actx) return;
   const t = actx.currentTime;
@@ -4941,7 +4946,7 @@ function tone({freq=440, type='sine', dur=0.1, vol=0.2, slideTo=null, attack=0.0
   g.gain.setValueAtTime(0, t);
   g.gain.linearRampToValueAtTime(vol, t+attack);
   g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
-  osc.connect(g).connect(actx.destination);
+  osc.connect(g).connect(sfxBus||actx.destination);
   osc.start(t); osc.stop(t+dur+0.02);
 }
 function noise({dur=0.15, vol=0.3, filterFreq=1200, type='lowpass'}={}){
@@ -4954,7 +4959,7 @@ function noise({dur=0.15, vol=0.3, filterFreq=1200, type='lowpass'}={}){
   const src = actx.createBufferSource(); src.buffer = buf;
   const filt = actx.createBiquadFilter(); filt.type=type; filt.frequency.value=filterFreq;
   const g = actx.createGain(); g.gain.value = vol;
-  src.connect(filt).connect(g).connect(actx.destination);
+  src.connect(filt).connect(g).connect(sfxBus||actx.destination);
   src.start(t);
 }
 const SFX = {
@@ -4977,6 +4982,51 @@ const SFX = {
   power(){ tone({freq:440, type:'triangle', dur:0.1, vol:0.16, slideTo:660}); setTimeout(()=>tone({freq:660, type:'triangle', dur:0.1, vol:0.16, slideTo:880}),90); setTimeout(()=>tone({freq:880, type:'triangle', dur:0.14, vol:0.16, slideTo:1320}),180); },
   swap(){ tone({freq:300, type:'square', dur:0.05, vol:0.08, slideTo:500}); },
 };
+
+// ---------- Audio buses + persisted volume settings (separate from level data) ----------
+let masterBus=null, sfxBus=null, musicBus=null;
+const AUDIO_KEY='breach_audio';
+function _clamp01(x){ x=+x; return isFinite(x)?Math.max(0,Math.min(1,x)):0; }
+function loadAudioSettings(){ try{ const j=JSON.parse(localStorage.getItem(AUDIO_KEY)); if(j) return { master:_clamp01(j.master!=null?j.master:0.8), music:_clamp01(j.music!=null?j.music:0.6), sfx:_clamp01(j.sfx!=null?j.sfx:1), muted:!!j.muted }; }catch(e){} return { master:0.8, music:0.6, sfx:1, muted:false }; }
+const audioSettings = loadAudioSettings();
+function saveAudioSettings(){ try{ localStorage.setItem(AUDIO_KEY, JSON.stringify(audioSettings)); }catch(e){} }
+function applyAudioSettings(){ if(!actx||!masterBus) return; const t=actx.currentTime; masterBus.gain.setTargetAtTime(audioSettings.muted?0:audioSettings.master, t, 0.02); musicBus.gain.setTargetAtTime(audioSettings.music, t, 0.02); sfxBus.gain.setTargetAtTime(audioSettings.sfx, t, 0.02); }
+function buildAudioBuses(){ if(masterBus||!actx) return; masterBus=actx.createGain(); masterBus.connect(actx.destination); sfxBus=actx.createGain(); sfxBus.connect(masterBus); musicBus=actx.createGain(); musicBus.connect(masterBus); applyAudioSettings(); }
+function toggleMute(){ audioSettings.muted=!audioSettings.muted; applyAudioSettings(); saveAudioSettings(); return audioSettings.muted; }
+
+// ---------- Adaptive music (procedural; intensity tracks the live threat) ----------
+let _musicOn=false, _musicDrone=null, _musicTimer=null, _musicInt=0, _musicTarget=0, _musicStep=0;
+const MUSIC_ROOT=110;
+// Pure: map the live game state to a target intensity 0..1 (calm between waves, tense under threat).
+function musicTargetFor(s){ const threat=Math.min(1,((s.enemies||0)+(s.toSpawn||0))/8); const waveF=Math.min(1,Math.max(0,((s.wave||1)-1)/10)); return Math.max(0,Math.min(1, 0.15 + 0.55*threat + 0.30*waveF)); }
+function setMusicIntensity(x){ _musicTarget=Math.max(0,Math.min(1,+x||0)); }
+function startMusic(){
+  if(!actx||!musicBus||_musicOn) return; _musicOn=true; _musicInt=0; _musicStep=0;
+  const freqs=[MUSIC_ROOT, MUSIC_ROOT*1.5, MUSIC_ROOT*2];
+  _musicDrone=freqs.map((f,i)=>{ const o=actx.createOscillator(); o.type=(i===2?'triangle':'sine'); o.frequency.value=f; const g=actx.createGain(); g.gain.value=(i===0?0.06:0.03); o.connect(g).connect(musicBus); o.start(); return {o,g}; });
+  _musicTimer=setInterval(_musicStepFn, 260);
+}
+function _musicStepFn(){
+  if(!actx||!_musicOn) return;
+  _musicInt += (_musicTarget-_musicInt)*0.12;   // smooth toward the target each step
+  const inten=_musicInt, t=actx.currentTime, beat=_musicStep%4;
+  if(inten>0.04){
+    const bf=[MUSIC_ROOT*0.5, MUSIC_ROOT*0.5, MUSIC_ROOT*0.6667, MUSIC_ROOT*0.5][beat];
+    const o=actx.createOscillator(); o.type='sawtooth'; o.frequency.value=bf;
+    const g=actx.createGain(), v=0.06*inten;
+    g.gain.setValueAtTime(0,t); g.gain.linearRampToValueAtTime(v,t+0.01); g.gain.exponentialRampToValueAtTime(0.0001,t+0.22);
+    const filt=actx.createBiquadFilter(); filt.type='lowpass'; filt.frequency.value=350+700*inten;
+    o.connect(filt).connect(g).connect(musicBus); o.start(t); o.stop(t+0.24);
+    if(inten>0.35 && (beat===1||beat===3)){   // hi-hat tick on the off-beats once it gets tense
+      const n=Math.floor(actx.sampleRate*0.04), buf=actx.createBuffer(1,n,actx.sampleRate), d=buf.getChannelData(0);
+      for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*(1-i/n);
+      const src=actx.createBufferSource(); src.buffer=buf; const hf=actx.createBiquadFilter(); hf.type='highpass'; hf.frequency.value=6000;
+      const hg=actx.createGain(); hg.gain.value=0.04*inten; src.connect(hf).connect(hg).connect(musicBus); src.start(t);
+    }
+  }
+  _musicStep++;
+}
+function stopMusic(){ if(_musicTimer){ clearInterval(_musicTimer); _musicTimer=null; } if(_musicDrone&&actx){ const t=actx.currentTime; for(const nd of _musicDrone){ try{ nd.g.gain.setTargetAtTime(0.0001,t,0.1); nd.o.stop(t+0.4); }catch(e){} } } _musicDrone=null; _musicOn=false; _musicInt=0; _musicTarget=0; }
 
 // ---------- Core setup ----------
 const scene = new THREE.Scene();
@@ -5700,8 +5750,10 @@ let gameCfg = {
   mode: (savedLevel && savedLevel.game && savedLevel.game.mode) || (spawnMarkers.length ? 'prebuilt' : 'random'),
   winWaves: (savedLevel && savedLevel.game && savedLevel.game.winWaves!=null) ? savedLevel.game.winWaves : 0,   // 0 = endless
   upgrades: (savedLevel && savedLevel.game && savedLevel.game.upgrades!=null) ? !!savedLevel.game.upgrades : true,   // solo between-wave card picks
-  objective: (savedLevel && savedLevel.game && savedLevel.game.objective) || 'eliminate',   // 'eliminate' | 'survival'
+  objective: (savedLevel && savedLevel.game && savedLevel.game.objective) || 'eliminate',   // 'eliminate' | 'survival' | 'extraction'
   surviveSecs: (savedLevel && savedLevel.game && savedLevel.game.surviveSecs!=null) ? savedLevel.game.surviveSecs : 120,
+  extractHold: (savedLevel && savedLevel.game && savedLevel.game.extractHold!=null) ? savedLevel.game.extractHold : 5,
+  extractRadius: (savedLevel && savedLevel.game && savedLevel.game.extractRadius!=null) ? savedLevel.game.extractRadius : 3.5,
 };
 
 // ---------- Player start (where you/co-op players spawn each run; authored in-editor) ----------
@@ -5952,6 +6004,7 @@ addEventListener('keydown', e=>{
     else if(e.code==='KeyE' || e.code==='Escape') closeShop();
     return;
   }
+  if(e.code==='KeyM'){ const m=toggleMute(); if(typeof flashToast==='function') flashToast(m?'Muted':'Sound on'); return; }
   if(editorOpen) return;   // ignore gameplay keys while editing
   if(e.code==='KeyR') reload();
   if(e.code==='KeyE') interact();
@@ -6057,6 +6110,12 @@ const vmCam = new THREE.PerspectiveCamera(camera.fov, camera.aspect, 0.01, 12);
 vmScene.add(new THREE.HemisphereLight(0x9fc4d8, 0x10161b, 0.95));
 const _vmKey = new THREE.DirectionalLight(0xffffff, 1.05); _vmKey.position.set(0.5, 1.0, 0.8); vmScene.add(_vmKey);
 vmScene.add(gun);
+// muzzle point fixed to the gun's barrel — tracers + the flash are sourced from where this is DRAWN on
+// screen (the gun renders in vmScene, so a plain world offset would float in front of the player instead).
+const vmMuzzle = new THREE.Object3D();
+vmMuzzle.position.set(GUN_OFFSET.x, GUN_OFFSET.y + 0.04, GUN_OFFSET.z - 1.02);
+gun.add(vmMuzzle);
+const _muzNdc = new THREE.Vector2();
 function renderViewmodel(){
   if(activeCam() !== camera || !gun.visible) return;   // skip the editor's top-down view / when the weapon is hidden
   vmCam.fov = camera.fov; vmCam.aspect = camera.aspect; vmCam.updateProjectionMatrix();
@@ -6138,7 +6197,7 @@ const muzzle = new THREE.PointLight(0xffcf6b, 0, 8);
 muzzle.position.set(.35,-.32,-1.5); camera.add(muzzle);
 const flashMat = new THREE.MeshBasicMaterial({color:0xffe08a, transparent:true, opacity:0});
 const flash = new THREE.Mesh(new THREE.SphereGeometry(.25,8,8), flashMat);
-flash.position.set(.35,-.32,-1.5); vmScene.add(flash);
+flash.position.set(0,0,0); vmMuzzle.add(flash);   // flash sits on the barrel and sways with the gun
 
 // ---------- Weapon system (data-driven) ----------
 const WEAPONS = {
@@ -6589,7 +6648,7 @@ function loadLevelFromNet(level){
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns){ const g=buildSpawnMarker(sp); g.visible = editorOpen; } }
-  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; }
+  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; }
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; refreshPlayerSpawnMarker(); }
   if(level.weapons){ for(const k in WEAPONS){ const wd=level.weapons[k]; if(wd){ WEAPONS[k].model=wd.model||''; WEAPONS[k].view=wd.view||null; } } }
@@ -7411,7 +7470,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 65 · 2026-06-03';
+const BUILD_VERSION = 'build 67 · 2026-06-03';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8051,7 +8110,13 @@ function shoot(){
     // Only raycast against real Object3D instances (guards against any non-mesh collider entries)
     rayTargets = [...enemyMeshes, ...colliders, ...dynamicProps, floor].filter(o => o && o.isObject3D);
   }
-  const muzzleWorld = new THREE.Vector3(); flash.getWorldPosition(muzzleWorld);
+  // The gun is drawn in the viewmodel overlay, so find where its barrel appears on screen and map that to a
+  // world point a couple metres ahead — the world-space tracer then visibly emanates from the weapon.
+  const muzzleWorld = new THREE.Vector3();
+  vmMuzzle.getWorldPosition(muzzleWorld); muzzleWorld.project(vmCam);
+  _muzNdc.set(muzzleWorld.x, muzzleWorld.y);
+  raycaster.setFromCamera(_muzNdc, camera);
+  raycaster.ray.at(2.2, muzzleWorld);
   const spread = w.spread * (1 - adsBlend*0.8);   // aiming tightens spread up to 80%
 
   for(let p=0; p<w.pellets; p++){
@@ -8174,6 +8239,8 @@ function drawMinimap(){
   for(const c of coins) blip(c.mesh.position.x, c.mesh.position.z, 'rgba(255,209,102,0.7)', 1.6);
   // enemies (red)
   for(const en of enemies) blip(en.mesh.position.x, en.mesh.position.z, '#ff4d5e', 2.6);
+  // extraction zone (pulsing green)
+  if(objectiveActive()==='extraction' && extractZone && extractZone.visible) blip(extractPos.x, extractPos.z, '#38f5b5', 4.2);
 
   ctx.restore();
 
@@ -8188,6 +8255,7 @@ function drawMinimap(){
 
 let score = 0, wave = 1, toSpawn = 0;
 let surviveLeft = 0;   // seconds left in a Survival-objective run
+let extractHoldT = 0; let extractZone = null; const extractPos = new THREE.Vector3();   // Extraction objective
 function updateHUD(){
   const w = W();
   $('hp').textContent = Math.max(0,Math.ceil(player.hp));
@@ -8302,11 +8370,38 @@ let spawnQueue = [];   // pending authored-spawn descriptors for the current wav
 // ---- Objective layer: the win condition + HUD label live here so game modes are pluggable.
 // 'eliminate' = clear waves (optionally a fixed count). 'survival' = outlast a countdown (endless spawns).
 function objectiveActive(){ return gameCfg.objective || 'eliminate'; }
-function startObjective(){ surviveLeft = gameCfg.surviveSecs || 0; }
 function fmtClock(s){ s=Math.max(0,Math.ceil(s)); const m=Math.floor(s/60); return m+':'+String(s%60).padStart(2,'0'); }
+// --- Extraction beacon (a glowing zone you must reach + hold). Built lazily, scaled to the zone radius. ---
+function buildExtractZone(){
+  if(extractZone) return extractZone;
+  const g = new THREE.Group();
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.82, 1, 48),
+    new THREE.MeshBasicMaterial({ color:0x38f5b5, transparent:true, opacity:0.85, side:THREE.DoubleSide, blending:THREE.AdditiveBlending, depthWrite:false }));
+  ring.rotation.x = -Math.PI/2; ring.position.y = 0.06; g.add(ring);
+  const pillar = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 7, 32, 1, true),
+    new THREE.MeshBasicMaterial({ color:0x38f5b5, transparent:true, opacity:0.10, side:THREE.DoubleSide, blending:THREE.AdditiveBlending, depthWrite:false }));
+  pillar.position.y = 3.5; g.add(pillar);
+  g.userData.ring = ring; g.userData.pillar = pillar; g.visible = false;
+  scene.add(g); extractZone = g; return g;
+}
+function placeExtraction(){
+  buildExtractZone();
+  const R = gameCfg.extractRadius || 3.5, lim = ARENA*0.85;
+  extractZone.scale.set(R, 1, R);
+  let ex = -playerSpawn.x, ez = -playerSpawn.z;                 // drop it across the arena from the spawn
+  if(Math.abs(ex) < 2 && Math.abs(ez) < 2){ ex = lim*0.7; ez = -lim*0.7; }   // spawn at centre -> use a corner
+  ex = Math.max(-lim, Math.min(lim, ex)); ez = Math.max(-lim, Math.min(lim, ez));
+  extractPos.set(ex, 0, ez); extractZone.position.set(ex, 0, ez); extractZone.visible = true;
+}
+function startObjective(){
+  surviveLeft = gameCfg.surviveSecs || 0; extractHoldT = 0;
+  if(objectiveActive()==='extraction'){ placeExtraction(); }
+  else if(extractZone){ extractZone.visible = false; }
+}
 function objectiveHUD(){
   const wn=$('waveNum'); if(!wn) return;
   if(objectiveActive()==='survival'){ wn.textContent = 'SURVIVE ' + fmtClock(surviveLeft); }
+  else if(objectiveActive()==='extraction'){ const H=gameCfg.extractHold||5; wn.textContent = (extractHoldT>0.05) ? ('EXTRACTING '+extractHoldT.toFixed(1)+' / '+H) : 'REACH EXTRACTION'; }
   else { wn.textContent = (gameCfg.winWaves>0) ? ('WAVE '+wave+' / '+gameCfg.winWaves) : ('WAVE '+wave); }
 }
 function objectiveTick(dt){   // host/solo per-frame; may trigger the win
@@ -8314,6 +8409,18 @@ function objectiveTick(dt){   // host/solo per-frame; may trigger the win
     surviveLeft -= dt;
     objectiveHUD();
     if(surviveLeft<=0){ surviveLeft=0; if(typeof gameWon==='function') gameWon(); }
+  } else if(objectiveActive()==='extraction'){
+    if(extractZone){
+      const pulse = 0.6 + 0.4*Math.sin(performance.now()*0.004);
+      if(extractZone.userData.ring) extractZone.userData.ring.material.opacity = 0.5 + 0.4*pulse;
+      if(extractZone.userData.pillar) extractZone.userData.pillar.material.opacity = 0.06 + 0.09*pulse;
+    }
+    const R = gameCfg.extractRadius || 3.5, H = gameCfg.extractHold || 5;
+    const dx = player.pos.x - extractPos.x, dz = player.pos.z - extractPos.z;
+    if(dx*dx + dz*dz <= R*R) extractHoldT = Math.min(H, extractHoldT + dt);   // standing in the zone
+    else extractHoldT = Math.max(0, extractHoldT - dt*0.6);                    // drifts back when you leave
+    objectiveHUD();
+    if(extractHoldT >= H){ if(typeof gameWon==='function') gameWon(); }
   }
 }
 function startWave(){
@@ -8811,6 +8918,7 @@ function loop(){
 
   if(!editorOpen) resolvePlayerProps(dt);   // player collides with / gets knocked by dynamic props
 
+  if(_musicOn) setMusicIntensity(musicTargetFor({ enemies: enemies.length, toSpawn, wave }));
   drawMinimap();
   if(editorOpen && typeof updateSelectionHighlight==='function') updateSelectionHighlight();
   renderScene(scene, activeCam());
@@ -9232,7 +9340,7 @@ function serializeLevel(){
     props:   propModels.filter(Boolean).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
-    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs },
+    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius },
     dmgNum:  { on: dmgNumCfg.on !== false, size: dmgNumCfg.size, hit: dmgNumCfg.hitColor, kill: dmgNumCfg.killColor },
     pstart:  { x: playerSpawn.x, z: playerSpawn.z, yaw: playerSpawn.yaw },
     grenade: { model: GRENADE.model, scale: GRENADE.scale, radius: GRENADE.radius, damage: GRENADE.damage, fuse: GRENADE.fuse, throwForce: GRENADE.throwForce },
@@ -9271,7 +9379,7 @@ function restoreLevel(level){
   // enemy spawns
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns){ const g=buildSpawnMarker(sp); g.visible = editorOpen; } }
-  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; }
+  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; }
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; } else { playerSpawn.x=0; playerSpawn.z=0; playerSpawn.yaw=0; }
   refreshPlayerSpawnMarker();
@@ -9741,10 +9849,12 @@ function renderEditorFields(){
     hint(gHost, '<b>Objective</b>', '2px 0 4px');
     const obRow=document.createElement('div'); obRow.className='row2';
     const obBtn=(key,txt)=>{ const b=document.createElement('button'); b.textContent=txt; if(objectiveActive()===key){ b.style.background='rgba(56,245,181,0.30)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); gameCfg.objective=key; renderEditorFields(); }; return b; };
-    obRow.appendChild(obBtn('eliminate','🎯 Eliminate')); obRow.appendChild(obBtn('survival','⏱ Survival'));
+    obRow.appendChild(obBtn('eliminate','🎯 Eliminate')); obRow.appendChild(obBtn('survival','⏱ Survival')); obRow.appendChild(obBtn('extraction','📦 Extraction'));
     gHost.appendChild(obRow);
     hint(gHost, '', '3px 0 6px').textContent = (objectiveActive()==='survival')
       ? 'Survival: hostiles spawn endlessly — outlast the countdown to win.'
+      : (objectiveActive()==='extraction')
+      ? 'Extraction: reach the beacon (auto-placed across the arena) and hold it while hostiles spawn endlessly.'
       : 'Eliminate: clear waves of hostiles (optionally a fixed number to win).';
     if(objectiveActive()==='survival'){
       const svLab=document.createElement('label'); svLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;';
@@ -9753,6 +9863,12 @@ function renderEditorFields(){
       svN.onchange=()=>{ gameCfg.surviveSecs=Math.max(10,Math.min(999,parseInt(svN.value,10)||120)); renderEditorFields(); };
       svLab.appendChild(svSp); svLab.appendChild(svN); gHost.appendChild(svLab);
       hint(gHost, '', '2px 0 0').textContent = 'Outlast '+fmtClock(gameCfg.surviveSecs)+' to win. Spawn style + upgrades below still apply.';
+    }
+    if(objectiveActive()==='extraction'){
+      const exrow=(label,min,max,step,get,set)=>{ const l=document.createElement('label'); l.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='118px'; const ip=document.createElement('input'); ip.type='number'; ip.min=min; ip.max=max; ip.step=step; ip.value=get(); ip.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;'; ip.onchange=()=>{ set(parseFloat(ip.value)); renderEditorFields(); }; l.appendChild(sp); l.appendChild(ip); gHost.appendChild(l); };
+      exrow('Hold seconds','1','30','1', ()=>gameCfg.extractHold, v=>gameCfg.extractHold=Math.max(1,Math.min(30,v||5)));
+      exrow('Zone radius','1.5','10','0.5', ()=>gameCfg.extractRadius, v=>gameCfg.extractRadius=Math.max(1.5,Math.min(10,v||3.5)));
+      hint(gHost, '', '2px 0 0').textContent = 'Beacon drops across the arena from your spawn. Hold it '+gameCfg.extractHold+'s to win (leaving resets progress).';
     }
     hint(gHost, '<b>Wave mode</b>', '12px 0 4px');
     const gmRow=document.createElement('div'); gmRow.className='row2';
@@ -10844,6 +10960,7 @@ function toggleEditor(){
 // ---------- Game state ----------
 function startGame(){
   initAudio();
+  startMusic();
   player.hp=100; player.maxHp=100; run = { ...RUN0 }; if(typeof closeUpgradePicker==='function') closeUpgradePicker(); player.pos.set(playerSpawn.x, EYE, playerSpawn.z); player.vel.set(0,0,0);
   player.yaw=playerSpawn.yaw; player.pitch=0; player.onGround=true;
   // reset weapons
@@ -10894,6 +11011,8 @@ function startGame(){
 }
 function gameWon(){
   if(!gameOn) return;
+  stopMusic();
+  if(typeof extractZone!=='undefined' && extractZone) extractZone.visible=false;
   if(typeof closeUpgradePicker==='function') closeUpgradePicker();
   gameOn=false; gameOver=true; safeExitPointerLock();
   firing=false; ads=false; shopOpen=false;
@@ -10903,13 +11022,14 @@ function gameWon(){
   const ov=$('overlay'); ov.classList.remove('hidden');
   ov.innerHTML = `
     <h1 style="color:#38f5b5;text-shadow:0 0 30px rgba(56,245,181,.5)">MISSION COMPLETE</h1>
-    <div class="sub">${ gameCfg.objective==='survival' ? ('SURVIVED '+fmtClock(gameCfg.surviveSecs)) : (gameCfg.winWaves+' WAVE'+(gameCfg.winWaves===1?'':'S')+' CLEARED') } &nbsp;·&nbsp; SCORE ${score} &nbsp;·&nbsp; ◆${credits}</div>
+    <div class="sub">${ gameCfg.objective==='survival' ? ('SURVIVED '+fmtClock(gameCfg.surviveSecs)) : gameCfg.objective==='extraction' ? 'EXTRACTED' : (gameCfg.winWaves+' WAVE'+(gameCfg.winWaves===1?'':'S')+' CLEARED') } &nbsp;·&nbsp; SCORE ${score} &nbsp;·&nbsp; ◆${credits}</div>
     <button id="startBtn">Redeploy</button>`;
   $('hud').classList.add('hidden');
   document.getElementById('startBtn').onclick = startGame;
 }
 function endGame(){
-  gameOn=false; gameOver=true; safeExitPointerLock(); if(typeof closeUpgradePicker==='function') closeUpgradePicker();
+  stopMusic();
+  gameOn=false; gameOver=true; safeExitPointerLock(); if(typeof extractZone!=='undefined' && extractZone) extractZone.visible=false; if(typeof closeUpgradePicker==='function') closeUpgradePicker();
   firing=false; ads=false; shopOpen=false;
   editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
   $('shop').classList.add('hidden');
@@ -10971,6 +11091,9 @@ function bindMenu(){
   const j=document.getElementById('mpJoin'); if(j) j.onclick=startJoin;
   const fs=document.getElementById('fsBtn');
   if(fs){ if(!fsSupported()){ fs.style.display='none'; } else { fs.style.display=''; fs.onclick=toggleFullscreen; syncFsBtn(); } }   // desktop only
+  const mc=document.getElementById('muteCb'); if(mc){ mc.checked=audioSettings.muted; mc.onchange=()=>{ audioSettings.muted=mc.checked; applyAudioSettings(); saveAudioSettings(); }; }
+  const vM=document.getElementById('volMaster'); if(vM){ vM.value=Math.round(audioSettings.master*100); vM.oninput=()=>{ audioSettings.master=(+vM.value)/100; applyAudioSettings(); saveAudioSettings(); }; }
+  const vMu=document.getElementById('volMusic'); if(vMu){ vMu.value=Math.round(audioSettings.music*100); vMu.oninput=()=>{ audioSettings.music=(+vMu.value)/100; applyAudioSettings(); saveAudioSettings(); }; }
 }
 // Restore the full start page (Deploy / Build / multiplayer) — used by the editor's "Main menu" button.
 function showMainMenu(){
@@ -10982,6 +11105,7 @@ function showMainMenu(){
 }
 // Leave the editor and return to the start page WITHOUT starting a wave, so Deploy replays the live build.
 function editorToMenu(){
+  stopMusic();
   if(editorOpen) toggleEditor();        // restore play rendering + physics; hide panel, markers, gizmo
   if(typeof closeUpgradePicker==='function') closeUpgradePicker();
   editorFreeFly=false; editorTopView=false;
