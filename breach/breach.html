@@ -7711,7 +7711,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 90 · 2026-06-04';
+const BUILD_VERSION = 'build 91 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7828,7 +7828,15 @@ addEventListener('contextmenu', e=>{ if(gameOn) e.preventDefault(); });
     const up=()=>{ off(); b.classList.remove('on'); };
     b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up); };
   const tap=(id,fn)=>{ const b=document.getElementById(id); if(!b) return; b.addEventListener('pointerdown', e=>{ fn(); e.preventDefault(); }); };
-  hold('tFire', ()=>touchFiring=true, ()=>touchFiring=false);
+  // Fire button doubles as a look surface: hold to fire AND drag the same thumb to keep aiming.
+  (function(){
+    const fire=document.getElementById('tFire'); if(!fire) return;
+    let fid=null, fx=0, fy=0;
+    fire.addEventListener('pointerdown', e=>{ isTouch=true; fid=e.pointerId; fx=e.clientX; fy=e.clientY; touchFiring=true; fire.classList.add('on'); try{fire.setPointerCapture(e.pointerId);}catch(_){} e.preventDefault(); });
+    fire.addEventListener('pointermove', e=>{ if(e.pointerId!==fid) return; touchLookDX+=(e.clientX-fx); touchLookDY+=(e.clientY-fy); fx=e.clientX; fy=e.clientY; e.preventDefault(); });   // drag while firing -> aim
+    const fireEnd=e=>{ if(e.pointerId!==fid) return; fid=null; touchFiring=false; fire.classList.remove('on'); };
+    fire.addEventListener('pointerup', fireEnd); fire.addEventListener('pointercancel', fireEnd);
+  })();
   tap('tJump', ()=>{ touchJump=true; });
   tap('tReload', ()=>{ if(typeof reload==='function') reload(); });
   tap('tNade', ()=>{ if(typeof throwGrenade==='function') throwGrenade(); });
