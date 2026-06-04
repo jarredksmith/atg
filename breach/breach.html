@@ -6127,10 +6127,10 @@ addEventListener('mouseup', e=>{ if(e.button===0){ editorDragLook = false; edito
 // ---------- Weapon (viewmodel) ----------
 // The `gun` group is what the render loop animates (sway, recoil, ADS). We load a hosted
 // .glb into a holder inside it, with tunable offsets so it sits naturally in first-person view.
-const GUN_MODEL_URL = 'https://jarredksmith.github.io/atg/scifi_gun.glb';
-const GUN_OFFSET = new THREE.Vector3(0.26180, -0.34000, -0.23504);
-const GUN_SCALE = 1.85417;                                 // tweak to fit the frame
-const GUN_ROT = new THREE.Euler(0.06636, 1.53388, 0.00000);            // face the muzzle forward (−z)
+const GUN_MODEL_URL = "https://jarredksmith.github.io/atg/scifi_gun.glb";
+const GUN_OFFSET = new THREE.Vector3(0.32000, -0.34000, -0.60000);
+const GUN_SCALE = 0.74782;
+const GUN_ROT = new THREE.Euler(0.00000, 1.53388, 0.00000);
 const gun = new THREE.Group();
 let sight = null;  // kept for weapon-tint compatibility; set if the model exposes an emissive part
 let gunModel = null;  // the loaded GLB viewmodel (null until it loads / when offline placeholder is used)
