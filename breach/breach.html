@@ -5179,7 +5179,7 @@ function preloadCustomSounds(){ const s=curSounds(); if(!s) return; if(s.shoot){
 let masterBus=null, sfxBus=null, musicBus=null;
 const AUDIO_KEY='breach_audio';
 function _clamp01(x){ x=+x; return isFinite(x)?Math.max(0,Math.min(1,x)):0; }
-function loadAudioSettings(){ try{ const j=JSON.parse(localStorage.getItem(AUDIO_KEY)); if(j) return { master:_clamp01(j.master!=null?j.master:0.8), music:_clamp01(j.music!=null?j.music:0.6), sfx:_clamp01(j.sfx!=null?j.sfx:1), muted:!!j.muted, sounds:_sanitizeSounds(j.sounds) }; }catch(e){} return { master:0.8, music:0.6, sfx:1, muted:false, sounds:_emptySounds() }; }
+function loadAudioSettings(){ try{ const j=JSON.parse(localStorage.getItem(AUDIO_KEY)); if(j) return { master:_clamp01(j.master!=null?j.master:0.8), music:_clamp01(j.music!=null?j.music:0.6), sfx:_clamp01(j.sfx!=null?j.sfx:1), muted:!!j.muted, sounds:_sanitizeSounds(j.sounds), musicUrl:(typeof j.musicUrl==='string'?j.musicUrl:'') }; }catch(e){} return { master:0.8, music:0.6, sfx:1, muted:false, sounds:_emptySounds(), musicUrl:'' }; }
 const audioSettings = loadAudioSettings();
 function saveAudioSettings(){ try{ localStorage.setItem(AUDIO_KEY, JSON.stringify(audioSettings)); }catch(e){} }
 function applyAudioSettings(){ if(!actx||!masterBus) return; const t=actx.currentTime; masterBus.gain.setTargetAtTime(audioSettings.muted?0:audioSettings.master, t, 0.02); musicBus.gain.setTargetAtTime(audioSettings.music, t, 0.02); sfxBus.gain.setTargetAtTime(audioSettings.sfx, t, 0.02); }
@@ -5187,13 +5187,30 @@ function buildAudioBuses(){ if(masterBus||!actx) return; masterBus=actx.createGa
 function toggleMute(){ audioSettings.muted=!audioSettings.muted; applyAudioSettings(); saveAudioSettings(); return audioSettings.muted; }
 
 // ---------- Adaptive music (procedural; intensity tracks the live threat) ----------
-let _musicOn=false, _musicDrone=null, _musicTimer=null, _musicInt=0, _musicTarget=0, _musicStep=0;
+let _musicOn=false, _musicDrone=null, _musicTimer=null, _musicInt=0, _musicTarget=0, _musicStep=0, _musicSrc=null;
 const MUSIC_ROOT=110;
 // Pure: map the live game state to a target intensity 0..1 (calm between waves, tense under threat).
 function musicTargetFor(s){ const threat=Math.min(1,((s.enemies||0)+(s.toSpawn||0))/8); const waveF=Math.min(1,Math.max(0,((s.wave||1)-1)/10)); return Math.max(0,Math.min(1, 0.15 + 0.55*threat + 0.30*waveF)); }
 function setMusicIntensity(x){ _musicTarget=Math.max(0,Math.min(1,+x||0)); }
+// A custom looping track (your own music) takes over the music bus when set; co-op clients hear the host's.
+function curMusicUrl(){ return (typeof NET!=='undefined' && NET.musicUrl) || (audioSettings && audioSettings.musicUrl) || ''; }
 function startMusic(){
-  if(!actx||!musicBus||_musicOn) return; _musicOn=true; _musicInt=0; _musicStep=0;
+  if(!actx||!musicBus||_musicOn) return;
+  const murl=curMusicUrl();
+  if(murl){
+    _musicOn=true;
+    loadSound(murl, ()=>{
+      if(!_musicOn || _musicSrc || _musicDrone) return;   // stopped, already playing, or already fell back
+      const buf=_soundBuffers[murl];
+      if(buf && buf.duration!==undefined){ try{ const s=actx.createBufferSource(); s.buffer=buf; s.loop=true; s.connect(musicBus); s.start(); _musicSrc=s; }catch(e){ _startProcMusic(); } }
+      else { _startProcMusic(); }   // couldn't load (CORS / unsupported format) -> the generated score
+    });
+    return;
+  }
+  _startProcMusic();
+}
+function _startProcMusic(){
+  if(!actx||!musicBus) return; _musicOn=true; _musicInt=0; _musicStep=0;
   const freqs=[MUSIC_ROOT, MUSIC_ROOT*1.5, MUSIC_ROOT*2];
   _musicDrone=freqs.map((f,i)=>{ const o=actx.createOscillator(); o.type=(i===2?'triangle':'sine'); o.frequency.value=f; const g=actx.createGain(); g.gain.value=0; o.connect(g).connect(musicBus); o.start(); return {o,g}; });   // starts silent — swelled by intensity each step (no constant drone)
   _musicTimer=setInterval(_musicStepFn, 260);
@@ -5219,7 +5236,7 @@ function _musicStepFn(){
   }
   _musicStep++;
 }
-function stopMusic(){ if(_musicTimer){ clearInterval(_musicTimer); _musicTimer=null; } if(_musicDrone&&actx){ const t=actx.currentTime; for(const nd of _musicDrone){ try{ nd.g.gain.setTargetAtTime(0.0001,t,0.1); nd.o.stop(t+0.4); }catch(e){} } } _musicDrone=null; _musicOn=false; _musicInt=0; _musicTarget=0; }
+function stopMusic(){ if(_musicTimer){ clearInterval(_musicTimer); _musicTimer=null; } if(_musicSrc){ try{ _musicSrc.stop(); }catch(e){} _musicSrc=null; } if(_musicDrone&&actx){ const t=actx.currentTime; for(const nd of _musicDrone){ try{ nd.g.gain.setTargetAtTime(0.0001,t,0.1); nd.o.stop(t+0.4); }catch(e){} } } _musicDrone=null; _musicOn=false; _musicInt=0; _musicTarget=0; }
 
 // ---------- Core setup ----------
 const scene = new THREE.Scene();
@@ -7276,6 +7293,7 @@ function handleHostMsg(msg){
     if(msg.killTarget!=null) NET.killTarget=msg.killTarget;
     if(msg.level) NET.pendingLevel=msg.level;
     if(msg.sounds) NET.pendingSounds=msg.sounds;
+    if(msg.music!=null) NET.pendingMusic=msg.music;
     netStatus('Connected — deploying'); showRoomBadge(NET.roomCode);
     startGame();
   }
@@ -7315,7 +7333,7 @@ function hostStart(code, mode, killTarget){
       if(NET.gameMode==='duel') NET.duelScore[conn._pid] = NET.duelScore[conn._pid]||0;
       // hand the joiner the mode, the kill target, and the current level so their map matches
       let level=null; try{ level = serializeLevel(); }catch(e){}
-      conn.send({t:'welcome', id:conn._pid, mode:NET.gameMode, killTarget:NET.killTarget, level, sounds:audioSettings.sounds});
+      conn.send({t:'welcome', id:conn._pid, mode:NET.gameMode, killTarget:NET.killTarget, level, sounds:audioSettings.sounds, music:audioSettings.musicUrl});
       netStatus('Player joined ('+Object.keys(NET.conns).length+' connected)');
       if(NET.gameMode==='duel') broadcastDuelScore();
     });
@@ -7880,7 +7898,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 106 · 2026-06-04';
+const BUILD_VERSION = 'build 108 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10930,7 +10948,8 @@ function renderEditorFields(){
         pbRow.appendChild(b);
       }
       urlHost.appendChild(pbRow);
-      hint(urlHost, '', '3px 0 0').textContent='Preview avatar is in front of you. Tap a state to test its clip; in-game it switches automatically with movement.';
+      const pHint=document.createElement('div'); pHint.className='hint'; pHint.style.margin='3px 0 0'; pHint.textContent='Preview avatar is in front of you. Tap a state to test its clip; in-game it switches automatically with movement.';
+      urlHost.appendChild(pHint);
     }
     if(tgt.addable){
       const shapeHead = document.createElement('div'); shapeHead.className='hint'; shapeHead.style.margin='8px 0 3px'; shapeHead.innerHTML='<b>Add shape</b> — drops in front of you, then move/scale it';
@@ -11640,6 +11659,7 @@ function startGame(){
   // client: adopt the host's level (props + lights) so everyone shares the same map
   if(NET.pendingLevel){ loadLevelFromNet(NET.pendingLevel); NET.pendingLevel=null; }
   if(NET.pendingSounds){ NET.sounds=_sanitizeSounds(NET.pendingSounds); NET.pendingSounds=null; if(typeof preloadCustomSounds==='function') preloadCustomSounds(); }   // play the host's SFX this session
+  if(NET.pendingMusic!=null){ NET.musicUrl=(typeof NET.pendingMusic==='string'?NET.pendingMusic:''); NET.pendingMusic=null; }   // and the host's music
   chestTimer = 20;
   if(!station) buildStation();
   gameOn=true; gameOver=false; shopOpen=false;
@@ -11812,6 +11832,11 @@ function populateSoundEditor(host){
   const hint=document.createElement('div'); hint.className='hint'; hint.style.margin='2px 0 6px';
   hint.innerHTML='Optional mp3/wav/ogg per event (saved on this device). Host must allow cross-origin loading, else the built-in sound is used.';
   host.appendChild(hint);
+  // custom MUSIC: a looping track that replaces the built-in adaptive score (blank = generated music)
+  host.appendChild(_sndRow('Music track (loops)', ()=>audioSettings.musicUrl||'', v=>{ audioSettings.musicUrl=v||''; if(_musicOn){ stopMusic(); startMusic(); } }));
+  const mhint=document.createElement('div'); mhint.className='hint'; mhint.style.margin='0 0 8px'; mhint.style.color='#5a7d72';
+  mhint.textContent='Music loops continuously and replaces the generated soundtrack. The ♪ Music volume slider (pause menu) controls it.';
+  host.appendChild(mhint);
   const W=(typeof WEAPONS!=='undefined')?WEAPONS:{};
   for(const k of Object.keys(W)){
     const name=(W[k] && W[k].name) ? W[k].name : k;
