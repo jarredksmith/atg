@@ -154,19 +154,6 @@
   /* end-of-run summary */
   .runStats { color:#cfeee2; font-size:15px; letter-spacing:1px; margin-top:6px; }
   .bestLine { color:#ffd166; font-size:13px; letter-spacing:2px; margin-top:6px; text-shadow:0 0 12px rgba(255,209,102,.35); }
-  /* custom-sounds panel */
-  #soundPanel { position:fixed; inset:0; z-index:75; display:flex; flex-direction:column; align-items:center; justify-content:flex-start;
-    gap:12px; padding:28px 16px; box-sizing:border-box; background:rgba(4,8,11,.95); color:#cfeee2; font-family:'Courier New',monospace; overflow-y:auto; }
-  #soundPanel.hidden { display:none; }
-  #soundPanel h2 { color:#38f5b5; letter-spacing:5px; margin:4px 0; font-size:22px; text-shadow:0 0 18px rgba(56,245,181,.4); }
-  #soundPanel .sndHint { color:#7fae9f; font-size:12px; line-height:1.5; max-width:560px; text-align:center; }
-  #sndList { display:flex; flex-direction:column; gap:7px; width:min(620px,94vw); margin-top:6px; }
-  #soundPanel .sndRow { display:flex; align-items:center; gap:8px; }
-  #soundPanel .sndLab { width:140px; flex:none; color:#9fe6cf; font-size:12px; letter-spacing:1px; text-align:right; }
-  #soundPanel .sndRow input { flex:1; min-width:0; background:#0c1418; border:1px solid #2a3a42; color:#cfeee2; border-radius:5px; padding:6px 8px; font:12px 'Courier New',monospace; }
-  #soundPanel .sndRow button { flex:none; width:30px; background:rgba(56,245,181,.16); border:1px solid #38f5b5; color:#eafff7; border-radius:5px; cursor:pointer; padding:5px 0; }
-  #soundPanel .sndStat { flex:none; width:16px; text-align:center; font-size:13px; color:#5a7d72; }
-  #soundPanel #sndClose { margin-top:14px; padding:10px 30px; background:rgba(56,245,181,.18); border:1px solid #38f5b5; color:#eafff7; border-radius:6px; font:15px 'Courier New',monospace; letter-spacing:2px; cursor:pointer; }
   /* perf meter (toggle with the ` key) */
   #perfHud { position:fixed; bottom:8px; left:8px; z-index:80; background:rgba(4,10,12,.82); border:1px solid rgba(56,245,181,.4);
     color:#9fe6cf; font:12px/1.45 'Courier New',monospace; padding:7px 10px; border-radius:6px; pointer-events:none; white-space:nowrap; }
@@ -376,7 +363,6 @@
   <button id="startBtn">Deploy</button>
   <button id="editBtn">🛠 Build / edit level</button>
   <button id="fsBtn" style="display:none">⛶ Fullscreen</button>
-  <button id="soundBtn">🎧 Custom sounds</button>
   <div id="controls">
     <b>WASD</b> move &nbsp;·&nbsp; <b>MOUSE</b> look &nbsp;·&nbsp; <b>L-CLICK</b> fire &nbsp;·&nbsp; <b>R-CLICK</b> aim &nbsp;·&nbsp; <b>SHIFT</b> sprint &nbsp;·&nbsp; <b>SPACE</b> jump<br>
     <b>R</b> reload &nbsp;·&nbsp; <b>G</b> throw grenade &nbsp;·&nbsp; <b>E</b> use station / open cache &nbsp;·&nbsp; <b>1·2·3</b> / <b>scroll</b> weapons<br>
@@ -409,12 +395,6 @@
   </div>
 </div>
 <div id="perfHud" class="hidden"></div>
-<div id="soundPanel" class="hidden">
-  <h2>CUSTOM SOUNDS</h2>
-  <div class="sndHint">Paste a direct link to an <b>mp3 / wav / ogg</b> for any event, then press ▶ to test. Saved on this device. The host must allow cross-origin (CORS) loading, or the sample won't decode and the built-in sound is used instead.</div>
-  <div id="sndList"></div>
-  <button id="sndClose">Done</button>
-</div>
 <div id="roomBadge"></div>
 <div id="padDebug"></div>
 
@@ -6189,9 +6169,24 @@ const vmMuzzle = new THREE.Object3D();
 vmMuzzle.position.set(GUN_OFFSET.x, GUN_OFFSET.y + 0.04, GUN_OFFSET.z - 1.02);
 gun.add(vmMuzzle);
 const _muzNdc = new THREE.Vector2();
+// A neutral fallback environment so metallic gun materials reflect *something* even on levels with no sky.
+let _vmEnvFallback = null, _vmEnvTried = false;
+function _ensureVmEnv(){
+  if(_vmEnvTried || !THREE.PMREMGenerator) return; _vmEnvTried = true;
+  try{
+    const c=document.createElement('canvas'); c.width=16; c.height=64; const g=c.getContext('2d');
+    const grad=g.createLinearGradient(0,0,0,64); grad.addColorStop(0,'#a6c2d2'); grad.addColorStop(0.5,'#5d6e79'); grad.addColorStop(1,'#161d23');
+    g.fillStyle=grad; g.fillRect(0,0,16,64);
+    const tex=new THREE.CanvasTexture(c); tex.mapping=THREE.EquirectangularReflectionMapping;
+    const pm=new THREE.PMREMGenerator(renderer); pm.compileEquirectangularShader();
+    _vmEnvFallback = pm.fromEquirectangular(tex).texture; tex.dispose(); pm.dispose();
+  }catch(e){ _vmEnvFallback=null; }
+}
 function renderViewmodel(){
   if(activeCam() !== camera || !gun.visible) return;   // skip the editor's top-down view / when the weapon is hidden
   const _r=perfOn?_pnow():0;
+  _ensureVmEnv();
+  vmScene.environment = scene.environment || _vmEnvFallback;   // metallic gun materials need an env map to reflect — without it they render BLACK
   vmCam.fov = camera.fov; vmCam.aspect = camera.aspect; vmCam.updateProjectionMatrix();
   const ac = renderer.autoClear; renderer.autoClear = false;
   renderer.clearDepth();              // keep the world's color, drop its depth so the gun draws on top
@@ -7550,7 +7545,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 78 · 2026-06-04';
+const BUILD_VERSION = 'build 81 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8338,6 +8333,7 @@ let score = 0, wave = 1, toSpawn = 0;
 let surviveLeft = 0;   // seconds left in a Survival-objective run
 let runKills = 0;   // kills this run (for the run summary + best)
 let extractHoldT = 0; let extractZone = null; const extractPos = new THREE.Vector3();   // Extraction objective
+let extractSpot = null;   // manual {x,z} placement from the editor; null = auto (opposite the player spawn)
 function updateHUD(){
   const w = W();
   $('hp').textContent = Math.max(0,Math.ceil(player.hp));
@@ -8466,14 +8462,25 @@ function buildExtractZone(){
   g.userData.ring = ring; g.userData.pillar = pillar; g.visible = false;
   scene.add(g); extractZone = g; return g;
 }
-function placeExtraction(){
-  buildExtractZone();
-  const R = gameCfg.extractRadius || 3.5, lim = ARENA*0.85;
-  extractZone.scale.set(R, 1, R);
-  let ex = -playerSpawn.x, ez = -playerSpawn.z;                 // drop it across the arena from the spawn
+// Where the beacon sits: the manual editor spot if one was placed, else auto (mirrored across the arena from spawn).
+function extractAutoPos(){
+  const lim = ARENA*0.85;
+  let ex = -playerSpawn.x, ez = -playerSpawn.z;
   if(Math.abs(ex) < 2 && Math.abs(ez) < 2){ ex = lim*0.7; ez = -lim*0.7; }   // spawn at centre -> use a corner
-  ex = Math.max(-lim, Math.min(lim, ex)); ez = Math.max(-lim, Math.min(lim, ez));
-  extractPos.set(ex, 0, ez); extractZone.position.set(ex, 0, ez); extractZone.visible = true;
+  return { x: Math.max(-lim, Math.min(lim, ex)), z: Math.max(-lim, Math.min(lim, ez)) };
+}
+function currentExtractXZ(){ return extractSpot ? { x: extractSpot.x, z: extractSpot.z } : extractAutoPos(); }
+// Build/scale/position the beacon at the current spot — used both for the editor marker and live play.
+function refreshExtractMarker(){
+  buildExtractZone();
+  const R = gameCfg.extractRadius || 3.5;
+  extractZone.scale.set(R, 1, R);
+  const p = currentExtractXZ();
+  extractPos.set(p.x, 0, p.z); extractZone.position.set(p.x, 0, p.z);
+}
+function placeExtraction(){
+  refreshExtractMarker();
+  extractZone.visible = true;
 }
 function startObjective(){
   surviveLeft = gameCfg.surviveSecs || 0; extractHoldT = 0;
@@ -9248,6 +9255,12 @@ const editorTargets = {
     obj(){ return playerSpawnMarker; },
     code(){ return '// ===== Player start ===== (saved in the level JSON under "pstart")'; }
   },
+  extract: {
+    label: '📦 Extract',
+    isExtract: true,
+    obj(){ refreshExtractMarker(); return extractZone; },
+    code(){ return '// ===== Extraction point ===== (saved in the level JSON under "extract"; used by the Extraction objective)'; }
+  },
   grenade: {
     label: 'Grenade',
     state: { radius:GRENADE.radius, damage:GRENADE.damage, fuse:GRENADE.fuse, force:GRENADE.throwForce, scale:GRENADE.scale },
@@ -9447,6 +9460,7 @@ function serializeLevel(){
     game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius },
     dmgNum:  { on: dmgNumCfg.on !== false, size: dmgNumCfg.size, hit: dmgNumCfg.hitColor, kill: dmgNumCfg.killColor },
     pstart:  { x: playerSpawn.x, z: playerSpawn.z, yaw: playerSpawn.yaw },
+    extract: extractSpot ? { x: +extractSpot.x.toFixed(3), z: +extractSpot.z.toFixed(3) } : null,
     grenade: { model: GRENADE.model, scale: GRENADE.scale, radius: GRENADE.radius, damage: GRENADE.damage, fuse: GRENADE.fuse, throwForce: GRENADE.throwForce },
   };
 }
@@ -9487,6 +9501,7 @@ function restoreLevel(level){
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; } else { playerSpawn.x=0; playerSpawn.z=0; playerSpawn.yaw=0; }
   refreshPlayerSpawnMarker();
+  extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null;
   if(level.grenade){ const G=level.grenade; if(G.model!=null) GRENADE.model=G.model||''; if(G.scale!=null) GRENADE.scale=G.scale; if(G.radius!=null) GRENADE.radius=G.radius; if(G.damage!=null) GRENADE.damage=G.damage; if(G.fuse!=null) GRENADE.fuse=G.fuse; if(G.throwForce!=null) GRENADE.throwForce=G.throwForce; loadGrenadeModel(); if(editorTargets.grenade.sync) editorTargets.grenade.sync(); }
   // gun / aim / station
   if(level.gun){ if(level.gun.url && level.gun.url!==gunModelUrl) swapGunModel(level.gun.url); Object.assign(editorTargets.gun.state, level.gun.state||{}); editorTargets.gun.apply(); }
@@ -9641,6 +9656,7 @@ function buildEditorPanel(){
     + sec('Enemies', 'enemies', '<div id="edEnemies"></div>')
     + sec('Game / waves', 'game', '<div id="edGame"></div>')
     + sec('Loot', 'loot', '<div id="edLoot"></div>')
+    + sec('Sounds', 'sounds', '<div id="edSounds"></div>')
     + sec('Level file', 'levelfile',
         '<div class="row2"><button id="edSave">💾 Save</button><button id="edClear">Clear save</button></div>'
       + '<div class="row2" style="margin-top:6px"><button id="edShare">🔗 Copy share link</button></div>'
@@ -9664,7 +9680,7 @@ function buildEditorPanel(){
   })();
   // collapsible section headers (state persists in localStorage so it survives reopening the editor)
   let secState = {}; try{ secState = JSON.parse(localStorage.getItem('breach_editor_sections')||'{}') || {}; }catch(e){}
-  const defaultCollapsed = { material:true, world:true, enemies:true, loot:true, levelfile:true };   // keep Gizmo/Object/Transform open by default
+  const defaultCollapsed = { material:true, world:true, enemies:true, loot:true, sounds:true, levelfile:true };   // keep Gizmo/Object/Transform open by default
   p.querySelectorAll('.edSection').forEach(s=>{
     const k = s.dataset.sec;
     const collapsed = (k in secState) ? secState[k]===true : !!defaultCollapsed[k];
@@ -9684,7 +9700,8 @@ function buildEditorPanel(){
   }
   p.querySelector('#edReset').onclick = ()=>{ resetEditorTarget(editorActive); };
   p.querySelector('#edPlay').onclick = ()=>{ startGame(); };           // test the live-built level immediately (no save/reload)
-  p.querySelector('#edMenu').onclick = ()=>{ editorToMenu(); };        // back to the start overlay  p.querySelector('#edCopy').onclick = ()=>{ copyEditorCode(); };
+  p.querySelector('#edMenu').onclick = ()=>{ editorToMenu(); };        // back to the start overlay
+  p.querySelector('#edCopy').onclick = ()=>{ copyEditorCode(); };
   p.querySelector('#edSave').onclick = ()=>{
     const note = editorEl.querySelector('#edCopied');
     note.textContent = saveLevel() ? 'Level saved — it will auto-load next time ✓' : 'Save failed (storage blocked here)';
@@ -9747,12 +9764,16 @@ function renderEditorFields(){
   if(spawnRouteEdit && (editorActive!=='spawns' || editorTargets.spawns.obj()!==spawnRouteEdit || spawnRouteEdit.userData.mark.mode!=='patrol')) spawnRouteEdit=null;   // route placement only while its patrol spawn stays selected
   editorEl.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.key===editorActive));
   const tgt = editorTargets[editorActive];
+  if(editorActive==='extract') refreshExtractMarker();
+  if(extractZone) extractZone.visible = (editorActive==='extract');   // the beacon shows as an editor marker only on its own tab
 
   // ---- World / Enemies / Loot (global settings; independent of the selected object) ----
   const worldHost   = editorEl.querySelector('#edWorld');
   const enemyHost   = editorEl.querySelector('#edEnemies');
   const gameHost    = editorEl.querySelector('#edGame');
   const lootHost    = editorEl.querySelector('#edLoot');
+  const soundHost   = editorEl.querySelector('#edSounds');
+  if(soundHost) populateSoundEditor(soundHost);
   if(worldHost){
     worldHost.innerHTML = '';
     if(enemyHost) enemyHost.innerHTML = '';
@@ -10085,6 +10106,25 @@ function renderEditorFields(){
     const ctr=document.createElement('button'); ctr.textContent='⌖ Reset to arena center';
     ctr.onclick=()=>{ pushUndoSnapshot(); playerSpawn.x=0; playerSpawn.z=0; playerSpawn.yaw=0; refreshPlayerSpawnMarker(); renderEditorFields(); };
     picker.appendChild(ctr);
+  }
+  if(tgt.isExtract){
+    refreshExtractMarker();
+    const h=document.createElement('div'); h.className='hint'; h.style.margin='0 0 6px';
+    h.innerHTML='The <b>Extraction</b> objective\u2019s beacon \u2014 reach it and hold to win. Drag the <b>green ring</b> with the move gizmo to position it. The hold time + zone radius live in <b>Game / waves</b>.';
+    picker.appendChild(h);
+    const auto = !extractSpot;
+    const p2 = currentExtractXZ();
+    const pr=document.createElement('div'); pr.className='hint'; pr.style.margin='4px 0 6px';
+    pr.textContent = 'Position:  X '+p2.x.toFixed(1)+'   Z '+p2.z.toFixed(1)+(auto?'   (auto \u2014 opposite spawn)':'   (manual)');
+    picker.appendChild(pr);
+    const ctr=document.createElement('button'); ctr.textContent='\u21BA Reset to auto (opposite spawn)'; ctr.disabled = auto;
+    ctr.onclick=()=>{ pushUndoSnapshot(); extractSpot=null; refreshExtractMarker(); renderEditorFields(); };
+    picker.appendChild(ctr);
+    if(objectiveActive && objectiveActive()!=='extraction'){
+      const w=document.createElement('div'); w.className='hint'; w.style.cssText='margin:6px 0 0;color:#e8c06b;';
+      w.innerHTML='Heads up: this level\u2019s objective isn\u2019t set to <b>Extraction</b> yet, so the beacon won\u2019t appear in play. Set it in <b>Game / waves</b>.';
+      picker.appendChild(w);
+    }
   }
   if(tgt.selectable){
     const noun = tgt.noun || (tgt.isLights ? 'Light' : 'Prop');
@@ -10594,6 +10634,7 @@ function selectedSceneObject(){
   if(editorActive==='lights'){ const g=editorTargets.lights.obj(); return g && g.userData.marker; }
   if(editorActive==='spawns'){ const g=editorTargets.spawns.obj(); return g && g.userData.post; }
   if(editorActive==='pstart'){ return playerSpawnMarker && playerSpawnMarker.userData.post; }
+  if(editorActive==='extract'){ buildExtractZone(); return extractZone.userData.ring || extractZone; }
   return null;   // gun / aim have no selectable scene mesh
 }
 // live world position of the selected scene object (or null)
@@ -10604,6 +10645,7 @@ function getSelPos(){
   if(editorActive==='lights'){ const g=editorTargets.lights.obj(); return g?g.position:null; }
   if(editorActive==='spawns'){ const g=editorTargets.spawns.obj(); return g?g.position:null; }
   if(editorActive==='pstart'){ return playerSpawnMarker?playerSpawnMarker.position:null; }
+  if(editorActive==='extract'){ return extractZone?extractZone.position:null; }
   return null;
 }
 // move the selected object to a world position and sync its editor state + collider
@@ -10628,6 +10670,9 @@ function setSelPos(v){
     if(typeof refreshRouteViz==='function') refreshRouteViz(g);
   } else if(editorActive==='pstart'){
     playerSpawn.x=v.x; playerSpawn.z=v.z; refreshPlayerSpawnMarker();   // player start lives on the floor
+  } else if(editorActive==='extract'){
+    const lim=ARENA*0.85; const x=Math.max(-lim,Math.min(lim,v.x)), z=Math.max(-lim,Math.min(lim,v.z));
+    extractSpot={x,z}; extractPos.set(x,0,z); if(extractZone) extractZone.position.set(x,0,z);   // extraction sits on the floor
   }
 }
 // --- rotation (Euler, radians) of the selected object, for the rotate gizmo ---
@@ -10993,6 +11038,7 @@ function resetEditorTarget(key){
   else if(key==='props'){ const o=t.obj(); if(o){ const sp=(SCENE_PROPS[t.idx] && SCENE_PROPS[t.idx].t) || [0,0,0,0,0,0,1];
       o.position.set(sp[0],sp[1],sp[2]); o.rotation.set(sp[3],sp[4],sp[5]); o.scale.setScalar(sp[6]); refreshPropCollider(o); } }
   else if(key==='pstart'){ playerSpawn.x=0; playerSpawn.z=0; playerSpawn.yaw=0; refreshPlayerSpawnMarker(); }
+  else if(key==='extract'){ extractSpot=null; refreshExtractMarker(); }
   renderEditorFields();
 }
 
@@ -11233,37 +11279,40 @@ function syncFsBtn(){ const b=document.getElementById('fsBtn'); if(b) b.textCont
 document.addEventListener('fullscreenchange', syncFsBtn);
 document.addEventListener('webkitfullscreenchange', syncFsBtn);
 
-// ---- Custom Sounds panel: per-weapon shoot samples + reload/explosion/coin/hit/kill/hurt ----
+// ---- Custom Sounds (in the editor's "Sounds" section): per-weapon shoot + reload/explosion/coin/hit/kill/hurt ----
+// URLs are stored per-device in audioSettings.sounds; a loaded sample overrides the built-in synth for that event.
 function _sndRow(label, get, set){
-  const row=document.createElement('div'); row.className='sndRow';
-  const lab=document.createElement('label'); lab.className='sndLab'; lab.textContent=label;
+  const row=document.createElement('div'); row.style.cssText='margin:6px 0;';
+  const lab=document.createElement('div'); lab.textContent=label; lab.style.cssText='color:#9fe6cf;font-size:11px;letter-spacing:1px;margin-bottom:2px;';
+  const line=document.createElement('div'); line.style.cssText='display:flex;gap:5px;align-items:center;';
   const inp=document.createElement('input'); inp.type='text'; inp.spellcheck=false; inp.placeholder='https://…/sound.mp3'; inp.value=get()||'';
-  const test=document.createElement('button'); test.textContent='▶'; test.title='Test';
-  const st=document.createElement('span'); st.className='sndStat';
-  const mark=(s)=>{ st.textContent = s==='ok'?'✓':s==='loading'?'…':s==='error'?'✗':''; st.style.color = s==='error'?'#ff6b6b':(s==='ok'?'#38f5b5':'#5a7d72'); };
+  inp.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:11px;';
+  const test=document.createElement('button'); test.textContent='▶'; test.title='Test'; test.style.cssText='flex:0 0 auto;width:26px;background:rgba(56,245,181,.16);border:1px solid #38f5b5;color:#eafff7;border-radius:4px;cursor:pointer;';
+  const st=document.createElement('span'); st.style.cssText='flex:0 0 auto;width:14px;text-align:center;font-size:12px;color:#5a7d72;';
+  const mark=(x)=>{ st.textContent = x==='ok'?'✓':x==='loading'?'…':x==='error'?'✗':''; st.style.color = x==='error'?'#ff6b6b':(x==='ok'?'#38f5b5':'#5a7d72'); };
   inp.onchange=()=>{ const u=inp.value.trim(); set(u); saveAudioSettings(); if(u){ initAudio(); loadSound(u, mark); } else mark(''); };
-  test.onclick=()=>{ const u=inp.value.trim(); if(!u){ return; } initAudio(); loadSound(u, (s)=>{ mark(s); if(s==='ok'){ playSample(u); } else if(s==='loading'){ setTimeout(()=>{ if(playSample(u)) mark('ok'); }, 500); } }); };
+  test.onclick=()=>{ const u=inp.value.trim(); if(!u){ return; } initAudio(); loadSound(u, (x)=>{ mark(x); if(x==='ok'){ playSample(u); } else if(x==='loading'){ setTimeout(()=>{ if(playSample(u)) mark('ok'); }, 500); } }); };
   const u0=get(); if(u0){ const b=_soundBuffers[u0]; if(b && b.duration!==undefined) mark('ok'); else { mark('loading'); loadSound(u0, mark); } }
-  row.appendChild(lab); row.appendChild(inp); row.appendChild(test); row.appendChild(st);
+  line.appendChild(inp); line.appendChild(test); line.appendChild(st);
+  row.appendChild(lab); row.appendChild(line);
   return row;
 }
-function openSounds(){
-  const list=$('sndList'); if(!list) return;
+function populateSoundEditor(host){
+  host.innerHTML='';
   if(!audioSettings.sounds) audioSettings.sounds=_emptySounds();
   if(!audioSettings.sounds.shoot) audioSettings.sounds.shoot={};
-  list.innerHTML='';
+  const hint=document.createElement('div'); hint.className='hint'; hint.style.margin='2px 0 6px';
+  hint.innerHTML='Optional mp3/wav/ogg per event (saved on this device). Host must allow cross-origin loading, else the built-in sound is used.';
+  host.appendChild(hint);
   const W=(typeof WEAPONS!=='undefined')?WEAPONS:{};
   for(const k of Object.keys(W)){
     const name=(W[k] && W[k].name) ? W[k].name : k;
-    list.appendChild(_sndRow('Shoot · '+name, ()=>audioSettings.sounds.shoot[k], v=>{ if(v) audioSettings.sounds.shoot[k]=v; else delete audioSettings.sounds.shoot[k]; }));
+    host.appendChild(_sndRow('Shoot · '+name, ()=>audioSettings.sounds.shoot[k], v=>{ if(v) audioSettings.sounds.shoot[k]=v; else delete audioSettings.sounds.shoot[k]; }));
   }
   for(const [lab,key] of [['Reload','reload'],['Grenade explosion','explode'],['Coin pickup','coin'],['Hit marker','hit'],['Enemy kill','kill'],['Player hurt','hurt']]){
-    list.appendChild(_sndRow(lab, ()=>audioSettings.sounds[key], v=>{ audioSettings.sounds[key]=v; }));
+    host.appendChild(_sndRow(lab, ()=>audioSettings.sounds[key], v=>{ audioSettings.sounds[key]=v; }));
   }
-  const cl=$('sndClose'); if(cl) cl.onclick=closeSounds;
-  $('soundPanel').classList.remove('hidden');
 }
-function closeSounds(){ const p=$('soundPanel'); if(p) p.classList.add('hidden'); }
 
 function bindMenu(){
   if(MENU_HTML===null){ const ov0=document.getElementById('overlay'); if(ov0) MENU_HTML = ov0.innerHTML; }   // capture the full start menu once, before any death/win screen overwrites it
@@ -11274,7 +11323,6 @@ function bindMenu(){
   const j=document.getElementById('mpJoin'); if(j) j.onclick=startJoin;
   const fs=document.getElementById('fsBtn');
   if(fs){ if(!fsSupported()){ fs.style.display='none'; } else { fs.style.display=''; fs.onclick=toggleFullscreen; syncFsBtn(); } }   // desktop only
-  const sndb=document.getElementById('soundBtn'); if(sndb) sndb.onclick=openSounds;
   const mc=document.getElementById('muteCb'); if(mc){ mc.checked=audioSettings.muted; mc.onchange=()=>{ audioSettings.muted=mc.checked; applyAudioSettings(); saveAudioSettings(); }; }
   const vM=document.getElementById('volMaster'); if(vM){ vM.value=Math.round(audioSettings.master*100); vM.oninput=()=>{ audioSettings.master=(+vM.value)/100; applyAudioSettings(); saveAudioSettings(); }; }
   const vMu=document.getElementById('volMusic'); if(vMu){ vMu.value=Math.round(audioSettings.music*100); vMu.oninput=()=>{ audioSettings.music=(+vMu.value)/100; applyAudioSettings(); saveAudioSettings(); }; }
@@ -11292,6 +11340,7 @@ function showMainMenu(){
 function editorToMenu(){
   stopMusic();
   if(editorOpen) toggleEditor();        // restore play rendering + physics; hide panel, markers, gizmo
+  if(extractZone) extractZone.visible=false;   // drop the editor's extraction marker
   if(typeof closeUpgradePicker==='function') closeUpgradePicker();
   editorFreeFly=false; editorTopView=false;
   gameOn=false; gameOver=false; shopOpen=false; firing=false; ads=false;
