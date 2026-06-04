@@ -223,22 +223,29 @@
   }
   #overlay .sub { color:#7fa99c; letter-spacing: 4px; margin-top: 10px; font-size: 14px; }
   #startBtn {
-    margin-top: 36px; pointer-events:auto; cursor: pointer;
+    margin-top: 28px; pointer-events:auto; cursor: pointer;
     font-family: 'Chakra Petch'; font-size: 18px; font-weight:700; letter-spacing: 3px;
     color:#05070a; background:#38f5b5; border:none; padding: 16px 46px;
     clip-path: polygon(0 0,100% 0,100% 70%,90% 100%,0 100%);
     transition: transform .1s, box-shadow .2s; text-transform: uppercase;
   }
   #startBtn:hover { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(56,245,181,.4); }
-  #editBtn {
-    margin-top: 14px; pointer-events:auto; cursor:pointer;
+  .menuBtns { margin-top: 16px; display:flex; gap:10px; justify-content:center; align-items:center; flex-wrap:wrap; }
+  .secBtn {
+    pointer-events:auto; cursor:pointer;
     font-family:'Chakra Petch'; font-size:13px; font-weight:600; letter-spacing:2px;
-    color:#9fe6cf; background:transparent; border:1px solid #2a6e5c; padding:10px 26px;
-    border-radius:7px; transition: border-color .2s, color .2s; text-transform:uppercase;
+    color:#9fe6cf; background:rgba(8,18,18,.5); border:1px solid #2a6e5c; padding:10px 22px;
+    border-radius:7px; transition: border-color .2s, color .2s, background .2s; text-transform:uppercase;
   }
-  #editBtn:hover { border-color:#38f5b5; color:#eafff7; }
-  #controls { margin-top: 30px; color:#5a7d72; font-size: 12px; letter-spacing:2px; line-height:1.9; }
-  #mpBox { margin-top: 26px; display:flex; flex-direction:column; align-items:center; gap:8px; }
+  .secBtn:hover { border-color:#38f5b5; color:#eafff7; background:rgba(56,245,181,.10); }
+  .menuCard {
+    max-width: 640px; margin-left:auto; margin-right:auto;
+    border:1px solid rgba(56,245,181,.14); background:rgba(8,16,18,.45);
+    border-radius:12px; padding:14px 22px;
+  }
+  #controls { margin-top: 26px; color:#5a7d72; font-size: 12px; letter-spacing:2px; line-height:1.9; }
+  #mpBox { margin-top: 16px; display:flex; flex-direction:column; align-items:center; gap:8px; }
+  .mpHead { color:#7fa99c; font:600 12px/1 'Chakra Petch',ui-monospace,monospace; letter-spacing:4px; margin-bottom:4px; }
   .mpRow { display:flex; gap:8px; align-items:center; justify-content:center; }
   #mpBox input { background:#05080b; color:#cfeee6; border:1px solid rgba(56,245,181,0.35); border-radius:6px; padding:8px 10px; font:13px ui-monospace,monospace; text-align:center; }
   #mpName { width:200px; }
@@ -251,6 +258,56 @@
   #padDebug { display:none; position:fixed; top:12px; left:12px; z-index:60; background:rgba(5,10,12,0.85); color:#9fe6cf; border:1px solid rgba(56,245,181,0.4); border-radius:6px; padding:8px 12px; font:11px/1.5 ui-monospace,monospace; white-space:pre; pointer-events:none; max-width:340px; }
   #controls b { color:#a8d6c8; }
   .hidden { display:none !important; }
+  #bossBar {
+    position:fixed; top:64px; left:50%; transform:translateX(-50%); z-index:30;
+    width:min(560px,72vw); display:flex; flex-direction:column; align-items:center; gap:5px; pointer-events:none;
+  }
+  #bossBarName {
+    color:#ff9b3d; font:700 13px/1 'Chakra Petch',ui-monospace,monospace; letter-spacing:5px;
+    text-shadow:0 0 14px rgba(255,123,0,.6);
+  }
+  #bossBarTrack {
+    width:100%; height:13px; background:rgba(8,10,12,.72); border:1px solid rgba(255,123,0,.55);
+    border-radius:7px; overflow:hidden; box-shadow:0 0 22px rgba(255,123,0,.28);
+  }
+  #bossBarFill {
+    height:100%; width:100%; border-radius:6px;
+    background:linear-gradient(90deg,#ff4d2d,#ff9b3d); transition:width .12s linear;
+  }
+  body.touch #bossBar { top:54px; width:84vw; }
+  #pauseBtn {
+    position:fixed; top:14px; right:14px; z-index:45; width:42px; height:42px;
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+    background:rgba(5,10,12,.66); color:#9fe6cf; border:1px solid rgba(56,245,181,.4);
+    border-radius:9px; font:13px/1 'Chakra Petch',ui-monospace,monospace; letter-spacing:1px;
+    transition: border-color .15s, color .15s, background .15s; -webkit-tap-highlight-color:transparent;
+  }
+  #pauseBtn:hover { border-color:#38f5b5; color:#eafff7; background:rgba(56,245,181,.12); }
+  #pauseMenu {
+    position:fixed; inset:0; z-index:55; display:flex; align-items:center; justify-content:center;
+    background:radial-gradient(circle at 50% 45%, rgba(8,22,20,.72), rgba(3,5,8,.9)); backdrop-filter:blur(3px);
+  }
+  #pauseMenu .pauseCard {
+    display:flex; flex-direction:column; align-items:center; gap:12px; min-width:280px;
+    padding:30px 36px; border:1px solid rgba(56,245,181,.22); border-radius:16px;
+    background:rgba(8,16,18,.7); box-shadow:0 20px 60px rgba(0,0,0,.5);
+  }
+  #pauseMenu h2 {
+    font-family:'Major Mono Display',monospace; color:#38f5b5; letter-spacing:8px;
+    font-size:30px; margin:0 0 6px; text-shadow:0 0 24px rgba(56,245,181,.4);
+  }
+  .pBtnPrimary {
+    width:100%; cursor:pointer; font-family:'Chakra Petch'; font-size:16px; font-weight:700; letter-spacing:3px;
+    color:#05070a; background:#38f5b5; border:none; padding:13px 30px; border-radius:8px; text-transform:uppercase;
+    transition: transform .1s, box-shadow .2s;
+  }
+  .pBtnPrimary:hover { transform:translateY(-2px); box-shadow:0 10px 26px rgba(56,245,181,.4); }
+  .pBtnGhost {
+    width:100%; cursor:pointer; font-family:'Chakra Petch'; font-size:13px; font-weight:600; letter-spacing:2px;
+    color:#9fe6cf; background:rgba(8,18,18,.5); border:1px solid #2a6e5c; padding:11px 24px; border-radius:8px;
+    text-transform:uppercase; transition: border-color .2s, color .2s, background .2s;
+  }
+  .pBtnGhost:hover { border-color:#38f5b5; color:#eafff7; background:rgba(56,245,181,.1); }
 
   /* Buff indicators */
   #buffs { position:absolute; top:90px; left:26px; display:flex; flex-direction:column; gap:8px; }
@@ -335,6 +392,10 @@
     <div id="waveNum">WAVE 1</div>
     <div id="enemyCount">HOSTILES: 0</div>
   </div>
+  <div id="bossBar" class="hidden">
+    <div id="bossBarName">☠ BOSS</div>
+    <div id="bossBarTrack"><div id="bossBarFill"></div></div>
+  </div>
 
   <div id="score" class="panel" style="clip-path:polygon(0 0,100% 0,100% 100%,8% 100%)">
     <div class="label">Score</div>
@@ -361,9 +422,11 @@
   <h1>BREACH</h1>
   <div class="sub">// TACTICAL INCURSION PROTOCOL</div>
   <button id="startBtn">Deploy</button>
-  <button id="editBtn">🛠 Build / edit level</button>
-  <button id="fsBtn" style="display:none">⛶ Fullscreen</button>
-  <div id="controls">
+  <div class="menuBtns">
+    <button id="editBtn" class="secBtn">🛠 Build / edit level</button>
+    <button id="fsBtn" class="secBtn" style="display:none">⛶ Fullscreen</button>
+  </div>
+  <div id="controls" class="menuCard">
     <b>WASD</b> move &nbsp;·&nbsp; <b>MOUSE</b> look &nbsp;·&nbsp; <b>L-CLICK</b> fire &nbsp;·&nbsp; <b>R-CLICK</b> aim &nbsp;·&nbsp; <b>SHIFT</b> sprint &nbsp;·&nbsp; <b>SPACE</b> jump<br>
     <b>R</b> reload &nbsp;·&nbsp; <b>G</b> throw grenade &nbsp;·&nbsp; <b>E</b> use station / open cache &nbsp;·&nbsp; <b>1·2·3</b> / <b>scroll</b> weapons<br>
     <span style="color:#ffd166">Kill enemies for ◆ credits — spend them at the ammo station and supply caches</span><br>
@@ -376,7 +439,8 @@
     <label style="display:flex;gap:7px;align-items:center">♪<input type="range" id="volMusic" min="0" max="100" value="60" style="width:96px;accent-color:#38f5b5"></label>
     <label style="display:flex;gap:7px;align-items:center">🔫<input type="range" id="volSfx" min="0" max="100" value="100" style="width:96px;accent-color:#38f5b5"></label>
   </div>
-  <div id="mpBox">
+  <div id="mpBox" class="menuCard">
+    <div class="mpHead">CO-OP · VERSUS</div>
     <div class="mpRow"><input id="mpName" type="text" maxlength="14" placeholder="your name" autocomplete="off"></div>
     <div class="mpRow">
       <button id="mpHost" class="mpBtn">Host co-op</button>
@@ -396,6 +460,14 @@
 </div>
 <div id="perfHud" class="hidden"></div>
 <div id="roomBadge"></div>
+<button id="pauseBtn" title="Pause (Esc)" style="display:none">❚❚</button>
+<div id="pauseMenu" class="hidden">
+  <div class="pauseCard">
+    <h2>PAUSED</h2>
+    <button id="pauseResume" class="pBtnPrimary">Resume</button>
+    <button id="pauseExit" class="pBtnGhost">⌂ Exit to main menu</button>
+  </div>
+</div>
 <div id="padDebug"></div>
 
 <script>
@@ -5774,8 +5846,9 @@ const ENEMY_TYPES = {
   runner: { name:'Runner', hp:16, speedMin:11,  speedMax:13, scale:0.8, tint:0xffd166, dmg:6 },
   brute:  { name:'Brute',  hp:90, speedMin:3.5, speedMax:5,  scale:1.5, tint:0x9b6cff, dmg:18 },
   gunner: { name:'Gunner', hp:24, speedMin:4,   speedMax:6,  scale:1.0, tint:0x4dd2ff, dmg:7, ranged:true, standoff:11, fireCd:1.5, projSpeed:24 },
+  boss:   { name:'BOSS',   hp:900,speedMin:2.8, speedMax:4.2,scale:2.6, tint:0xff7b00, dmg:28, ranged:true, standoff:14, fireCd:1.1, projSpeed:26 },
 };
-const ENEMY_TYPE_KEYS = ['grunt','runner','brute','gunner'];
+const ENEMY_TYPE_KEYS = ['grunt','runner','brute','gunner','boss'];
 // Weighted random type — later waves bias toward tougher + ranged hostiles.
 function pickEnemyType(waveNum, rng){
   rng = rng || Math.random; const r = rng();
@@ -5793,6 +5866,9 @@ function randomWaveDescriptors(waveNum, arena, rng){
     while((Math.abs(px)>arena-3 || Math.abs(pz)>arena-3) && guard<8);
     out.push({ x:px, z:pz, mode:'hunt', type: pickEnemyType(waveNum, rng) });
   }
+  if(gameCfg.bossWave>0 && waveNum>0 && waveNum % gameCfg.bossWave === 0){   // milestone wave -> a BOSS joins the fight
+    out.push({ x:0, z:-(arena*0.72), mode:'hunt', type:'boss' });
+  }
   return out;
 }
 // Should a spawn marker appear on this wave? wave 0 = every wave (back-compat default); else exact match.
@@ -5807,6 +5883,7 @@ let gameCfg = {
   surviveSecs: (savedLevel && savedLevel.game && savedLevel.game.surviveSecs!=null) ? savedLevel.game.surviveSecs : 120,
   extractHold: (savedLevel && savedLevel.game && savedLevel.game.extractHold!=null) ? savedLevel.game.extractHold : 5,
   extractRadius: (savedLevel && savedLevel.game && savedLevel.game.extractRadius!=null) ? savedLevel.game.extractRadius : 3.5,
+  bossWave: (savedLevel && savedLevel.game && savedLevel.game.bossWave!=null) ? savedLevel.game.bossWave : 5,   // random mode: spawn a BOSS every Nth wave (0 = never)
 };
 
 // ---------- Player start (where you/co-op players spawn each run; authored in-editor) ----------
@@ -6082,8 +6159,9 @@ addEventListener('wheel', e=>{
 let locked = false;let lookFresh = false;   // set when pointer lock is (re)acquired -> drop the first mousemove (it can carry a huge catch-up delta)
 const MAX_LOOK_DELTA = 300;   // px per mousemove event; guards against spurious spikes that snap the view
 let editorDragLook = false, editorDragMoved = false, editorDragPan = false;   // editor mouse states
-renderer.domElement.addEventListener('click', ()=>{ if(!isTouch && gameOn && !locked && !shopOpen && !editorOpen) tryPointerLock(); });
-document.addEventListener('pointerlockchange', ()=>{ const was=locked; locked = document.pointerLockElement === renderer.domElement; if(locked && !was) lookFresh = true; });
+renderer.domElement.addEventListener('click', ()=>{ if(!isTouch && gameOn && !locked && !shopOpen && !editorOpen && !paused) tryPointerLock(); });
+document.addEventListener('pointerlockchange', ()=>{ const was=locked; locked = document.pointerLockElement === renderer.domElement; if(locked && !was){ lookFresh = true; if(paused) resumeGame(); }
+  if(!locked && was && !isTouch && gameOn && !gameOver && !shopOpen && !editorOpen && !choosingUpgrade && !paused) openPause(); });   // Esc releases the lock -> show the pause menu
 // Ctrl+W (crouch + forward) is the browser's close-tab shortcut and can't be cancelled from a keydown.
 // While actively playing (pointer locked), ask the browser to confirm before unloading so an accidental
 // Ctrl+W shows a "Leave site?" prompt the player can cancel instead of silently losing the session.
@@ -6723,7 +6801,7 @@ function loadLevelFromNet(level){
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns){ const g=buildSpawnMarker(sp); g.visible = editorOpen; } }
-  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; }
+  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; }
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; refreshPlayerSpawnMarker(); }
   if(level.weapons){ for(const k in WEAPONS){ const wd=level.weapons[k]; if(wd){ WEAPONS[k].model=wd.model||''; WEAPONS[k].view=wd.view||null; } } }
@@ -7571,7 +7649,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 84 · 2026-06-04';
+const BUILD_VERSION = 'build 88 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8293,6 +8371,11 @@ function killEnemy(en){
     spawnCoin(en.mesh.position.x+ox, en.mesh.position.z+oz, Math.round((15 + Math.floor(wave*2)) * run.coinMul));
   }
   if(run.lifesteal>0) player.hp = Math.min(player.maxHp, player.hp + run.lifesteal);   // vampiric rounds
+  if(en.type==='boss'){   // a downed boss is a payday + a moment
+    score += 500;
+    for(let i=0;i<6;i++){ const ox=(Math.random()-0.5)*3, oz=(Math.random()-0.5)*3; spawnCoin(en.mesh.position.x+ox, en.mesh.position.z+oz, Math.round(60*run.coinMul)); }
+    spark(en.mesh.position, 0xff7b00); flashToast('☠ BOSS DOWN');
+  }
   scene.remove(en.mesh);
   if(en.mesh.userData.mixer){ const mi=mixers.indexOf(en.mesh.userData.mixer); if(mi>=0) mixers.splice(mi,1); }   // stop animating a dead enemy
   enemies.splice(enemies.indexOf(en),1);
@@ -8372,6 +8455,14 @@ function updateHUD(){
   $('creditsVal').textContent = credits;
   $('waveNum').textContent = 'WAVE '+wave;
   $('enemyCount').textContent = 'HOSTILES: '+(enemies.length+toSpawn);
+}
+// Boss health bar: aggregate HP of any living boss-type hostiles (host/solo — clients lack enemy HP).
+function updateBossBar(hide){
+  const bar=$('bossBar'); if(!bar) return;
+  let cur=0, max=0;
+  if(!hide){ for(const e of enemies){ if(e.type==='boss'){ cur+=Math.max(0,e.hp); max+=e.maxHp; } } }
+  if(max>0){ bar.classList.remove('hidden'); const f=$('bossBarFill'); if(f) f.style.width=(cur/max*100).toFixed(1)+'%'; }
+  else bar.classList.add('hidden');
 }
 function showHitmarker(kill){
   const hm = $('hitmarker');
@@ -8699,6 +8790,7 @@ function moveHorizontal(x, z, dx, dz, feetY){
 
 // ---------- Game loop ----------
 let gameOn = false, gameOver=false;
+let paused = false, _pbShow = null;   // pause overlay state + cached pause-button visibility
 const clock = new THREE.Clock();
 
 // ---- Perf meter: press ` (backquote) to toggle. Shows real frame time + a render/logic phase split. ----
@@ -8727,9 +8819,11 @@ function loop(){
   const rawDt = Math.min(clock.getDelta(), 0.05);
   let dt = rawDt;
   updatePerfHud();   // measure real frame time every frame (before any early-out)
+  { const v = gameOn && !gameOver && !shopOpen && !editorOpen && !choosingUpgrade && !paused;   // show ❚❚ only during live play
+    if(v!==_pbShow){ _pbShow=v; const pb=document.getElementById('pauseBtn'); if(pb) pb.style.display = v?'flex':'none'; } }
   if(hitStop > 0){ hitStop -= rawDt; dt = rawDt * 0.12; }   // impact freeze: slow the sim briefly (real-time countdown)
   if(!gameOn) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }
-  if(shopOpen || choosingUpgrade) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }  // freeze world while shopping / picking an upgrade
+  if(shopOpen || choosingUpgrade || (paused && NET.mode==='off')) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }  // freeze world while shopping / picking an upgrade / paused (solo)
 
   pollGamepad(dt);   // controller input feeds the same flags as keyboard/mouse
   if(isTouch && !shopOpen && !editorOpen && !choosingUpgrade){   // touch look: applied here since there's no pointer lock on mobile
@@ -8942,6 +9036,7 @@ function loop(){
   }
 
   // pickups, coins, buffs, grenades, chests, proximity
+  updateBossBar(isClient || duelMode);   // boss health bar (host/solo)
   if(!isClient && !duelMode) updateCoins(dt);   // coins are host-owned; clients see them via snapshots
   updateBuffs(dt);
   updateGrenades(dt);
@@ -9487,7 +9582,7 @@ function serializeLevel(){
     props:   propModels.filter(Boolean).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
-    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius },
+    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave },
     dmgNum:  { on: dmgNumCfg.on !== false, size: dmgNumCfg.size, hit: dmgNumCfg.hitColor, kill: dmgNumCfg.killColor },
     pstart:  { x: playerSpawn.x, z: playerSpawn.z, yaw: playerSpawn.yaw },
     extract: extractSpot ? { x: +extractSpot.x.toFixed(3), z: +extractSpot.z.toFixed(3) } : null,
@@ -9527,7 +9622,7 @@ function restoreLevel(level){
   // enemy spawns
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns){ const g=buildSpawnMarker(sp); g.visible = editorOpen; } }
-  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; }
+  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; }
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; } else { playerSpawn.x=0; playerSpawn.z=0; playerSpawn.yaw=0; }
   refreshPlayerSpawnMarker();
@@ -10039,6 +10134,12 @@ function renderEditorFields(){
     wwN.onchange=()=>{ gameCfg.winWaves=Math.max(0,Math.min(99,parseInt(wwN.value,10)||0)); renderEditorFields(); };
     wwLab.appendChild(wwSp); wwLab.appendChild(wwN); gHost.appendChild(wwLab);
     hint(gHost, '', '2px 0 0').textContent = (gameCfg.winWaves>0) ? ('Clear '+gameCfg.winWaves+' wave'+(gameCfg.winWaves===1?'':'s')+' to win (MISSION COMPLETE).') : '0 = endless survival.';
+    const bwLab=document.createElement('label'); bwLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;';
+    const bwSp=document.createElement('span'); bwSp.textContent='Boss every N waves'; bwSp.style.minWidth='118px';
+    const bwN=document.createElement('input'); bwN.type='number'; bwN.min='0'; bwN.max='20'; bwN.step='1'; bwN.value=gameCfg.bossWave; bwN.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+    bwN.onchange=()=>{ gameCfg.bossWave=Math.max(0,Math.min(20,parseInt(bwN.value,10)||0)); renderEditorFields(); };
+    bwLab.appendChild(bwSp); bwLab.appendChild(bwN); gHost.appendChild(bwLab);
+    hint(gHost, '', '2px 0 0').textContent = (gameCfg.bossWave>0) ? ('Random mode: a BOSS joins every '+gameCfg.bossWave+' wave'+(gameCfg.bossWave===1?'':'s')+'. (Pre-built: place boss spawns on the Spawns tab.)') : 'No automatic bosses (you can still place boss spawns on the Spawns tab).';
     const ugLab=document.createElement('label'); ugLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:8px 0 2px;cursor:pointer;';
     const ugCb=document.createElement('input'); ugCb.type='checkbox'; ugCb.checked=(gameCfg.upgrades!==false); ugCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
     ugCb.onchange=()=>{ pushUndoSnapshot(); gameCfg.upgrades=ugCb.checked; };
@@ -11217,6 +11318,7 @@ function challengeResultHTML(){
 // wire the Redeploy + "Challenge a friend" buttons shared by both end screens
 function bindEndScreen(){
   const sb=document.getElementById('startBtn'); if(sb) sb.onclick=startGame;
+  const hb=document.getElementById('homeBtn'); if(hb) hb.onclick=exitToMenu;
   const cb=document.getElementById('chalBtn'), co=document.getElementById('chalOut');
   if(cb) cb.onclick=async ()=>{
     cb.textContent='Building…';
@@ -11246,6 +11348,7 @@ function gameWon(){
     ${runSummaryHTML()}
     ${challengeResultHTML()}
     <button id="startBtn">Redeploy</button>
+    <button id="homeBtn" class="secBtn" style="margin-top:12px">⌂ Return to home</button>
     <button id="chalBtn">🏆 Challenge a friend</button>
     <input id="chalOut" readonly>`;
   $('hud').classList.add('hidden');
@@ -11265,6 +11368,7 @@ function endGame(){
     ${runSummaryHTML()}
     ${challengeResultHTML()}
     <button id="startBtn">Redeploy</button>
+    <button id="homeBtn" class="secBtn" style="margin-top:12px">⌂ Return to home</button>
     <button id="chalBtn">🏆 Challenge a friend</button>
     <input id="chalOut" readonly>`;
   $('hud').classList.add('hidden');
@@ -11382,7 +11486,40 @@ function editorToMenu(){
   const pr=$('prompt'); if(pr) pr.style.display='none';
   showMainMenu();
 }
-// Open the editor straight from the menu to build a level WITHOUT starting combat. Waves stay
+// ---- Pause: opened by the ❚❚ button or by losing pointer lock (Esc) mid-game. Freezes solo play; in a
+// live co-op/duel session the world keeps running (others aren't paused), so it acts as a quick menu. ----
+function openPause(){
+  if(!gameOn || gameOver || paused || shopOpen || editorOpen || choosingUpgrade) return;
+  paused = true; firing = false; ads = false;
+  safeExitPointerLock();
+  const pm=document.getElementById('pauseMenu'); if(pm) pm.classList.remove('hidden');
+}
+function resumeGame(){
+  if(!paused) return;
+  paused = false;
+  const pm=document.getElementById('pauseMenu'); if(pm) pm.classList.add('hidden');
+  if(!isTouch) tryPointerLock();
+}
+function exitToMenu(){
+  paused = false;
+  const pm=document.getElementById('pauseMenu'); if(pm) pm.classList.add('hidden');
+  if(NET.mode && NET.mode!=='off'){ location.reload(); return; }   // cleanest teardown of a live session
+  stopMusic();
+  if(typeof closeUpgradePicker==='function') closeUpgradePicker();
+  gameOn=false; gameOver=false; shopOpen=false; choosingUpgrade=false; firing=false; ads=false;
+  wave=0; toSpawn=0; spawnQueue=[];
+  enemies.slice().forEach(e=>{ scene.remove(e.mesh); if(e.mesh.userData.mixer){ const mi=mixers.indexOf(e.mesh.userData.mixer); if(mi>=0) mixers.splice(mi,1); } }); enemies.length=0;
+  if(typeof extractZone!=='undefined' && extractZone) extractZone.visible=false;
+  safeExitPointerLock();
+  $('shop').classList.add('hidden');
+  const pr=$('prompt'); if(pr) pr.style.display='none';
+  showMainMenu();
+}
+function bindPauseMenu(){
+  const pb=document.getElementById('pauseBtn'); if(pb) pb.onclick=openPause;
+  const r=document.getElementById('pauseResume'); if(r) r.onclick=resumeGame;
+  const x=document.getElementById('pauseExit'); if(x) x.onclick=exitToMenu;
+}
 // suspended (wave 0) while the editor is open; closing it (P) begins wave 1. Solo only.
 function enterEditor(){
   NET.mode='off'; NET.gameMode='coop';
@@ -11393,6 +11530,7 @@ function enterEditor(){
   const note=$('edCopied'); if(note){ note.textContent='Build mode — place props, lights & enemy spawns, then press P to start wave 1.'; }
 }
 bindMenu();
+bindPauseMenu();
 // If the page was opened with a shared level in the URL (#lvl=...), decode it and rebuild the scene.
 (async ()=>{
   challenge = challengeFromUrl();   // a score target may ride alongside the level
