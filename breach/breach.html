@@ -185,16 +185,24 @@
   #tUse { left:172px; bottom:96px; width:58px; height:58px; }
 
   /* Touch relayout: readouts move to the top band, controls own the bottom band, so nothing overlaps in landscape */
-  body.touch #stats { top: calc(12px + env(safe-area-inset-top)); left: calc(12px + env(safe-area-inset-left)); bottom:auto; min-width:0; }
+  body.touch #stats { top: calc(8px + env(safe-area-inset-top)); left: calc(96px + env(safe-area-inset-left)); bottom:auto; min-width:0; }
   body.touch #stats .big { font-size:24px; }
-  body.touch #ammoPanel { top: calc(84px + env(safe-area-inset-top)); left: calc(12px + env(safe-area-inset-left)); right:auto; bottom:auto; text-align:left; min-width:0; }
+  body.touch #ammoPanel { top: calc(80px + env(safe-area-inset-top)); left: calc(96px + env(safe-area-inset-left)); right:auto; bottom:auto; text-align:left; min-width:0; }
   body.touch #ammoPanel .big { font-size:24px; }
   body.touch #score { top: calc(12px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right)); }
   body.touch #scoreVal { font-size:20px; }
-  body.touch #minimap { width:78px; height:78px; top: calc(6px + env(safe-area-inset-top)); left: calc(6px + env(safe-area-inset-left)); }
+  body.touch #minimap { width:80px; height:80px; top: calc(8px + env(safe-area-inset-top)); left: calc(8px + env(safe-area-inset-left)); }
   body.touch #wavePanel { top: calc(90px + env(safe-area-inset-top)); padding:3px 12px; }
   body.touch #waveNum { font-size:15px; letter-spacing:2px; }
   body.touch #enemyCount { font-size:10px; margin-top:1px; }
+  /* tidy mobile readouts: tight rounded panels (no angled clip), smaller numbers, no keyboard-only hints */
+  body.touch .panel { padding:7px 11px; clip-path:none; border-radius:10px; background:rgba(8,18,22,.7); }
+  body.touch #stats .big, body.touch #ammoPanel .big { font-size:22px; }
+  body.touch #stats { min-width:120px; }
+  body.touch #ammoPanel { min-width:120px; }
+  body.touch #stats .label, body.touch #ammoPanel .label { font-size:10px; letter-spacing:1.5px; }
+  body.touch #nadeKbd { display:none; }   /* "[G] THROW" is keyboard-only on mobile */
+  body.touch #stats .bar { height:5px; margin-top:6px; }
   /* controls, landscape-tuned + notch-safe */
   body.touch #tStick  { left: calc(20px + env(safe-area-inset-left));  bottom: calc(20px + env(safe-area-inset-bottom)); width:120px; height:120px; }
   body.touch #tFire   { right: calc(22px + env(safe-area-inset-right)); bottom: calc(22px + env(safe-area-inset-bottom)); width:88px; height:88px; }
@@ -259,7 +267,7 @@
   #controls b { color:#a8d6c8; }
   .hidden { display:none !important; }
   #bossBar {
-    position:fixed; top:64px; left:50%; transform:translateX(-50%); z-index:30;
+    position:fixed; top:96px; left:50%; transform:translateX(-50%); z-index:30;
     width:min(560px,72vw); display:flex; flex-direction:column; align-items:center; gap:5px; pointer-events:none;
   }
   #bossBarName {
@@ -274,7 +282,7 @@
     height:100%; width:100%; border-radius:6px;
     background:linear-gradient(90deg,#ff4d2d,#ff9b3d); transition:width .12s linear;
   }
-  body.touch #bossBar { top:54px; width:84vw; }
+  body.touch #bossBar { top:132px; width:84vw; }
   #pauseBtn {
     position:fixed; top:14px; right:14px; z-index:45; width:42px; height:42px;
     display:flex; align-items:center; justify-content:center; cursor:pointer;
@@ -430,7 +438,7 @@
   <div id="ammoPanel" class="panel">
     <div class="label" id="wepName">RIFLE</div>
     <div class="big"><span id="ammo">30</span><span style="font-size:16px;color:#5a7d72">/<span id="reserve">90</span></span></div>
-    <div class="label" style="margin-top:6px">⊕ <span id="nades">0</span> &nbsp; [G] THROW</div>
+    <div class="label" style="margin-top:6px">⊕ <span id="nades">0</span><span id="nadeKbd"> &nbsp; [G] THROW</span></div>
   </div>
 
   <div id="wavePanel" class="panel">
@@ -5111,22 +5119,22 @@ function noise({dur=0.15, vol=0.3, filterFreq=1200, type='lowpass'}={}){
   src.start(t);
 }
 const SFX = {
-  shoot(){ if(playSample((audioSettings.sounds.shoot||{})[curWep])) return; tone({freq:320, type:'square', dur:0.08, vol:0.12, slideTo:120}); noise({dur:0.07, vol:0.18, filterFreq:2200, type:'highpass'}); },
-  reload(){ if(playSample(audioSettings.sounds.reload)) return; tone({freq:200, type:'square', dur:0.06, vol:0.1}); setTimeout(()=>tone({freq:300, type:'square', dur:0.08, vol:0.1}),550); },
-  hit(){ if(playSample(audioSettings.sounds.hit)) return; tone({freq:600, type:'sine', dur:0.05, vol:0.12, slideTo:900}); },
+  shoot(){ if(playSample((curSounds().shoot||{})[curWep])) return; tone({freq:320, type:'square', dur:0.08, vol:0.12, slideTo:120}); noise({dur:0.07, vol:0.18, filterFreq:2200, type:'highpass'}); },
+  reload(){ if(playSample(curSounds().reload)) return; tone({freq:200, type:'square', dur:0.06, vol:0.1}); setTimeout(()=>tone({freq:300, type:'square', dur:0.08, vol:0.1}),550); },
+  hit(){ if(playSample(curSounds().hit)) return; tone({freq:600, type:'sine', dur:0.05, vol:0.12, slideTo:900}); },
   shatter(){ noise({dur:0.22, vol:0.22, filterFreq:3000, type:'highpass'}); tone({freq:220, type:'square', dur:0.12, vol:0.13, slideTo:70}); setTimeout(()=>noise({dur:0.12, vol:0.12, filterFreq:1600}),40); },
   puff(){ noise({dur:0.18, vol:0.14, filterFreq:700, type:'lowpass'}); tone({freq:160, type:'sine', dur:0.1, vol:0.08, slideTo:90}); },
-  kill(){ if(playSample(audioSettings.sounds.kill)) return; tone({freq:160, type:'sawtooth', dur:0.3, vol:0.16, slideTo:50}); noise({dur:0.25, vol:0.15, filterFreq:800}); },
-  hurt(){ if(playSample(audioSettings.sounds.hurt)) return; tone({freq:140, type:'sawtooth', dur:0.2, vol:0.2, slideTo:70}); },
+  kill(){ if(playSample(curSounds().kill)) return; tone({freq:160, type:'sawtooth', dur:0.3, vol:0.16, slideTo:50}); noise({dur:0.25, vol:0.15, filterFreq:800}); },
+  hurt(){ if(playSample(curSounds().hurt)) return; tone({freq:140, type:'sawtooth', dur:0.2, vol:0.2, slideTo:70}); },
   pickup(){ tone({freq:520, type:'triangle', dur:0.1, vol:0.18, slideTo:780}); setTimeout(()=>tone({freq:780, type:'triangle', dur:0.12, vol:0.18, slideTo:1100}),90); },
   empty(){ tone({freq:180, type:'square', dur:0.04, vol:0.08}); },
   wave(){ tone({freq:300, type:'triangle', dur:0.15, vol:0.16, slideTo:450}); setTimeout(()=>tone({freq:450, type:'triangle', dur:0.2, vol:0.16, slideTo:600}),140); },
   jump(){ tone({freq:280, type:'sine', dur:0.12, vol:0.1, slideTo:420}); },
-  coin(){ if(playSample(audioSettings.sounds.coin)) return; tone({freq:880, type:'square', dur:0.06, vol:0.1, slideTo:1320}); setTimeout(()=>tone({freq:1320, type:'square', dur:0.08, vol:0.1}),55); },
+  coin(){ if(playSample(curSounds().coin)) return; tone({freq:880, type:'square', dur:0.06, vol:0.1, slideTo:1320}); setTimeout(()=>tone({freq:1320, type:'square', dur:0.08, vol:0.1}),55); },
   buy(){ tone({freq:660, type:'triangle', dur:0.08, vol:0.16, slideTo:990}); setTimeout(()=>tone({freq:990, type:'triangle', dur:0.1, vol:0.16, slideTo:1320}),80); },
   deny(){ tone({freq:160, type:'sawtooth', dur:0.12, vol:0.14, slideTo:90}); },
   throw(){ tone({freq:220, type:'sine', dur:0.18, vol:0.12, slideTo:380}); },
-  explode(){ if(playSample(audioSettings.sounds.explode)) return; tone({freq:90, type:'sawtooth', dur:0.5, vol:0.25, slideTo:35}); noise({dur:0.45, vol:0.3, filterFreq:600}); },
+  explode(){ if(playSample(curSounds().explode)) return; tone({freq:90, type:'sawtooth', dur:0.5, vol:0.25, slideTo:35}); noise({dur:0.45, vol:0.3, filterFreq:600}); },
   power(){ tone({freq:440, type:'triangle', dur:0.1, vol:0.16, slideTo:660}); setTimeout(()=>tone({freq:660, type:'triangle', dur:0.1, vol:0.16, slideTo:880}),90); setTimeout(()=>tone({freq:880, type:'triangle', dur:0.14, vol:0.16, slideTo:1320}),180); },
   swap(){ tone({freq:300, type:'square', dur:0.05, vol:0.08, slideTo:500}); },
 };
@@ -5150,13 +5158,15 @@ function loadSound(url, cb){
     .then(buf=>{ _soundBuffers[url]=buf; cb && cb('ok'); })
     .catch(()=>{ _soundBuffers[url]='error'; cb && cb('error'); });
 }
+// Active SFX set: a co-op client plays the HOST's custom sounds (NET.sounds); otherwise your own.
+function curSounds(){ return (typeof NET!=='undefined' && NET.sounds) || (audioSettings && audioSettings.sounds) || _emptySounds(); }
 function playSample(url){
   if(!url || !actx || !sfxBus) return false;
   const buf=_soundBuffers[url];
   if(!(buf && buf.duration!==undefined)){ loadSound(url); return false; }   // not decoded yet -> let the synth play this time
   try{ const src=actx.createBufferSource(); src.buffer=buf; src.connect(sfxBus); src.start(); return true; }catch(e){ return false; }
 }
-function preloadCustomSounds(){ const s=audioSettings && audioSettings.sounds; if(!s) return; if(s.shoot){ for(const k in s.shoot) loadSound(s.shoot[k]); } for(const k of ['reload','explode','coin','hit','kill','hurt']) loadSound(s[k]); }
+function preloadCustomSounds(){ const s=curSounds(); if(!s) return; if(s.shoot){ for(const k in s.shoot) loadSound(s.shoot[k]); } for(const k of ['reload','explode','coin','hit','kill','hurt']) loadSound(s[k]); }
 
 // ---------- Audio buses + persisted volume settings (separate from level data) ----------
 let masterBus=null, sfxBus=null, musicBus=null;
@@ -6862,7 +6872,8 @@ function loadLevelFromNet(level){
   }
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
-  if(Array.isArray(level.spawns)){ for(const sp of level.spawns){ const g=buildSpawnMarker(sp); g.visible = editorOpen; } }
+  if(Array.isArray(level.spawns)){ for(const sp of level.spawns) buildSpawnMarker(sp); } setSpawnMarkersVisible(editorOpen);
+  if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }   // adopt the host's sky / ground / fog
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; }
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; refreshPlayerSpawnMarker(); }
@@ -7117,6 +7128,7 @@ function handleHostMsg(msg){
     if(msg.mode) NET.gameMode=msg.mode;
     if(msg.killTarget!=null) NET.killTarget=msg.killTarget;
     if(msg.level) NET.pendingLevel=msg.level;
+    if(msg.sounds) NET.pendingSounds=msg.sounds;
     netStatus('Connected — deploying'); showRoomBadge(NET.roomCode);
     startGame();
   }
@@ -7156,7 +7168,7 @@ function hostStart(code, mode, killTarget){
       if(NET.gameMode==='duel') NET.duelScore[conn._pid] = NET.duelScore[conn._pid]||0;
       // hand the joiner the mode, the kill target, and the current level so their map matches
       let level=null; try{ level = serializeLevel(); }catch(e){}
-      conn.send({t:'welcome', id:conn._pid, mode:NET.gameMode, killTarget:NET.killTarget, level});
+      conn.send({t:'welcome', id:conn._pid, mode:NET.gameMode, killTarget:NET.killTarget, level, sounds:audioSettings.sounds});
       netStatus('Player joined ('+Object.keys(NET.conns).length+' connected)');
       if(NET.gameMode==='duel') broadcastDuelScore();
     });
@@ -7711,7 +7723,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 91 · 2026-06-04';
+const BUILD_VERSION = 'build 97 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -7794,7 +7806,7 @@ if(savedLevel && savedLevel.aim && savedLevel.aim.state){
 }
 const HIP_SENS = 0.0022, ADS_SENS = 0.0012;  // slower look while aiming for precision
 addEventListener('mousedown', e=>{
-  if(shopOpen || editorOpen) return;
+  if(shopOpen || editorOpen || paused) return;
   if(e.button===0) firing=true;
   else if(e.button===2) ads = true;   // right-click: aim down sights
 });
@@ -7842,8 +7854,15 @@ addEventListener('contextmenu', e=>{ if(gameOn) e.preventDefault(); });
   tap('tNade', ()=>{ if(typeof throwGrenade==='function') throwGrenade(); });
   tap('tUse', ()=>{ if(typeof interact==='function') interact(); });
   tap('tWeapon', ()=>{ if(typeof cycleWeapon==='function') cycleWeapon(1); });
-  const aim=document.getElementById('tAim');
-  if(aim) aim.addEventListener('pointerdown', e=>{ touchAds=!touchAds; aim.classList.toggle('on', touchAds); e.preventDefault(); });   // tap toggles aim-down-sights
+  // Aim button: tap toggles aim-down-sights, and (like fire) you can drag the same thumb to keep aiming.
+  (function(){
+    const aim=document.getElementById('tAim'); if(!aim) return;
+    let aid=null, ax=0, ay=0;
+    aim.addEventListener('pointerdown', e=>{ isTouch=true; aid=e.pointerId; ax=e.clientX; ay=e.clientY; touchAds=!touchAds; aim.classList.toggle('on', touchAds); try{aim.setPointerCapture(e.pointerId);}catch(_){} e.preventDefault(); });
+    aim.addEventListener('pointermove', e=>{ if(e.pointerId!==aid) return; touchLookDX+=(e.clientX-ax); touchLookDY+=(e.clientY-ay); ax=e.clientX; ay=e.clientY; e.preventDefault(); });   // drag to aim the camera
+    const aimEnd=e=>{ if(e.pointerId!==aid) return; aid=null; };
+    aim.addEventListener('pointerup', aimEnd); aim.addEventListener('pointercancel', aimEnd);
+  })();
 })();
 
 // ====================================================================================
@@ -9691,7 +9710,7 @@ function restoreLevel(level){
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   // enemy spawns
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
-  if(Array.isArray(level.spawns)){ for(const sp of level.spawns){ const g=buildSpawnMarker(sp); g.visible = editorOpen; } }
+  if(Array.isArray(level.spawns)){ for(const sp of level.spawns) buildSpawnMarker(sp); } setSpawnMarkersVisible(editorOpen);
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; }
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; } else { playerSpawn.x=0; playerSpawn.z=0; playerSpawn.yaw=0; }
@@ -11338,6 +11357,7 @@ function startGame(){
   if(typeof netReset==='function') netReset();   // clear stale remote avatars / mirrored enemies & coins
   // client: adopt the host's level (props + lights) so everyone shares the same map
   if(NET.pendingLevel){ loadLevelFromNet(NET.pendingLevel); NET.pendingLevel=null; }
+  if(NET.pendingSounds){ NET.sounds=_sanitizeSounds(NET.pendingSounds); NET.pendingSounds=null; if(typeof preloadCustomSounds==='function') preloadCustomSounds(); }   // play the host's SFX this session
   chestTimer = 20;
   if(!station) buildStation();
   gameOn=true; gameOver=false; shopOpen=false;
