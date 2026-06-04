@@ -89,7 +89,7 @@
 
   /* Minimap */
   #minimap {
-    position: absolute; top: 18px; left: 50%; transform: translateX(-50%);
+    position: absolute; top: 18px; left: 18px;
     width: 180px; height: 180px;
     border: 1px solid rgba(56,245,181,0.35);
     border-radius: 50%;
@@ -191,7 +191,7 @@
   body.touch #ammoPanel .big { font-size:24px; }
   body.touch #score { top: calc(12px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right)); }
   body.touch #scoreVal { font-size:20px; }
-  body.touch #minimap { width:78px; height:78px; top: calc(6px + env(safe-area-inset-top)); }
+  body.touch #minimap { width:78px; height:78px; top: calc(6px + env(safe-area-inset-top)); left: calc(6px + env(safe-area-inset-left)); }
   body.touch #wavePanel { top: calc(90px + env(safe-area-inset-top)); padding:3px 12px; }
   body.touch #waveNum { font-size:15px; letter-spacing:2px; }
   body.touch #enemyCount { font-size:10px; margin-top:1px; }
@@ -7711,7 +7711,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 89 · 2026-06-04';
+const BUILD_VERSION = 'build 90 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10359,7 +10359,7 @@ function renderEditorFields(){
           picker.appendChild(tlab);
           const trow=document.createElement('div'); trow.className='row2';
           const tk=(key)=>{ const b=document.createElement('button'); b.textContent=ENEMY_TYPES[key].name; if((g.userData.mark.type||'grunt')===key){ b.style.background='rgba(56,245,181,0.30)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); g.userData.mark.type=key; renderEditorFields(); }; return b; };
-          trow.appendChild(tk('grunt')); trow.appendChild(tk('runner')); trow.appendChild(tk('brute')); trow.appendChild(tk('gunner'));
+          for(const key of ENEMY_TYPE_KEYS) trow.appendChild(tk(key));
           picker.appendChild(trow);
           const tt=ENEMY_TYPES[g.userData.mark.type||'grunt'];
           const th=document.createElement('div'); th.className='hint'; th.style.margin='3px 0 0';
