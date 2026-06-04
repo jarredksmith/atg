@@ -6127,10 +6127,10 @@ addEventListener('mouseup', e=>{ if(e.button===0){ editorDragLook = false; edito
 // ---------- Weapon (viewmodel) ----------
 // The `gun` group is what the render loop animates (sway, recoil, ADS). We load a hosted
 // .glb into a holder inside it, with tunable offsets so it sits naturally in first-person view.
-const GUN_MODEL_URL = "https://static.poly.pizza/78846e47-3be2-48f2-a7ce-6b50c09358bb.glb";
-const GUN_OFFSET = new THREE.Vector3(0.32000, -0.34000, -0.60000);
-const GUN_SCALE = 0.74782;
-const GUN_ROT = new THREE.Euler(0.00000, 1.53388, 0.00000);
+const GUN_MODEL_URL = 'https://jarredksmith.github.io/atg/scifi_gun.glb';
+const GUN_OFFSET = new THREE.Vector3(0.26180, -0.34000, -0.23504);
+const GUN_SCALE = 1.85417;                                 // tweak to fit the frame
+const GUN_ROT = new THREE.Euler(0.06636, 1.53388, 0.00000);            // face the muzzle forward (−z)
 const gun = new THREE.Group();
 let sight = null;  // kept for weapon-tint compatibility; set if the model exposes an emissive part
 let gunModel = null;  // the loaded GLB viewmodel (null until it loads / when offline placeholder is used)
@@ -7571,7 +7571,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 82 · 2026-06-04';
+const BUILD_VERSION = 'build 83 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10810,7 +10810,7 @@ function buildGizmo(){
 function updateGizmo(){
   if(!gizmo) gizmo = buildGizmo();
   const gr = gizmo.userData.groups;
-  const movable = editorOpen && (editorActive==='props' || editorActive==='station' || editorActive==='lights' || editorActive==='spawns' || editorActive==='pstart');
+  const movable = editorOpen && (editorActive==='props' || editorActive==='station' || editorActive==='lights' || editorActive==='spawns' || editorActive==='pstart' || editorActive==='extract');
   const pos = movable ? getSelPos() : null;
   if(!pos){ gr.translate.visible=gr.scale.visible=gr.rotate.visible=false; gizmo.visible = false; return; }
   gizmo.position.copy(pos);
@@ -10819,6 +10819,7 @@ function updateGizmo(){
   // lights + spawns have no scale; force translate/rotate only for them
   let mode = gizmoMode;
   if((editorActive==='lights'||editorActive==='spawns'||editorActive==='pstart') && mode==='scale') mode='translate';
+  if(editorActive==='extract') mode='translate';   // the extraction point only moves (radius lives in Game / waves)
   gr.translate.visible = (mode==='translate');
   gr.scale.visible = (mode==='scale');
   gr.rotate.visible = (mode==='rotate');
