@@ -147,9 +147,13 @@
   #damage { position: fixed; inset: 0; z-index: 9; pointer-events: none;
     box-shadow: inset 0 0 200px rgba(255,40,70,0); transition: box-shadow .12s; }
 
+  /* end-of-run summary */
+  .runStats { color:#cfeee2; font-size:15px; letter-spacing:1px; margin-top:6px; }
+  .bestLine { color:#ffd166; font-size:13px; letter-spacing:2px; margin-top:6px; text-shadow:0 0 12px rgba(255,209,102,.35); }
   /* hitmarker */
   #hitmarker { position: absolute; top:50%; left:50%; transform: translate(-50%,-50%) scale(.6);
     font-size: 30px; color:#fff; opacity:0; font-weight:700; text-shadow:0 0 8px #38f5b5; }
+
 
   /* On-screen touch controls (shown on touch devices during play) */
   canvas { touch-action: none; }
@@ -7470,7 +7474,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 67 · 2026-06-03';
+const BUILD_VERSION = 'build 68 · 2026-06-03';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8182,6 +8186,7 @@ function shoot(){
 }
 
 function killEnemy(en){
+  runKills++;
   spark(en.mesh.position, 0xff2d55); SFX.kill();
   if(NET.mode==='off') hitStop = Math.max(hitStop, 0.07);   // brief impact freeze (solo only — avoids desyncing co-op)
   // drop 1-2 coins worth scaling slightly with wave
@@ -8255,6 +8260,7 @@ function drawMinimap(){
 
 let score = 0, wave = 1, toSpawn = 0;
 let surviveLeft = 0;   // seconds left in a Survival-objective run
+let runKills = 0;   // kills this run (for the run summary + best)
 let extractHoldT = 0; let extractZone = null; const extractPos = new THREE.Vector3();   // Extraction objective
 function updateHUD(){
   const w = W();
@@ -10968,7 +10974,7 @@ function startGame(){
   WEAPONS.rifle.mag=30; WEAPONS.rifle.reserve=90;
   WEAPONS.smg.mag=40; WEAPONS.smg.reserve=120;
   WEAPONS.shotgun.mag=6; WEAPONS.shotgun.reserve=24;
-  reloading=false; score=0; wave=1; credits=0; grenadeCount=0;
+  reloading=false; score=0; wave=1; credits=0; grenadeCount=0; runKills=0;
   if(typeof startObjective==='function') startObjective();   // reset survival timer for this run
   if(NET.gameMode==='duel') credits = 150;   // starting stipend so the economy is usable from the first life in 1v1
   buffs.damage=0; buffs.speed=0; buffs.shield=0;
@@ -11009,6 +11015,22 @@ function startGame(){
   teardownInstancing(); buildInstancing();   // (re)collapse repeated static shapes for play
   tryPointerLock();
 }
+// ---- Persistent best + end-of-run summary (localStorage; survives refresh/sessions) ----
+const BEST_KEY='breach_best';
+function loadBest(){ try{ const j=JSON.parse(localStorage.getItem(BEST_KEY)); if(j) return { score:+j.score||0, wave:+j.wave||0, kills:+j.kills||0 }; }catch(e){} return { score:0, wave:0, kills:0 }; }
+function recordRun(){   // compare this run to the stored best, persist the new maxes, return what to show
+  const b=loadBest();
+  const res={ score, wave, kills:runKills, prev:b, isBest:{ score:score>b.score, wave:wave>b.wave, kills:runKills>b.kills } };
+  const nb={ score:Math.max(b.score,score), wave:Math.max(b.wave,wave), kills:Math.max(b.kills,runKills) };
+  res.best=nb; res.anyBest = res.isBest.score||res.isBest.wave||res.isBest.kills;
+  try{ localStorage.setItem(BEST_KEY, JSON.stringify(nb)); }catch(e){}
+  return res;
+}
+function runSummaryHTML(){   // stats line + best line for the win/death screens
+  const r=recordRun(), st=(v,is)=>v+(is?' ★':'');
+  return '<div class="runStats">SCORE '+st(score,r.isBest.score)+' &nbsp;·&nbsp; KILLS '+st(runKills,r.isBest.kills)+' &nbsp;·&nbsp; ◆'+credits+'</div>'
+       + '<div class="bestLine">'+(r.anyBest?'★ NEW BEST':('BEST · score '+r.best.score+' · wave '+r.best.wave+' · kills '+r.best.kills))+'</div>';
+}
 function gameWon(){
   if(!gameOn) return;
   stopMusic();
@@ -11022,7 +11044,8 @@ function gameWon(){
   const ov=$('overlay'); ov.classList.remove('hidden');
   ov.innerHTML = `
     <h1 style="color:#38f5b5;text-shadow:0 0 30px rgba(56,245,181,.5)">MISSION COMPLETE</h1>
-    <div class="sub">${ gameCfg.objective==='survival' ? ('SURVIVED '+fmtClock(gameCfg.surviveSecs)) : gameCfg.objective==='extraction' ? 'EXTRACTED' : (gameCfg.winWaves+' WAVE'+(gameCfg.winWaves===1?'':'S')+' CLEARED') } &nbsp;·&nbsp; SCORE ${score} &nbsp;·&nbsp; ◆${credits}</div>
+    <div class="sub">${ gameCfg.objective==='survival' ? ('SURVIVED '+fmtClock(gameCfg.surviveSecs)) : gameCfg.objective==='extraction' ? 'EXTRACTED' : (gameCfg.winWaves+' WAVE'+(gameCfg.winWaves===1?'':'S')+' CLEARED') }</div>
+    ${runSummaryHTML()}
     <button id="startBtn">Redeploy</button>`;
   $('hud').classList.add('hidden');
   document.getElementById('startBtn').onclick = startGame;
@@ -11037,7 +11060,8 @@ function endGame(){
   const ov=$('overlay'); ov.classList.remove('hidden');
   ov.innerHTML = `
     <h1 style="color:#ff2d55;text-shadow:0 0 30px rgba(255,45,85,.5)">TERMINATED</h1>
-    <div class="sub">REACHED WAVE ${wave} &nbsp;·&nbsp; SCORE ${score} &nbsp;·&nbsp; ◆${credits}</div>
+    <div class="sub">REACHED WAVE ${wave}</div>
+    ${runSummaryHTML()}
     <button id="startBtn">Redeploy</button>`;
   $('hud').classList.add('hidden');
   document.getElementById('startBtn').onclick = startGame;
