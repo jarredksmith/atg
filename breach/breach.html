@@ -6575,6 +6575,16 @@ function buildEnemyVisual(body){
 // ---- Editor preview: a stationary enemy + a wireframe collider so you can see/tune a model live ----
 let previewEnemy = null, previewCollider = null;
 const PREVIEW_POS = new THREE.Vector3(0, 1.4, 6);   // a fixed, easy-to-find spot in front of the arena center
+let previewAvatar = null;   // a stand-in avatar shown while editing the Player tab (no remote players exist solo)
+function ensurePlayerPreview(on){
+  if(on){
+    if(!previewAvatar){ previewAvatar=new THREE.Group(); previewAvatar.position.set(0,0,6); scene.add(previewAvatar); }
+    buildAvatarVisual(previewAvatar);
+  } else if(previewAvatar){
+    if(previewAvatar.userData.mixer){ const mi=mixers.indexOf(previewAvatar.userData.mixer); if(mi>=0) mixers.splice(mi,1); }
+    scene.remove(previewAvatar); previewAvatar=null;
+  }
+}
 function clearPreviewEnemy(){
   if(previewEnemy){ if(previewEnemy.userData.mixer){ const mi=mixers.indexOf(previewEnemy.userData.mixer); if(mi>=0) mixers.splice(mi,1); } scene.remove(previewEnemy); previewEnemy=null; }
   if(previewCollider){ scene.remove(previewCollider); previewCollider.traverse(o=>{ if(o.geometry) o.geometry.dispose(); if(o.material && o.material.dispose) o.material.dispose(); }); previewCollider=null; }
@@ -6897,6 +6907,7 @@ function loadLevelFromNet(level){
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns) buildSpawnMarker(sp); } setSpawnMarkersVisible(editorOpen);
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }   // adopt the host's sky / ground / fog
+  if(level.player) applyPlayerLevel(level.player);   // adopt the host's player avatar
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; }
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; refreshPlayerSpawnMarker(); }
@@ -6920,12 +6931,53 @@ function makeNameSprite(text){
   return spr;
 }
 const remoteBodyGeo = new THREE.CapsuleGeometry(0.5, 1.2, 4, 8);
+// ---- Player avatar (what teammates / duel opponents see). Default = blue capsule; swappable for a GLB. ----
+const PLAYER_MODEL0 = { url:'', scale:1, face:0, yoff:0, xoff:0, zoff:0 };   // face in radians
+let playerModelCfg = Object.assign({}, PLAYER_MODEL0);
+function buildAvatarVisual(g){
+  if(g.userData.visual){ if(g.userData.mixer){ const mi=mixers.indexOf(g.userData.mixer); if(mi>=0) mixers.splice(mi,1); g.userData.mixer=null; } g.remove(g.userData.visual); g.userData.visual=null; }
+  if(g.userData.hitProxy){ g.remove(g.userData.hitProxy); g.userData.hitProxy=null; }
+  const mc = playerModelCfg;
+  const useCapsule = ()=>{
+    const wrap=new THREE.Group();
+    const body=new THREE.Mesh(remoteBodyGeo, new THREE.MeshStandardMaterial({ color:0x2f7fff, emissive:0x10316c, emissiveIntensity:.55, roughness:.6 }));
+    body.position.y=1.1; body.castShadow=true; wrap.add(body);
+    const head=new THREE.Mesh(new THREE.ConeGeometry(0.22,0.5,8), new THREE.MeshStandardMaterial({ color:0x9fd8ff, emissive:0x2f7fff, emissiveIntensity:.4 }));
+    head.rotation.x=Math.PI/2; head.position.set(0,1.55,-0.45); wrap.add(head);   // points -Z (forward)
+    g.add(wrap); g.userData.visual=wrap; g.userData.hasModel=false;
+  };
+  if(!mc.url){ useCapsule(); return; }
+  useCapsule();   // placeholder until the GLB arrives
+  loadGLTFCached(mc.url,
+    (gltf)=>{
+      if(playerModelCfg.url!==mc.url) return;   // url changed before this load resolved
+      if(g.userData.visual){ g.remove(g.userData.visual); g.userData.visual=null; }
+      const model=THREE.cloneSkinned(gltf.scene);
+      model.scale.setScalar(mc.scale||1);
+      model.traverse(o=>{ if(o.isMesh){ o.castShadow=true; if(o.frustumCulled!==undefined) o.frustumCulled=false; o.raycast=()=>{}; } });   // duel shots test the hit-proxy, not the (skinned) mesh
+      g.add(model); g.updateMatrixWorld(true); model.updateMatrixWorld(true);
+      let h=2.0, fr=0.6;
+      const wbox=new THREE.Box3().setFromObject(model);
+      if(isFinite(wbox.min.y) && isFinite(wbox.min.x) && !wbox.isEmpty()){
+        const lbox=wbox.clone().applyMatrix4(_seatInv.copy(g.matrixWorld).invert());
+        const cx=(lbox.min.x+lbox.max.x)/2, cz=(lbox.min.z+lbox.max.z)/2;
+        model.position.set(model.position.x-cx+mc.xoff, model.position.y-lbox.min.y+mc.yoff, model.position.z-cz+mc.zoff);   // feet at the group origin (ground)
+        h=Math.max(0.6, lbox.max.y-lbox.min.y); fr=Math.max(0.3, Math.min(2, Math.max((lbox.max.x-lbox.min.x)/2,(lbox.max.z-lbox.min.z)/2)));
+      }
+      model.rotation.y += (mc.face||0);
+      g.userData.visual=model; g.userData.hasModel=true;
+      model.userData.seat={ p:model.position.clone(), q:model.quaternion.clone(), s:model.scale.clone() };   // re-pinned each frame so root-motion can't fling the model
+      const px=new THREE.Mesh(new THREE.CylinderGeometry(fr,fr,h,10), _ENEMY_PROXY_MAT); px.position.y=h/2; g.add(px); g.userData.hitProxy=px;
+      const mx=playEnemyClip(model, gltf, '');   // auto idle / walk / run
+      if(mx) g.userData.mixer=mx;
+    },
+    (err)=>{ console.warn('Player model load failed, using capsule:', err && err.message); }
+  );
+}
+function rebuildAvatars(){ for(const id in NET.players){ const rp=NET.players[id]; if(rp && rp.mesh) buildAvatarVisual(rp.mesh); } if(typeof previewAvatar!=='undefined' && previewAvatar) buildAvatarVisual(previewAvatar); }
 function makeRemotePlayer(name){
   const g=new THREE.Group();
-  const body=new THREE.Mesh(remoteBodyGeo, new THREE.MeshStandardMaterial({ color:0x2f7fff, emissive:0x10316c, emissiveIntensity:.55, roughness:.6 }));
-  body.position.y=1.1; body.castShadow=true; g.add(body);
-  const head=new THREE.Mesh(new THREE.ConeGeometry(0.22,0.5,8), new THREE.MeshStandardMaterial({ color:0x9fd8ff, emissive:0x2f7fff, emissiveIntensity:.4 }));
-  head.rotation.x=Math.PI/2; head.position.set(0,1.55,-0.45); g.add(head);   // points -Z (forward)
+  buildAvatarVisual(g);
   const label=makeNameSprite(name); label.position.y=2.5; g.add(label); g.userData.label=label;
   scene.add(g);
   return g;
@@ -7753,7 +7805,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 98 · 2026-06-04';
+const BUILD_VERSION = 'build 100 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8959,6 +9011,8 @@ function loop(){
   // re-pin enemy model roots to their seated transform: clips often carry root-motion / scale tracks that
   // would otherwise drift the model off the body or shrink it to nothing. Bones still animate normally.
   for(const en of enemies){ const v=en.mesh.userData.visual, s=v&&v.userData.seat; if(s){ v.position.copy(s.p); v.quaternion.copy(s.q); v.scale.copy(s.s); } }
+  for(const id in NET.players){ const m=NET.players[id].mesh, v=m&&m.userData.visual, s=v&&v.userData.seat; if(s){ v.position.copy(s.p); v.quaternion.copy(s.q); v.scale.copy(s.s); } }
+  if(previewAvatar){ const v=previewAvatar.userData.visual, s=v&&v.userData.seat; if(s){ v.position.copy(s.p); v.quaternion.copy(s.q); v.scale.copy(s.s); } }
   if(typeof previewEnemy!=='undefined' && previewEnemy){ const v=previewEnemy.userData.visual, s=v&&v.userData.seat; if(s){ v.position.copy(s.p); v.quaternion.copy(s.q); v.scale.copy(s.s); }
     if(previewCollider && previewCollider.userData.cyl){ const r=previewEnemy.userData.footprint||0.9; previewCollider.userData.cyl.scale.set(r,1,r); } }
 
@@ -9299,6 +9353,9 @@ function prsTransform(min,max){
   ];
 }
 
+function applyPlayerLevel(pl){ if(!pl) return; if(pl.state) Object.assign(editorTargets.player.state, pl.state);
+  playerModelCfg.url=(pl.url||'').trim(); const s=editorTargets.player.state;
+  playerModelCfg.scale=s.s||1; playerModelCfg.face=(s.face||0)*RAD; playerModelCfg.yoff=s.yoff||0; playerModelCfg.xoff=s.xoff||0; playerModelCfg.zoff=s.zoff||0; rebuildAvatars(); }
 const editorTargets = {
   gun: {
     label: 'Gun',
@@ -9374,6 +9431,25 @@ const editorTargets = {
         + 'const STATION_POS = new THREE.Vector3(' + fmt(s.px) + ', ' + fmt(s.py) + ', ' + fmt(s.pz) + ');\n'
         + 'const STATION_SCALE = ' + fmt(s.s) + ';\n'
         + 'const STATION_ROT = new THREE.Euler(' + fmt(s.rx*RAD) + ', ' + fmt(s.ry*RAD) + ', ' + fmt(s.rz*RAD) + ');'; }
+  },
+  player: {
+    label: 'Player',
+    state: (savedLevel && savedLevel.player && savedLevel.player.state) ? Object.assign({ s:1, face:0, yoff:0, xoff:0, zoff:0 }, savedLevel.player.state) : { s:1, face:0, yoff:0, xoff:0, zoff:0 },
+    fields: [
+      { k:'s',    label:'Scale',    min:0.05, max:6, step:0.001 },
+      { k:'face', label:'Facing°',  min:-180, max:180, step:1 },
+      { k:'yoff', label:'Y offset', min:-3, max:3, step:0.05 },
+      { k:'xoff', label:'X offset', min:-3, max:3, step:0.05 },
+      { k:'zoff', label:'Z offset', min:-3, max:3, step:0.05 },
+    ],
+    obj: ()=>null,
+    urlField: true,
+    getUrl(){ return playerModelCfg.url; },
+    setUrl(u){ playerModelCfg.url=(u||'').trim(); this.apply(); },
+    apply(){ const s=this.state; playerModelCfg.scale=s.s; playerModelCfg.face=(s.face||0)*RAD; playerModelCfg.yoff=s.yoff; playerModelCfg.xoff=s.xoff; playerModelCfg.zoff=s.zoff; rebuildAvatars(); },
+    code(){ return '// ===== Player avatar (remote/duel) =====\\n'
+        + 'const PLAYER_MODEL_URL = ' + JSON.stringify(playerModelCfg.url) + ';\\n'
+        + 'const PLAYER_MODEL_SCALE = ' + fmt(this.state.s) + ';'; }
   },
   props: {
     label: 'Props',
@@ -9694,6 +9770,7 @@ function serializeLevel(){
     weapons: Object.keys(WEAPONS).reduce((acc,k)=>{ const w=WEAPONS[k]; if(w.model || w.view) acc[k]={ model:w.model||'', view:w.view||null }; return acc; }, {}),
     aim:     { state: Object.assign({}, editorTargets.aim.state) },
     station: { url: stationModelUrl, state: Object.assign({}, editorTargets.station.state) },
+    player:  { url: playerModelCfg.url, state: Object.assign({}, editorTargets.player.state) },
     world:   Object.assign({}, worldCfg),
     chest:   { url: chestModelUrl, scale: chestModelScale },
     coin:    { url: coinCfg.url, scale: coinCfg.scale, on: coinCfg.on !== false },
@@ -9761,6 +9838,7 @@ function restoreLevel(level){
   if(level.station){ if(level.station.url && level.station.url!==stationModelUrl) swapStationModel(level.station.url); Object.assign(editorTargets.station.state, level.station.state||{}); editorTargets.station.apply(); }
   // world + loot
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }
+  if(level.player) applyPlayerLevel(level.player);
   if(level.chest){ chestModelUrl = level.chest.url||''; chestModelScale = level.chest.scale||1; }
   if(level.coin){ const c=level.coin; coinCfg.url=c.url||''; coinCfg.scale=c.scale||1; coinCfg.on=c.on!==false; }
   if(level.enemies || level.enemy){ applyEnemyModelData(level.enemies, level.enemy); for(const en of enemies) buildEnemyVisual(en.mesh); if(typeof refreshPreviewEnemy==='function') refreshPreviewEnemy(); }   // re-skin live enemies (legacy single-model falls back to all types)
@@ -9778,6 +9856,44 @@ function performUndo(){
   return true;
 }
 
+// Reusable search UI (gun/enemy/loot/grenade/station/player). Calls onPick(model, statusEl) on a click.
+// Includes an "Animated only" filter (uses the model's animated flag when Poly Pizza exposes one).
+function renderModelSearch(host, onPick, opts){
+  opts = opts || {}; host.innerHTML='';
+  const sRow=document.createElement('div'); sRow.className='row2'; sRow.style.marginBottom='4px';
+  const q=document.createElement('input'); q.type='text'; q.placeholder=opts.placeholder||'search free models…'; q.value=ppLastQuery;
+  q.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+  const sBtn=document.createElement('button'); sBtn.textContent='Search'; sBtn.style.flex='0 0 auto';
+  sRow.appendChild(q); sRow.appendChild(sBtn); host.appendChild(sRow);
+  const fRow=document.createElement('label'); fRow.style.cssText='display:flex;align-items:center;gap:6px;color:#9fe6cf;font-size:11px;margin:1px 0 2px;cursor:pointer;';
+  const anim=document.createElement('input'); anim.type='checkbox'; anim.style.cssText='width:14px;height:14px;accent-color:#38f5b5;';
+  const fSp=document.createElement('span'); fSp.textContent='Animated only';
+  fRow.appendChild(anim); fRow.appendChild(fSp); host.appendChild(fRow);
+  const status=document.createElement('div'); status.className='hint'; status.style.margin='2px 0'; host.appendChild(status);
+  const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:4px;'; host.appendChild(grid);
+  let raw=[];
+  function render(){
+    const list = anim.checked ? raw.filter(m=>m.animated===true) : raw;
+    grid.innerHTML='';
+    if(!raw.length){ status.textContent='No models found.'; return; }
+    if(!list.length){ status.textContent='No animated models in these results.'; return; }
+    status.textContent = list.length + ' result' + (list.length>1?'s':'') + ' — click to use';
+    for(const m of list){
+      const card=document.createElement('button');
+      card.style.cssText='display:flex;flex-direction:column;align-items:center;gap:2px;background:#0c1418;border:1px solid #24323a;border-radius:6px;padding:4px;cursor:pointer;overflow:hidden;';
+      card.title = m.attribution + (m.animated?'  ·  animated':'');
+      if(m.thumb){ const img=document.createElement('img'); img.src=m.thumb; img.loading='lazy'; img.style.cssText='width:100%;aspect-ratio:1;object-fit:contain;background:#06090b;border-radius:3px;'; card.appendChild(img); }
+      const cap=document.createElement('div'); cap.textContent=(m.animated?'▶ ':'')+m.title; cap.style.cssText='font-size:10px;color:#9fe6cf;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'; card.appendChild(cap);
+      card.onclick=()=>{ status.textContent='Using "'+m.title+'"…'; onPick(m, status); };
+      grid.appendChild(card);
+    }
+  }
+  anim.onchange=render;
+  function doSearch(){ const term=q.value.trim(); if(!term){ status.textContent='Type something to search.'; return; } ppLastQuery=term; status.textContent='Searching…'; grid.innerHTML='';
+    ppSearch(term, list=>{ raw=list; render(); }, err=>{ raw=[]; const msg=(err&&err.message)||String(err); status.textContent = (!ppProxy() && /failed|load|network/i.test(msg)) ? 'Search blocked by CORS — the Poly Pizza proxy isn\u2019t reachable.' : ('Search failed: '+msg); }); }
+  sBtn.onclick=doSearch; q.addEventListener('keydown', e=>{ if(e.code==='Enter'){ e.preventDefault(); doSearch(); } });
+  if(raw.length) render();
+}
 // ---------- Poly Pizza model browser: search free CC0/CC-BY models and add them as props ----------
 function ppGetKey(){ try{ return (localStorage.getItem('pp_api_key')||'') || PP_DEFAULT_KEY; }catch(e){ return PP_DEFAULT_KEY; } }
 function ppSetKey(k){ try{ localStorage.setItem('pp_api_key', k||''); }catch(e){} }
@@ -9794,7 +9910,7 @@ function ppParseModel(m){
   const title = m.Title||m.title||m.Name||m.name||'Untitled';
   let attribution = m.Attribution||m.attribution;
   if(!attribution){ const c=m.Creator||m.creator||{}; const cn=c.Username||c.username||c.Name||c.name; const lic=m.Licence||m.License||m.licence||m.license; attribution = title + (cn?(' by '+cn):'') + (lic?(' ['+lic+']'):'') + ' — via Poly Pizza'; }
-  return { id:m.ID||m.id||m.Id, title, thumb, glb, attribution };
+  return { id:m.ID||m.id||m.Id, title, thumb, glb, attribution, animated: !!(m.Animated || m.animated || (m.AnimationCount>0) || (m.animations && m.animations.length) || (m.Animations && m.Animations.length)) };
 }
 function ppSearch(query, cb, errcb){
   const key = ppGetKey();
@@ -10009,6 +10125,7 @@ function renderEditorFields(){
   editorEl.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.key===editorActive));
   const tgt = editorTargets[editorActive];
   if(editorActive==='extract') refreshExtractMarker();
+  ensurePlayerPreview(editorActive==='player');
   if(extractZone) extractZone.visible = (editorActive==='extract');   // the beacon shows as an editor marker only on its own tab
 
   // ---- World / Enemies / Loot (global settings; independent of the selected object) ----
@@ -10153,6 +10270,10 @@ function renderEditorFields(){
     const eAb=document.createElement('button'); eAb.textContent='Apply'; eAb.style.flex='0 0 auto';
     eAb.onclick=()=>{ pushUndoSnapshot(); swapEnemyModel(eUrl.value, editorEnemyType); refreshEnemyVisuals(); renderEditorFields(); };   // re-skin this type's enemies immediately
     eRow.appendChild(eUrl); eRow.appendChild(eAb); eHost.appendChild(eRow);
+    const enPsHead=document.createElement('div'); enPsHead.className='hint'; enPsHead.style.margin='8px 0 3px'; enPsHead.innerHTML='<b>🔍 Poly Pizza</b> — search free models, click to use for this enemy type';
+    eHost.appendChild(enPsHead);
+    const enPsHost=document.createElement('div'); eHost.appendChild(enPsHost);
+    renderModelSearch(enPsHost, (m, st)=>{ eUrl.value=m.glb; pushUndoSnapshot(); swapEnemyModel(m.glb, editorEnemyType); refreshEnemyVisuals(); if(st) st.textContent='Using "'+m.title+'" — credit: '+(m.attribution||''); }, { placeholder:'e.g. zombie, alien, drone' });
     const eScaleRow=document.createElement('label'); eScaleRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 2px;';
     const esSp=document.createElement('span'); esSp.textContent='Model scale'; esSp.style.minWidth='86px';
     const esNum=document.createElement('input'); esNum.type='number'; esNum.min='0.05'; esNum.max='50'; esNum.step='0.05'; esNum.value=mc.scale; esNum.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
@@ -10303,6 +10424,10 @@ function renderEditorFields(){
     const ab=document.createElement('button'); ab.textContent='Apply'; ab.style.flex='0 0 auto';
     ab.onclick=()=>{ pushUndoSnapshot(); swapChestModel(url.value); for(const ch of chests.slice()){ scene.remove(ch.mesh); } chests.length=0; chestTimer=Math.min(chestTimer,2); };
     urlRow.appendChild(url); urlRow.appendChild(ab); lHost.appendChild(urlRow);
+    const ltPsHead=document.createElement('div'); ltPsHead.className='hint'; ltPsHead.style.margin='8px 0 3px'; ltPsHead.innerHTML='<b>🔍 Poly Pizza</b> — search free models, click to use as the loot box';
+    lHost.appendChild(ltPsHead);
+    const ltPsHost=document.createElement('div'); lHost.appendChild(ltPsHost);
+    renderModelSearch(ltPsHost, (m, st)=>{ url.value=m.glb; pushUndoSnapshot(); swapChestModel(m.glb); for(const ch of chests.slice()){ scene.remove(ch.mesh); } chests.length=0; chestTimer=Math.min(chestTimer,2); if(st) st.textContent='Using "'+m.title+'" — credit: '+(m.attribution||''); }, { placeholder:'e.g. chest, crate, barrel' });
     const sRow=document.createElement('label'); sRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 2px;';
     const sSp=document.createElement('span'); sSp.textContent='Model scale'; sSp.style.minWidth='86px';
     const sNum=document.createElement('input'); sNum.type='number'; sNum.min='0.05'; sNum.max='50'; sNum.step='0.05'; sNum.value=chestModelScale; sNum.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
@@ -10692,6 +10817,12 @@ function renderEditorFields(){
       row.appendChild(addUrl);
     }
     urlHost.appendChild(row);
+    if(tgt.urlField && !tgt.addable){   // Poly Pizza search for single-slot models (gun/station/grenade/player)
+      const psHead=document.createElement('div'); psHead.className='hint'; psHead.style.margin='10px 0 3px'; psHead.innerHTML='<b>🔍 Poly Pizza</b> — search free models, click one to use it';
+      urlHost.appendChild(psHead);
+      const psHost=document.createElement('div'); urlHost.appendChild(psHost);
+      renderModelSearch(psHost, (m, st)=>{ inp.value=m.glb; if(tgt.setUrl) tgt.setUrl(m.glb); if(st) st.textContent='Using "'+m.title+'" — credit: '+(m.attribution||''); }, { placeholder:'e.g. pistol, robot, barrel' });
+    }
     if(tgt.addable){
       const shapeHead = document.createElement('div'); shapeHead.className='hint'; shapeHead.style.margin='8px 0 3px'; shapeHead.innerHTML='<b>Add shape</b> — drops in front of you, then move/scale it';
       urlHost.appendChild(shapeHead);
@@ -11299,6 +11430,7 @@ function resetEditorTarget(key){
       o.position.set(sp[0],sp[1],sp[2]); o.rotation.set(sp[3],sp[4],sp[5]); o.scale.setScalar(sp[6]); refreshPropCollider(o); } }
   else if(key==='pstart'){ playerSpawn.x=0; playerSpawn.z=0; playerSpawn.yaw=0; refreshPlayerSpawnMarker(); }
   else if(key==='extract'){ extractSpot=null; refreshExtractMarker(); }
+  else if(key==='player'){ t.state={ s:1, face:0, yoff:0, xoff:0, zoff:0 }; t.apply(); }
   renderEditorFields();
 }
 
@@ -11370,6 +11502,7 @@ function toggleEditor(){
 // ---------- Game state ----------
 function startGame(){
   closeModal('mpModal'); closeModal('instrModal');   // drop any open menu modal as the world starts
+  if(typeof ensurePlayerPreview==='function') ensurePlayerPreview(false);   // drop the editor's stand-in avatar
   initAudio();
   startMusic();
   player.hp=100; player.maxHp=100; run = { ...RUN0 }; if(typeof closeUpgradePicker==='function') closeUpgradePicker(); player.pos.set(playerSpawn.x, EYE, playerSpawn.z); player.vel.set(0,0,0);
@@ -11671,6 +11804,7 @@ function enterEditor(){
 bindMenu();
 bindPauseMenu();
 bindModals();
+if(savedLevel && savedLevel.player) applyPlayerLevel(savedLevel.player);   // seed the avatar so a saved/hosted level shows its player model
 // If the page was opened with a shared level in the URL (#lvl=...), decode it and rebuild the scene.
 (async ()=>{
   challenge = challengeFromUrl();   // a score target may ride alongside the level
