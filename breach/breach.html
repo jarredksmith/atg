@@ -155,7 +155,7 @@
   .runStats { color:#cfeee2; font-size:15px; letter-spacing:1px; margin-top:6px; }
   .bestLine { color:#ffd166; font-size:13px; letter-spacing:2px; margin-top:6px; text-shadow:0 0 12px rgba(255,209,102,.35); }
   /* perf meter (toggle with the ` key) */
-  #perfHud { position:fixed; top:8px; left:8px; z-index:80; background:rgba(4,10,12,.82); border:1px solid rgba(56,245,181,.4);
+  #perfHud { position:fixed; bottom:8px; left:8px; z-index:80; background:rgba(4,10,12,.82); border:1px solid rgba(56,245,181,.4);
     color:#9fe6cf; font:12px/1.45 'Courier New',monospace; padding:7px 10px; border-radius:6px; pointer-events:none; white-space:nowrap; }
   #perfHud.hidden { display:none; }
   /* hitmarker */
@@ -5988,7 +5988,7 @@ addEventListener('keydown', e=>{
   // Ctrl+A (select all). Swallow those so moving while crouched doesn't trigger them. Ctrl+W (close tab)
   // is browser-reserved and can't be cancelled here — the beforeunload guard below catches that one.
   if(e.ctrlKey && (e.code==='KeyW'||e.code==='KeyA'||e.code==='KeyS'||e.code==='KeyD')) e.preventDefault();
-  if(e.code==='Backquote'){ const el=$('padDebug'); if(el){ const show = el.style.display!=='block'; el.style.display = show?'block':'none'; if(show) el.textContent = 'BREACH  ' + BUILD_VERSION + '\nCONTROLLER DEBUG  (` hide · ] switch pad)'; } e.preventDefault(); return; }   // controller diagnostic + build version
+  if(e.code==='Backquote'){ const el=$('padDebug'); let show=false; if(el){ show = el.style.display!=='block'; el.style.display = show?'block':'none'; if(show) el.textContent = 'BREACH  ' + BUILD_VERSION + '\nCONTROLLER DEBUG  (` hide · ] switch pad)'; } perfOn = el ? show : !perfOn; const ph=document.getElementById('perfHud'); if(ph) ph.classList.toggle('hidden', !perfOn); e.preventDefault(); return; }   // ` toggles the controller diagnostic + the perf meter
   if(e.code==='BracketRight'){   // manually switch which detected gamepad is used
     const ps = navigator.getGamepads ? navigator.getGamepads() : [];
     const idxs = []; for(const p of ps){ if(p) idxs.push(p.index); }
@@ -6030,7 +6030,6 @@ addEventListener('keydown', e=>{
     return;
   }
   if(e.code==='KeyM'){ const m=toggleMute(); if(typeof flashToast==='function') flashToast(m?'Muted':'Sound on'); return; }
-  if(e.code==='Backquote'){ perfOn=!perfOn; const el=document.getElementById('perfHud'); if(el) el.classList.toggle('hidden',!perfOn); return; }
   if(editorOpen) return;   // ignore gameplay keys while editing
   if(e.code==='KeyR') reload();
   if(e.code==='KeyE') interact();
@@ -7496,7 +7495,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 72 · 2026-06-04';
+const BUILD_VERSION = 'build 73 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
