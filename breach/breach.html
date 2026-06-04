@@ -147,6 +147,10 @@
   #damage { position: fixed; inset: 0; z-index: 9; pointer-events: none;
     box-shadow: inset 0 0 200px rgba(255,40,70,0); transition: box-shadow .12s; }
 
+  /* challenge link UI */
+  .chalLine { color:#9fd8ff; font-size:13px; letter-spacing:1px; margin-top:8px; }
+  .chalLine.won { color:#38f5b5; text-shadow:0 0 14px rgba(56,245,181,.45); font-weight:700; }
+  #chalOut { display:none; margin-top:8px; width:min(360px,80vw); background:#0c1418; border:1px solid #2a3a42; color:#9fe6cf; border-radius:5px; padding:6px 9px; font-size:12px; }
   /* end-of-run summary */
   .runStats { color:#cfeee2; font-size:15px; letter-spacing:1px; margin-top:6px; }
   .bestLine { color:#ffd166; font-size:13px; letter-spacing:2px; margin-top:6px; text-shadow:0 0 12px rgba(255,209,102,.35); }
@@ -5256,6 +5260,16 @@ async function decodeLevel(str){
 }
 function buildShareLink(enc){ return location.origin + location.pathname + '#lvl=' + enc; }
 function levelCodeFromUrl(){ const m = (location.hash||'').match(/[#&]lvl=([^&]+)/); return m ? decodeURIComponent(m[1]) : null; }
+// ---- Challenge links: a shared level PLUS a score target to beat, carried alongside it (#lvl=…&chal=…) ----
+let challenge = null;   // active challenge target {s,w,k,o} when opened from a challenge link
+function _encChallenge(c){ try{ return _b64urlFromBytes(new TextEncoder().encode(JSON.stringify(c))); }catch(e){ return ''; } }
+function _decChallenge(str){ try{ return JSON.parse(new TextDecoder().decode(_bytesFromB64url(str))); }catch(e){ return null; } }
+function challengeFromUrl(){ const m=(location.hash||'').match(/[#&]chal=([^&]+)/); return m ? _decChallenge(decodeURIComponent(m[1])) : null; }
+async function buildChallengeLink(){
+  const lvlCode = await encodeLevel(serializeLevel());
+  const chal = _encChallenge({ s:score, w:wave, k:runKills, o:gameCfg.objective });
+  return location.origin + location.pathname + '#lvl=' + lvlCode + '&chal=' + chal;
+}
 function flashToast(msg){
   let t = document.getElementById('toast');
   if(!t){ t = document.createElement('div'); t.id='toast';
@@ -7474,7 +7488,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 68 · 2026-06-03';
+const BUILD_VERSION = 'build 69 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11031,6 +11045,29 @@ function runSummaryHTML(){   // stats line + best line for the win/death screens
   return '<div class="runStats">SCORE '+st(score,r.isBest.score)+' &nbsp;·&nbsp; KILLS '+st(runKills,r.isBest.kills)+' &nbsp;·&nbsp; ◆'+credits+'</div>'
        + '<div class="bestLine">'+(r.anyBest?'★ NEW BEST':('BEST · score '+r.best.score+' · wave '+r.best.wave+' · kills '+r.best.kills))+'</div>';
 }
+// challenge comparison line for the end screens (empty when no challenge is active)
+function challengeResultHTML(){
+  if(!challenge) return '';
+  const beat = score > (challenge.s||0);
+  return '<div class="chalLine '+(beat?'won':'')+'">'+(beat
+    ? '🏆 CHALLENGE BEATEN — topped '+(challenge.s||0)+' pts'
+    : 'CHALLENGE TARGET '+(challenge.s||0)+' pts · you scored '+score)+'</div>';
+}
+// wire the Redeploy + "Challenge a friend" buttons shared by both end screens
+function bindEndScreen(){
+  const sb=document.getElementById('startBtn'); if(sb) sb.onclick=startGame;
+  const cb=document.getElementById('chalBtn'), co=document.getElementById('chalOut');
+  if(cb) cb.onclick=async ()=>{
+    cb.textContent='Building…';
+    try{
+      const link=await buildChallengeLink(); let ok=false;
+      try{ await navigator.clipboard.writeText(link); ok=true; }catch(e){}
+      if(co){ co.value=link; if(!ok){ co.style.display='block'; co.focus(); co.select(); } }
+      cb.textContent = ok ? '🏆 Link copied ✓' : '🏆 Link below — copy it';
+      flashToast(ok ? 'Challenge link copied ✓ — send it to a friend' : 'Copy blocked — grab the link from the box');
+    }catch(e){ cb.textContent='🏆 Challenge a friend'; flashToast('Could not build a link here'); }
+  };
+}
 function gameWon(){
   if(!gameOn) return;
   stopMusic();
@@ -11046,9 +11083,12 @@ function gameWon(){
     <h1 style="color:#38f5b5;text-shadow:0 0 30px rgba(56,245,181,.5)">MISSION COMPLETE</h1>
     <div class="sub">${ gameCfg.objective==='survival' ? ('SURVIVED '+fmtClock(gameCfg.surviveSecs)) : gameCfg.objective==='extraction' ? 'EXTRACTED' : (gameCfg.winWaves+' WAVE'+(gameCfg.winWaves===1?'':'S')+' CLEARED') }</div>
     ${runSummaryHTML()}
-    <button id="startBtn">Redeploy</button>`;
+    ${challengeResultHTML()}
+    <button id="startBtn">Redeploy</button>
+    <button id="chalBtn">🏆 Challenge a friend</button>
+    <input id="chalOut" readonly>`;
   $('hud').classList.add('hidden');
-  document.getElementById('startBtn').onclick = startGame;
+  bindEndScreen();
 }
 function endGame(){
   stopMusic();
@@ -11062,9 +11102,12 @@ function endGame(){
     <h1 style="color:#ff2d55;text-shadow:0 0 30px rgba(255,45,85,.5)">TERMINATED</h1>
     <div class="sub">REACHED WAVE ${wave}</div>
     ${runSummaryHTML()}
-    <button id="startBtn">Redeploy</button>`;
+    ${challengeResultHTML()}
+    <button id="startBtn">Redeploy</button>
+    <button id="chalBtn">🏆 Challenge a friend</button>
+    <input id="chalOut" readonly>`;
   $('hud').classList.add('hidden');
-  document.getElementById('startBtn').onclick = startGame;
+  bindEndScreen();
 }
 // ---------- Multiplayer menu wiring ----------
 function genRoomCode(){ const a='abcdefghjkmnpqrstuvwxyz23456789'; let s=''; for(let i=0;i<5;i++) s+=a[Math.floor(Math.random()*a.length)]; return s; }
@@ -11154,12 +11197,14 @@ function enterEditor(){
 bindMenu();
 // If the page was opened with a shared level in the URL (#lvl=...), decode it and rebuild the scene.
 (async ()=>{
+  challenge = challengeFromUrl();   // a score target may ride alongside the level
   const code = levelCodeFromUrl();
-  if(!code) return;
-  try{
-    const lvl = await decodeLevel(code);
-    if(lvl && typeof restoreLevel==='function'){ restoreLevel(lvl); flashToast('Shared level loaded — press Deploy'); }
-  }catch(e){ console.warn('Could not load shared level from URL:', e && e.message); flashToast('Shared level link looks invalid'); }
+  if(code){
+    try{
+      const lvl = await decodeLevel(code);
+      if(lvl && typeof restoreLevel==='function'){ restoreLevel(lvl); flashToast(challenge ? ('Challenge loaded — beat '+(challenge.s||0)+' pts. Press Deploy') : 'Shared level loaded — press Deploy'); }
+    }catch(e){ console.warn('Could not load shared level from URL:', e && e.message); flashToast('Shared level link looks invalid'); }
+  } else if(challenge){ flashToast('Challenge: beat '+(challenge.s||0)+' pts. Press Deploy'); }
 })();
 };
 </script>
