@@ -6220,7 +6220,7 @@ addEventListener('keydown', e=>{
     if(idxs.length){ const at = idxs.indexOf(padForceIndex); padForceIndex = idxs[(at+1) % idxs.length]; }
     e.preventDefault(); return;
   }
-  if(e.code==='KeyP' && gameOn){ toggleEditor(); return; }   // transform editor
+  if(e.code==='KeyP' && gameOn && NET.gameMode!=='duel'){ toggleEditor(); return; }   // transform editor (disabled in 1v1)
   if(editorOpen && (e.ctrlKey||e.metaKey) && e.code==='KeyZ' && !e.shiftKey){
     const tag = (e.target && e.target.tagName) || '';
     if(tag!=='INPUT' && tag!=='TEXTAREA'){ if(typeof performUndo==='function') performUndo(); e.preventDefault(); }
@@ -7880,7 +7880,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 105 · 2026-06-04';
+const BUILD_VERSION = 'build 106 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11572,6 +11572,7 @@ function setSceneWireframe(on){
 }
 
 function toggleEditor(){
+  if(!editorOpen && NET.gameMode==='duel'){ if(typeof flashToast==='function') flashToast('Editor is disabled in 1v1'); return; }   // no mid-match settings changes / cheating
   editorOpen = !editorOpen; _editorOpenFlag = editorOpen;
   if(editorOpen){
     if(!editorEl) buildEditorPanel();
