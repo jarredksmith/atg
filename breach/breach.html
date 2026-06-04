@@ -5118,7 +5118,8 @@ function disposeDof(){
 function resizeDof(){ if(_dofScene){ disposeDof(); /* rebuilt on next render */ } }
 // Render either straight to screen, or through the DoF passes. Used by every render call site.
 function renderScene(scn, cam){
-  if(!dofEnabled || !ensureDof()){ renderer.render(scn, cam); _perfCalls=renderer.info.render.calls; _perfTris=renderer.info.render.triangles; return; }
+  const _r=perfOn?_pnow():0;
+  if(!dofEnabled || !ensureDof()){ renderer.render(scn, cam); _perfCalls=renderer.info.render.calls; _perfTris=renderer.info.render.triangles; if(perfOn)_prof.render+=_pnow()-_r; return; }
   const [w,h] = _dofSize();
   if(_dofRT.width !== w || _dofRT.height !== h){ disposeDof(); ensureDof(); }
   // 1) scene -> color+depth target
@@ -6143,11 +6144,13 @@ gun.add(vmMuzzle);
 const _muzNdc = new THREE.Vector2();
 function renderViewmodel(){
   if(activeCam() !== camera || !gun.visible) return;   // skip the editor's top-down view / when the weapon is hidden
+  const _r=perfOn?_pnow():0;
   vmCam.fov = camera.fov; vmCam.aspect = camera.aspect; vmCam.updateProjectionMatrix();
   const ac = renderer.autoClear; renderer.autoClear = false;
   renderer.clearDepth();              // keep the world's color, drop its depth so the gun draws on top
   renderer.render(vmScene, vmCam);
   renderer.autoClear = ac;
+  if(perfOn)_prof.render+=_pnow()-_r;
 }
 
 // Swap in the hosted model when it loads; fall back to the placeholder on failure/offline.
@@ -7495,7 +7498,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 73 · 2026-06-04';
+const BUILD_VERSION = 'build 74 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8609,26 +8612,32 @@ function moveHorizontal(x, z, dx, dz, feetY){
 let gameOn = false, gameOver=false;
 const clock = new THREE.Clock();
 
-// ---- Perf meter: press ` (backquote) to toggle. geom/tex climbing while idle = a leak; huge draws/tris = scene cost. ----
-let perfOn=false, _perfCalls=0, _perfTris=0, _perfAccT=0, _perfFrames=0, _perfNextDraw=0;
-function updatePerfHud(rawDt){
+// ---- Perf meter: press ` (backquote) to toggle. Shows real frame time + a render/logic phase split. ----
+let perfOn=false, _perfCalls=0, _perfTris=0, _perfFrames=0, _perfNextDraw=0, _perfPrev=0, _perfFrameAcc=0;
+const _prof = { render:0, phys:0, net:0, mini:0 };   // ms accumulated this window
+function _pnow(){ return (typeof performance!=='undefined'?performance.now():Date.now()); }
+function updatePerfHud(){
   if(!perfOn) return;
-  _perfAccT += rawDt; _perfFrames++;
-  const now = (typeof performance!=='undefined'?performance.now():Date.now());
+  const now = _pnow();
+  if(_perfPrev){ _perfFrameAcc += (now - _perfPrev); _perfFrames++; }   // REAL wall-clock frame time, not the clamped sim dt
+  _perfPrev = now;
   if(now < _perfNextDraw) return;
-  _perfNextDraw = now + 200;   // redraw ~5x/sec so the meter itself is cheap
-  const fps=_perfFrames/Math.max(1e-3,_perfAccT), ms=(_perfAccT/_perfFrames)*1000; _perfAccT=0; _perfFrames=0;
+  _perfNextDraw = now + 250;   // redraw ~4x/sec so the meter itself is cheap
+  const f = Math.max(1,_perfFrames), totMs = _perfFrameAcc/f, fps = 1000/Math.max(0.001,totMs);
+  const r=_prof.render/f, p=_prof.phys/f, n=_prof.net/f, mi=_prof.mini/f, other=Math.max(0, totMs - r - p - n - mi);
+  _perfFrameAcc=0; _perfFrames=0; _prof.render=0; _prof.phys=0; _prof.net=0; _prof.mini=0;
   const mem=renderer.info.memory, el=document.getElementById('perfHud'); if(!el) return;
-  el.innerHTML = 'FPS '+fps.toFixed(0)+'  ('+ms.toFixed(1)+' ms)<br>'
-    + 'draws '+_perfCalls+'   tris '+(_perfTris/1000).toFixed(0)+'k<br>'
-    + 'geom '+mem.geometries+'   tex '+mem.textures+'<br>'
+  el.innerHTML = 'FPS '+fps.toFixed(0)+'  ('+totMs.toFixed(1)+' ms)<br>'
+    + 'render '+r.toFixed(1)+'  phys '+p.toFixed(1)+'  net '+n.toFixed(1)+'<br>'
+    + 'minimap '+mi.toFixed(1)+'  other '+other.toFixed(1)+' ms<br>'
+    + 'draws '+_perfCalls+'   tris '+(_perfTris/1000).toFixed(0)+'k   geom '+mem.geometries+'   tex '+mem.textures+'<br>'
     + 'enemies '+enemies.length+'   mixers '+mixers.length+(dofEnabled?'   <span style="color:#ffd166">DoF ON</span>':'');
 }
 function loop(){
   requestAnimationFrame(loop);
   const rawDt = Math.min(clock.getDelta(), 0.05);
   let dt = rawDt;
-  updatePerfHud(rawDt);   // measure real frame time every frame (before any early-out)
+  updatePerfHud();   // measure real frame time every frame (before any early-out)
   if(hitStop > 0){ hitStop -= rawDt; dt = rawDt * 0.12; }   // impact freeze: slow the sim briefly (real-time countdown)
   if(!gameOn) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }
   if(shopOpen || choosingUpgrade) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }  // freeze world while shopping / picking an upgrade
@@ -8953,16 +8962,16 @@ function loop(){
   }
 
   // physics: host/solo simulate dynamic props; clients receive their transforms via the snapshot.
-  if(!editorOpen && NET.mode!=='client') updatePhysics(dt);
+  { const _a=perfOn?_pnow():0; if(!editorOpen && NET.mode!=='client') updatePhysics(dt); if(perfOn)_prof.phys+=_pnow()-_a; }
   if(typeof updateFragments==='function') updateFragments();   // advance/cleanup destruction debris
   updateLightBudget();
 
-  netTick(dt);   // send/receive networked state + smooth remote entities
+  { const _a=perfOn?_pnow():0; netTick(dt); if(perfOn)_prof.net+=_pnow()-_a; }   // send/receive networked state + smooth remote entities
 
   if(!editorOpen) resolvePlayerProps(dt);   // player collides with / gets knocked by dynamic props
 
   if(_musicOn) setMusicIntensity(musicTargetFor({ enemies: enemies.length, toSpawn, wave }));
-  drawMinimap();
+  { const _a=perfOn?_pnow():0; drawMinimap(); if(perfOn)_prof.mini+=_pnow()-_a; }
   if(editorOpen && typeof updateSelectionHighlight==='function') updateSelectionHighlight();
   renderScene(scene, activeCam());
   renderViewmodel();
