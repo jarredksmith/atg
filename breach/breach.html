@@ -154,6 +154,10 @@
   /* end-of-run summary */
   .runStats { color:#cfeee2; font-size:15px; letter-spacing:1px; margin-top:6px; }
   .bestLine { color:#ffd166; font-size:13px; letter-spacing:2px; margin-top:6px; text-shadow:0 0 12px rgba(255,209,102,.35); }
+  /* perf meter (toggle with the ` key) */
+  #perfHud { position:fixed; top:8px; left:8px; z-index:80; background:rgba(4,10,12,.82); border:1px solid rgba(56,245,181,.4);
+    color:#9fe6cf; font:12px/1.45 'Courier New',monospace; padding:7px 10px; border-radius:6px; pointer-events:none; white-space:nowrap; }
+  #perfHud.hidden { display:none; }
   /* hitmarker */
   #hitmarker { position: absolute; top:50%; left:50%; transform: translate(-50%,-50%) scale(.6);
     font-size: 30px; color:#fff; opacity:0; font-weight:700; text-shadow:0 0 8px #38f5b5; }
@@ -389,6 +393,7 @@
     <div id="mpStatus"></div>
   </div>
 </div>
+<div id="perfHud" class="hidden"></div>
 <div id="roomBadge"></div>
 <div id="padDebug"></div>
 
@@ -5011,13 +5016,14 @@ function setMusicIntensity(x){ _musicTarget=Math.max(0,Math.min(1,+x||0)); }
 function startMusic(){
   if(!actx||!musicBus||_musicOn) return; _musicOn=true; _musicInt=0; _musicStep=0;
   const freqs=[MUSIC_ROOT, MUSIC_ROOT*1.5, MUSIC_ROOT*2];
-  _musicDrone=freqs.map((f,i)=>{ const o=actx.createOscillator(); o.type=(i===2?'triangle':'sine'); o.frequency.value=f; const g=actx.createGain(); g.gain.value=(i===0?0.06:0.03); o.connect(g).connect(musicBus); o.start(); return {o,g}; });
+  _musicDrone=freqs.map((f,i)=>{ const o=actx.createOscillator(); o.type=(i===2?'triangle':'sine'); o.frequency.value=f; const g=actx.createGain(); g.gain.value=0; o.connect(g).connect(musicBus); o.start(); return {o,g}; });   // starts silent — swelled by intensity each step (no constant drone)
   _musicTimer=setInterval(_musicStepFn, 260);
 }
 function _musicStepFn(){
   if(!actx||!_musicOn) return;
   _musicInt += (_musicTarget-_musicInt)*0.12;   // smooth toward the target each step
   const inten=_musicInt, t=actx.currentTime, beat=_musicStep%4;
+  if(_musicDrone){ const dg=[0.045,0.022,0.018]; for(let i=0;i<_musicDrone.length;i++){ try{ _musicDrone[i].g.gain.setTargetAtTime(dg[i]*inten, t, 0.25); }catch(e){} } }   // drone tracks threat instead of holding a constant tone
   if(inten>0.04){
     const bf=[MUSIC_ROOT*0.5, MUSIC_ROOT*0.5, MUSIC_ROOT*0.6667, MUSIC_ROOT*0.5][beat];
     const o=actx.createOscillator(); o.type='sawtooth'; o.frequency.value=bf;
@@ -5043,11 +5049,12 @@ const SCENE_FOG = new THREE.FogExp2(0x070b10, 0.018);
 scene.fog = SCENE_FOG;
 
 const camera = new THREE.PerspectiveCamera(78, innerWidth/innerHeight, 0.1, 400);
-const renderer = new THREE.WebGLRenderer({ antialias:true });
+const IS_COARSE = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches);   // touch/mobile -> trade visual polish for frame rate
+const renderer = new THREE.WebGLRenderer({ antialias: !IS_COARSE });   // MSAA is expensive on mobile GPUs
 renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));   // cap supersampling on hi-DPI screens — big FPS win
+renderer.setPixelRatio(Math.min(devicePixelRatio, IS_COARSE ? 1.0 : 1.5));   // cap supersampling on hi-DPI screens — big FPS win (1x on mobile)
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = IS_COARSE ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 
 // ---------- Depth of field (optional post-process) ----------
@@ -5111,7 +5118,7 @@ function disposeDof(){
 function resizeDof(){ if(_dofScene){ disposeDof(); /* rebuilt on next render */ } }
 // Render either straight to screen, or through the DoF passes. Used by every render call site.
 function renderScene(scn, cam){
-  if(!dofEnabled || !ensureDof()){ renderer.render(scn, cam); return; }
+  if(!dofEnabled || !ensureDof()){ renderer.render(scn, cam); _perfCalls=renderer.info.render.calls; _perfTris=renderer.info.render.triangles; return; }
   const [w,h] = _dofSize();
   if(_dofRT.width !== w || _dofRT.height !== h){ disposeDof(); ensureDof(); }
   // 1) scene -> color+depth target
@@ -5147,7 +5154,7 @@ scene.add(worldAmbient);
 const moon = new THREE.DirectionalLight(0x9fd8ff, 0.9);
 moon.position.set(40, 80, 20);
 moon.castShadow = true;
-moon.shadow.mapSize.set(2048, 2048);
+moon.shadow.mapSize.set(IS_COARSE ? 1024 : 2048, IS_COARSE ? 1024 : 2048);
 moon.shadow.camera.near = 1; moon.shadow.camera.far = 200;
 moon.shadow.camera.left = -80; moon.shadow.camera.right = 80;
 moon.shadow.camera.top = 80; moon.shadow.camera.bottom = -80;
@@ -5945,7 +5952,7 @@ function applyWorldCfg(){
   if(typeof grid !== 'undefined' && grid) grid.visible = (worldCfg.grid !== false);
   // depth of field
   if(typeof dofEnabled !== 'undefined'){
-    dofEnabled  = (worldCfg.dof === true);
+    dofEnabled  = (worldCfg.dof === true) && !IS_COARSE;   // DoF post-process is too heavy for mobile
     dofFocus    = Math.max(2,   Math.min(300, worldCfg.dofFocus    == null ? DEFAULT_WORLD.dofFocus    : +worldCfg.dofFocus));
     dofRange    = Math.max(1,   Math.min(200, worldCfg.dofRange    == null ? DEFAULT_WORLD.dofRange    : +worldCfg.dofRange));
     dofStrength = Math.max(0.1, Math.min(4,   worldCfg.dofStrength == null ? DEFAULT_WORLD.dofStrength : +worldCfg.dofStrength));
@@ -6023,6 +6030,7 @@ addEventListener('keydown', e=>{
     return;
   }
   if(e.code==='KeyM'){ const m=toggleMute(); if(typeof flashToast==='function') flashToast(m?'Muted':'Sound on'); return; }
+  if(e.code==='Backquote'){ perfOn=!perfOn; const el=document.getElementById('perfHud'); if(el) el.classList.toggle('hidden',!perfOn); return; }
   if(editorOpen) return;   // ignore gameplay keys while editing
   if(e.code==='KeyR') reload();
   if(e.code==='KeyE') interact();
@@ -7488,7 +7496,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 69 · 2026-06-04';
+const BUILD_VERSION = 'build 72 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8602,10 +8610,26 @@ function moveHorizontal(x, z, dx, dz, feetY){
 let gameOn = false, gameOver=false;
 const clock = new THREE.Clock();
 
+// ---- Perf meter: press ` (backquote) to toggle. geom/tex climbing while idle = a leak; huge draws/tris = scene cost. ----
+let perfOn=false, _perfCalls=0, _perfTris=0, _perfAccT=0, _perfFrames=0, _perfNextDraw=0;
+function updatePerfHud(rawDt){
+  if(!perfOn) return;
+  _perfAccT += rawDt; _perfFrames++;
+  const now = (typeof performance!=='undefined'?performance.now():Date.now());
+  if(now < _perfNextDraw) return;
+  _perfNextDraw = now + 200;   // redraw ~5x/sec so the meter itself is cheap
+  const fps=_perfFrames/Math.max(1e-3,_perfAccT), ms=(_perfAccT/_perfFrames)*1000; _perfAccT=0; _perfFrames=0;
+  const mem=renderer.info.memory, el=document.getElementById('perfHud'); if(!el) return;
+  el.innerHTML = 'FPS '+fps.toFixed(0)+'  ('+ms.toFixed(1)+' ms)<br>'
+    + 'draws '+_perfCalls+'   tris '+(_perfTris/1000).toFixed(0)+'k<br>'
+    + 'geom '+mem.geometries+'   tex '+mem.textures+'<br>'
+    + 'enemies '+enemies.length+'   mixers '+mixers.length+(dofEnabled?'   <span style="color:#ffd166">DoF ON</span>':'');
+}
 function loop(){
   requestAnimationFrame(loop);
   const rawDt = Math.min(clock.getDelta(), 0.05);
   let dt = rawDt;
+  updatePerfHud(rawDt);   // measure real frame time every frame (before any early-out)
   if(hitStop > 0){ hitStop -= rawDt; dt = rawDt * 0.12; }   // impact freeze: slow the sim briefly (real-time countdown)
   if(!gameOn) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }
   if(shopOpen || choosingUpgrade) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }  // freeze world while shopping / picking an upgrade
