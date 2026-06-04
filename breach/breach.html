@@ -172,6 +172,31 @@
   #tWeapon { left:172px; bottom:28px; width:58px; height:58px; font-size:18px; }
   #tUse { left:172px; bottom:96px; width:58px; height:58px; }
 
+  /* Touch relayout: readouts move to the top band, controls own the bottom band, so nothing overlaps in landscape */
+  body.touch #stats { top: calc(12px + env(safe-area-inset-top)); left: calc(12px + env(safe-area-inset-left)); bottom:auto; min-width:0; }
+  body.touch #stats .big { font-size:24px; }
+  body.touch #ammoPanel { top: calc(84px + env(safe-area-inset-top)); left: calc(12px + env(safe-area-inset-left)); right:auto; bottom:auto; text-align:left; min-width:0; }
+  body.touch #ammoPanel .big { font-size:24px; }
+  body.touch #score { top: calc(12px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right)); }
+  body.touch #scoreVal { font-size:20px; }
+  body.touch #minimap { width:78px; height:78px; top: calc(6px + env(safe-area-inset-top)); }
+  body.touch #wavePanel { top: calc(90px + env(safe-area-inset-top)); padding:3px 12px; }
+  body.touch #waveNum { font-size:15px; letter-spacing:2px; }
+  body.touch #enemyCount { font-size:10px; margin-top:1px; }
+  /* controls, landscape-tuned + notch-safe */
+  body.touch #tStick  { left: calc(20px + env(safe-area-inset-left));  bottom: calc(20px + env(safe-area-inset-bottom)); width:120px; height:120px; }
+  body.touch #tFire   { right: calc(22px + env(safe-area-inset-right)); bottom: calc(22px + env(safe-area-inset-bottom)); width:88px; height:88px; }
+  body.touch #tAim    { right: calc(118px + env(safe-area-inset-right)); bottom: calc(40px + env(safe-area-inset-bottom)); width:62px; height:62px; }
+  body.touch #tJump   { right: calc(28px + env(safe-area-inset-right));  bottom: calc(118px + env(safe-area-inset-bottom)); width:58px; height:58px; }
+  body.touch #tReload { right: calc(106px + env(safe-area-inset-right)); bottom: calc(124px + env(safe-area-inset-bottom)); width:50px; height:50px; }
+  body.touch #tWeapon { left: calc(150px + env(safe-area-inset-left));  bottom: calc(90px + env(safe-area-inset-bottom)); width:54px; height:54px; }
+  body.touch #tUse    { left: calc(150px + env(safe-area-inset-left));  bottom: calc(26px + env(safe-area-inset-bottom)); width:54px; height:54px; }
+  body.touch #tNade   { left: calc(208px + env(safe-area-inset-left));  right:auto; bottom: calc(26px + env(safe-area-inset-bottom)); width:54px; height:54px; }
+  @media (max-height: 430px){
+    body.touch #tStick { width:104px; height:104px; }
+    body.touch .tBtn { transform: scale(0.88); }
+  }
+
   /* Overlay menu */
   #overlay {
     position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column;
@@ -325,6 +350,7 @@
   <div class="sub">// TACTICAL INCURSION PROTOCOL</div>
   <button id="startBtn">Deploy</button>
   <button id="editBtn">🛠 Build / edit level</button>
+  <button id="fsBtn" style="display:none">⛶ Fullscreen</button>
   <div id="controls">
     <b>WASD</b> move &nbsp;·&nbsp; <b>MOUSE</b> look &nbsp;·&nbsp; <b>L-CLICK</b> fire &nbsp;·&nbsp; <b>R-CLICK</b> aim &nbsp;·&nbsp; <b>SHIFT</b> sprint &nbsp;·&nbsp; <b>SPACE</b> jump<br>
     <b>R</b> reload &nbsp;·&nbsp; <b>G</b> throw grenade &nbsp;·&nbsp; <b>E</b> use station / open cache &nbsp;·&nbsp; <b>1·2·3</b> / <b>scroll</b> weapons<br>
@@ -5674,6 +5700,8 @@ let gameCfg = {
   mode: (savedLevel && savedLevel.game && savedLevel.game.mode) || (spawnMarkers.length ? 'prebuilt' : 'random'),
   winWaves: (savedLevel && savedLevel.game && savedLevel.game.winWaves!=null) ? savedLevel.game.winWaves : 0,   // 0 = endless
   upgrades: (savedLevel && savedLevel.game && savedLevel.game.upgrades!=null) ? !!savedLevel.game.upgrades : true,   // solo between-wave card picks
+  objective: (savedLevel && savedLevel.game && savedLevel.game.objective) || 'eliminate',   // 'eliminate' | 'survival'
+  surviveSecs: (savedLevel && savedLevel.game && savedLevel.game.surviveSecs!=null) ? savedLevel.game.surviveSecs : 120,
 };
 
 // ---------- Player start (where you/co-op players spawn each run; authored in-editor) ----------
@@ -5863,9 +5891,14 @@ const CROUCH_DIP = 0.8;     // how far the camera lowers when fully crouched
 const keys = {};
 // ---- Touch / mobile input ----
 let isTouch = (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches);   // primary input is a touchscreen
-addEventListener('touchstart', ()=>{ isTouch = true; }, { once:true, passive:true });          // or reveal as soon as a real touch happens
+if(isTouch && document.body) document.body.classList.add('touch');
+addEventListener('touchstart', ()=>{ isTouch = true; if(document.body) document.body.classList.add('touch'); }, { once:true, passive:true });          // or reveal as soon as a real touch happens
 let touchMoveX=0, touchMoveZ=0, touchSprint=false, touchFiring=false, touchAds=false, touchJump=false, touchLookDX=0, touchLookDY=0;
 const TOUCH_LOOK_SENS = 0.0042, TOUCH_ADS_SENS = 0.0022;
+// Pointer Lock isn't supported on iOS Safari (the methods are undefined). Route every call through these
+// guards so a missing API can't throw — touch devices steer via the on-screen look pad instead.
+function tryPointerLock(){ if(isTouch) return; const el = renderer && renderer.domElement; if(el && el.requestPointerLock){ try{ el.requestPointerLock(); }catch(e){} } }
+function safeExitPointerLock(){ if(document.exitPointerLock){ try{ document.exitPointerLock.call(document); }catch(e){} } }
 function typingInField(e){
   const t = e.target, tag = (t && t.tagName) || '';
   return tag==='INPUT' || tag==='TEXTAREA' || tag==='SELECT' || (t && t.isContentEditable);
@@ -5943,7 +5976,7 @@ addEventListener('wheel', e=>{
 let locked = false;let lookFresh = false;   // set when pointer lock is (re)acquired -> drop the first mousemove (it can carry a huge catch-up delta)
 const MAX_LOOK_DELTA = 300;   // px per mousemove event; guards against spurious spikes that snap the view
 let editorDragLook = false, editorDragMoved = false, editorDragPan = false;   // editor mouse states
-renderer.domElement.addEventListener('click', ()=>{ if(!isTouch && gameOn && !locked && !shopOpen && !editorOpen) renderer.domElement.requestPointerLock(); });
+renderer.domElement.addEventListener('click', ()=>{ if(!isTouch && gameOn && !locked && !shopOpen && !editorOpen) tryPointerLock(); });
 document.addEventListener('pointerlockchange', ()=>{ const was=locked; locked = document.pointerLockElement === renderer.domElement; if(locked && !was) lookFresh = true; });
 // Ctrl+W (crouch + forward) is the browser's close-tab shortcut and can't be cancelled from a keydown.
 // While actively playing (pointer locked), ask the browser to confirm before unloading so an accidental
@@ -6014,8 +6047,24 @@ function buildPlaceholderGun(){
 }
 let gunPlaceholder = buildPlaceholderGun();
 gun.add(gunPlaceholder);
-camera.add(gun);
 scene.add(camera);
+// Viewmodel render pass: the gun lives in its own scene + camera and is drawn AFTER the world with a
+// cleared depth buffer, so it always sits cleanly on top and can never intersect (or "cut through")
+// nearby enemies or walls. This is the standard first-person technique; it also gives the gun its own
+// lighting so it's never left in shadow/black.
+const vmScene = new THREE.Scene();
+const vmCam = new THREE.PerspectiveCamera(camera.fov, camera.aspect, 0.01, 12);
+vmScene.add(new THREE.HemisphereLight(0x9fc4d8, 0x10161b, 0.95));
+const _vmKey = new THREE.DirectionalLight(0xffffff, 1.05); _vmKey.position.set(0.5, 1.0, 0.8); vmScene.add(_vmKey);
+vmScene.add(gun);
+function renderViewmodel(){
+  if(activeCam() !== camera || !gun.visible) return;   // skip the editor's top-down view / when the weapon is hidden
+  vmCam.fov = camera.fov; vmCam.aspect = camera.aspect; vmCam.updateProjectionMatrix();
+  const ac = renderer.autoClear; renderer.autoClear = false;
+  renderer.clearDepth();              // keep the world's color, drop its depth so the gun draws on top
+  renderer.render(vmScene, vmCam);
+  renderer.autoClear = ac;
+}
 
 // Swap in the hosted model when it loads; fall back to the placeholder on failure/offline.
 // Per-weapon viewmodels: each weapon can have its own GLB + transform. Models are cached in gunModelByWep
@@ -6089,7 +6138,7 @@ const muzzle = new THREE.PointLight(0xffcf6b, 0, 8);
 muzzle.position.set(.35,-.32,-1.5); camera.add(muzzle);
 const flashMat = new THREE.MeshBasicMaterial({color:0xffe08a, transparent:true, opacity:0});
 const flash = new THREE.Mesh(new THREE.SphereGeometry(.25,8,8), flashMat);
-flash.position.set(.35,-.32,-1.5); camera.add(flash);
+flash.position.set(.35,-.32,-1.5); vmScene.add(flash);
 
 // ---------- Weapon system (data-driven) ----------
 const WEAPONS = {
@@ -6499,7 +6548,7 @@ function duelRespawn(){
   refillAllWeapons(); buffs.shield=0;
   const ov=document.getElementById('overlay'); if(ov) ov.classList.add('hidden');
   updateHUD();
-  try{ renderer.domElement.requestPointerLock(); }catch(e){}
+  try{ tryPointerLock(); }catch(e){}
 }
 function registerDuelKill(killerId, victimId){   // host only
   if(killerId==null || killerId===victimId) return;   // ignore self/unknown (e.g. fell to nothing)
@@ -6513,7 +6562,7 @@ function registerDuelKill(killerId, victimId){   // host only
 function broadcastDuelScore(){ const m={t:'score', s:NET.duelScore}; for(const id in NET.conns){ try{ NET.conns[id].send(m); }catch(e){} } }
 function broadcastDuelOver(winnerId){ const m={t:'duelOver', w:winnerId}; for(const id in NET.conns){ try{ NET.conns[id].send(m); }catch(e){} } showDuelResult(winnerId); }
 function showDuelResult(winnerId){
-  gameOn=false; gameOver=true; document.exitPointerLock();
+  gameOn=false; gameOver=true; safeExitPointerLock();
   const win = winnerId===NET.myId;
   const ov=document.getElementById('overlay'); ov.classList.remove('hidden');
   ov.innerHTML = `<h1 style="color:${win?'#38f5b5':'#ff2d55'};text-shadow:0 0 30px ${win?'rgba(56,245,181,.5)':'rgba(255,45,85,.5)'}">${win?'VICTORY':'DEFEAT'}</h1>
@@ -6540,7 +6589,7 @@ function loadLevelFromNet(level){
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns){ const g=buildSpawnMarker(sp); g.visible = editorOpen; } }
-  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; }
+  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; }
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; refreshPlayerSpawnMarker(); }
   if(level.weapons){ for(const k in WEAPONS){ const wd=level.weapons[k]; if(wd){ WEAPONS[k].model=wd.model||''; WEAPONS[k].view=wd.view||null; } } }
@@ -6880,12 +6929,12 @@ function advanceWave(){
 function closeUpgradePicker(){ const e=document.getElementById('upgrade'); if(e) e.remove(); choosingUpgrade=false; }
 function beginUpgradeChoice(){
   if(choosingUpgrade) return;
-  choosingUpgrade = true; document.exitPointerLock();
+  choosingUpgrade = true; safeExitPointerLock();
   showUpgradePicker(pickUpgrades(3), (u)=>{
     if(u && u.apply) u.apply();
     choosingUpgrade = false;
     advanceWave();
-    try{ renderer.domElement.requestPointerLock(); }catch(e){}
+    try{ tryPointerLock(); }catch(e){}
   });
 }
 function showUpgradePicker(opts, onPick){
@@ -7229,7 +7278,7 @@ function interact(){
 function openShop(chest){
   shopOpen = true; shopMode = chest;
   firing = false; ads = false;
-  document.exitPointerLock();
+  safeExitPointerLock();
   $('shopTitle').textContent = 'SUPPLY CACHE';
   $('shopSub').textContent = `Credits: ◆${credits} — press a number to buy`;
   renderShopItems(chest.items);
@@ -7269,7 +7318,7 @@ function buyFromShop(index){
 function closeShop(){
   shopOpen = false; shopMode = null;
   $('shop').classList.add('hidden');
-  if(gameOn) renderer.domElement.requestPointerLock();
+  if(gameOn) tryPointerLock();
 }
 
 // ---------- Bullets / tracers ----------
@@ -7362,7 +7411,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 59 · 2026-06-03';
+const BUILD_VERSION = 'build 65 · 2026-06-03';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8138,6 +8187,7 @@ function drawMinimap(){
 }
 
 let score = 0, wave = 1, toSpawn = 0;
+let surviveLeft = 0;   // seconds left in a Survival-objective run
 function updateHUD(){
   const w = W();
   $('hp').textContent = Math.max(0,Math.ceil(player.hp));
@@ -8249,6 +8299,23 @@ function flashDamage(){
 // ---------- Wave management ----------
 let spawnTimer = 0, chestTimer = 20;
 let spawnQueue = [];   // pending authored-spawn descriptors for the current wave
+// ---- Objective layer: the win condition + HUD label live here so game modes are pluggable.
+// 'eliminate' = clear waves (optionally a fixed count). 'survival' = outlast a countdown (endless spawns).
+function objectiveActive(){ return gameCfg.objective || 'eliminate'; }
+function startObjective(){ surviveLeft = gameCfg.surviveSecs || 0; }
+function fmtClock(s){ s=Math.max(0,Math.ceil(s)); const m=Math.floor(s/60); return m+':'+String(s%60).padStart(2,'0'); }
+function objectiveHUD(){
+  const wn=$('waveNum'); if(!wn) return;
+  if(objectiveActive()==='survival'){ wn.textContent = 'SURVIVE ' + fmtClock(surviveLeft); }
+  else { wn.textContent = (gameCfg.winWaves>0) ? ('WAVE '+wave+' / '+gameCfg.winWaves) : ('WAVE '+wave); }
+}
+function objectiveTick(dt){   // host/solo per-frame; may trigger the win
+  if(objectiveActive()==='survival'){
+    surviveLeft -= dt;
+    objectiveHUD();
+    if(surviveLeft<=0){ surviveLeft=0; if(typeof gameWon==='function') gameWon(); }
+  }
+}
 function startWave(){
   spawnQueue = [];
   if(gameCfg.mode === 'prebuilt'){
@@ -8258,7 +8325,7 @@ function startWave(){
     for(const d of randomWaveDescriptors(wave, ARENA, Math.random)) spawnQueue.push(d);
     toSpawn = spawnQueue.length;
   }
-  $('waveNum').textContent = (gameCfg.winWaves>0) ? ('WAVE '+wave+' / '+gameCfg.winWaves) : ('WAVE '+wave);
+  objectiveHUD();
   updateHUD();
 }
 
@@ -8413,8 +8480,8 @@ function loop(){
   const rawDt = Math.min(clock.getDelta(), 0.05);
   let dt = rawDt;
   if(hitStop > 0){ hitStop -= rawDt; dt = rawDt * 0.12; }   // impact freeze: slow the sim briefly (real-time countdown)
-  if(!gameOn) { pollGamepad(dt); renderScene(scene,camera); return; }
-  if(shopOpen || choosingUpgrade) { pollGamepad(dt); renderScene(scene,camera); return; }  // freeze world while shopping / picking an upgrade
+  if(!gameOn) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }
+  if(shopOpen || choosingUpgrade) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }  // freeze world while shopping / picking an upgrade
 
   pollGamepad(dt);   // controller input feeds the same flags as keyboard/mouse
   if(isTouch && !shopOpen && !editorOpen && !choosingUpgrade){   // touch look: applied here since there's no pointer lock on mobile
@@ -8615,11 +8682,12 @@ function loop(){
 
   // wave spawning (host / solo, co-op only — never in a duel, and paused while the editor is open)
   if(!isClient && !duelMode && !editorOpen){
+    objectiveTick(dt);   // survival countdown (may end the run as a win)
     if(toSpawn>0){
       spawnTimer-=dt;
       if(spawnTimer<=0){ spawnEnemy(spawnQueue.length ? spawnQueue.shift() : null); toSpawn--; spawnTimer=0.6; updateHUD(); }
     } else if(enemies.length===0){
-      if(gameCfg.winWaves>0 && wave>=gameCfg.winWaves){ if(typeof gameWon==='function') gameWon(); }
+      if(objectiveActive()==='eliminate' && gameCfg.winWaves>0 && wave>=gameCfg.winWaves){ if(typeof gameWon==='function') gameWon(); }
       else if(NET.mode==='off' && gameCfg.upgrades !== false){ beginUpgradeChoice(); }   // solo + enabled: pick an upgrade between waves
       else { wave++; SFX.wave(); startWave(); }
     }
@@ -8746,6 +8814,7 @@ function loop(){
   drawMinimap();
   if(editorOpen && typeof updateSelectionHighlight==='function') updateSelectionHighlight();
   renderScene(scene, activeCam());
+  renderViewmodel();
 }
 loop();
 
@@ -9163,7 +9232,7 @@ function serializeLevel(){
     props:   propModels.filter(Boolean).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
-    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false },
+    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs },
     dmgNum:  { on: dmgNumCfg.on !== false, size: dmgNumCfg.size, hit: dmgNumCfg.hitColor, kill: dmgNumCfg.killColor },
     pstart:  { x: playerSpawn.x, z: playerSpawn.z, yaw: playerSpawn.yaw },
     grenade: { model: GRENADE.model, scale: GRENADE.scale, radius: GRENADE.radius, damage: GRENADE.damage, fuse: GRENADE.fuse, throwForce: GRENADE.throwForce },
@@ -9202,7 +9271,7 @@ function restoreLevel(level){
   // enemy spawns
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns){ const g=buildSpawnMarker(sp); g.visible = editorOpen; } }
-  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; }
+  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; }
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; } else { playerSpawn.x=0; playerSpawn.z=0; playerSpawn.yaw=0; }
   refreshPlayerSpawnMarker();
@@ -9668,7 +9737,24 @@ function renderEditorFields(){
 
     // ===== GAME / WAVES section =====
     const gHost = gameHost || worldHost;
-    hint(gHost, '<b>Wave mode</b>', '2px 0 4px');
+    // objective selector — the win condition for the level
+    hint(gHost, '<b>Objective</b>', '2px 0 4px');
+    const obRow=document.createElement('div'); obRow.className='row2';
+    const obBtn=(key,txt)=>{ const b=document.createElement('button'); b.textContent=txt; if(objectiveActive()===key){ b.style.background='rgba(56,245,181,0.30)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); gameCfg.objective=key; renderEditorFields(); }; return b; };
+    obRow.appendChild(obBtn('eliminate','🎯 Eliminate')); obRow.appendChild(obBtn('survival','⏱ Survival'));
+    gHost.appendChild(obRow);
+    hint(gHost, '', '3px 0 6px').textContent = (objectiveActive()==='survival')
+      ? 'Survival: hostiles spawn endlessly — outlast the countdown to win.'
+      : 'Eliminate: clear waves of hostiles (optionally a fixed number to win).';
+    if(objectiveActive()==='survival'){
+      const svLab=document.createElement('label'); svLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;';
+      const svSp=document.createElement('span'); svSp.textContent='Survive seconds'; svSp.style.minWidth='118px';
+      const svN=document.createElement('input'); svN.type='number'; svN.min='10'; svN.max='999'; svN.step='5'; svN.value=gameCfg.surviveSecs; svN.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+      svN.onchange=()=>{ gameCfg.surviveSecs=Math.max(10,Math.min(999,parseInt(svN.value,10)||120)); renderEditorFields(); };
+      svLab.appendChild(svSp); svLab.appendChild(svN); gHost.appendChild(svLab);
+      hint(gHost, '', '2px 0 0').textContent = 'Outlast '+fmtClock(gameCfg.surviveSecs)+' to win. Spawn style + upgrades below still apply.';
+    }
+    hint(gHost, '<b>Wave mode</b>', '12px 0 4px');
     const gmRow=document.createElement('div'); gmRow.className='row2';
     const gmBtn=(key,txt)=>{ const b=document.createElement('button'); b.textContent=txt; if(gameCfg.mode===key){ b.style.background='rgba(56,245,181,0.30)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); gameCfg.mode=key; renderEditorFields(); }; return b; };
     gmRow.appendChild(gmBtn('random','🎲 Random')); gmRow.appendChild(gmBtn('prebuilt','🗺 Pre-built'));
@@ -10724,7 +10810,7 @@ function toggleEditor(){
     if(!editorEl) buildEditorPanel();
     editorEl.style.display = 'block';
     firing=false; ads=false;
-    document.exitPointerLock();
+    safeExitPointerLock();
     teardownInstancing();   // show individual props so they can be edited/selected
     if(typeof syncSelToIdx==='function') syncSelToIdx();   // start each editor session with a clean (single) selection
     destroyPhysWorld();     // edit plain meshes; snap dynamic props back to their authored transform
@@ -10766,6 +10852,7 @@ function startGame(){
   WEAPONS.smg.mag=40; WEAPONS.smg.reserve=120;
   WEAPONS.shotgun.mag=6; WEAPONS.shotgun.reserve=24;
   reloading=false; score=0; wave=1; credits=0; grenadeCount=0;
+  if(typeof startObjective==='function') startObjective();   // reset survival timer for this run
   if(NET.gameMode==='duel') credits = 150;   // starting stipend so the economy is usable from the first life in 1v1
   buffs.damage=0; buffs.speed=0; buffs.shield=0;
   // reset aim/shake state
@@ -10803,12 +10890,12 @@ function startGame(){
   updateHUD(); updateBuffs(0);
   resetDynamicProps();        // dynamic objects return to their authored spots each deploy
   teardownInstancing(); buildInstancing();   // (re)collapse repeated static shapes for play
-  renderer.domElement.requestPointerLock();
+  tryPointerLock();
 }
 function gameWon(){
   if(!gameOn) return;
   if(typeof closeUpgradePicker==='function') closeUpgradePicker();
-  gameOn=false; gameOver=true; document.exitPointerLock();
+  gameOn=false; gameOver=true; safeExitPointerLock();
   firing=false; ads=false; shopOpen=false;
   if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false);
   $('shop').classList.add('hidden');
@@ -10816,13 +10903,13 @@ function gameWon(){
   const ov=$('overlay'); ov.classList.remove('hidden');
   ov.innerHTML = `
     <h1 style="color:#38f5b5;text-shadow:0 0 30px rgba(56,245,181,.5)">MISSION COMPLETE</h1>
-    <div class="sub">${gameCfg.winWaves} WAVE${gameCfg.winWaves===1?'':'S'} CLEARED &nbsp;·&nbsp; SCORE ${score} &nbsp;·&nbsp; ◆${credits}</div>
+    <div class="sub">${ gameCfg.objective==='survival' ? ('SURVIVED '+fmtClock(gameCfg.surviveSecs)) : (gameCfg.winWaves+' WAVE'+(gameCfg.winWaves===1?'':'S')+' CLEARED') } &nbsp;·&nbsp; SCORE ${score} &nbsp;·&nbsp; ◆${credits}</div>
     <button id="startBtn">Redeploy</button>`;
   $('hud').classList.add('hidden');
   document.getElementById('startBtn').onclick = startGame;
 }
 function endGame(){
-  gameOn=false; gameOver=true; document.exitPointerLock(); if(typeof closeUpgradePicker==='function') closeUpgradePicker();
+  gameOn=false; gameOver=true; safeExitPointerLock(); if(typeof closeUpgradePicker==='function') closeUpgradePicker();
   firing=false; ads=false; shopOpen=false;
   editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
   $('shop').classList.add('hidden');
@@ -10862,6 +10949,19 @@ function startJoin(){
   ensurePeerJS(ok=>{ if(!ok){ netStatus('Could not load networking (are you offline?)'); return; } clientStart(code); });
 }
 let MENU_HTML = null;
+// ---- Fullscreen (desktop launch-screen option; iOS Safari has no element fullscreen) ----
+function fsElement(){ return document.fullscreenElement || document.webkitFullscreenElement || null; }
+function fsSupported(){ const el=document.documentElement; return !isTouch && !!(el.requestFullscreen || el.webkitRequestFullscreen) && document.fullscreenEnabled !== false; }
+function toggleFullscreen(){
+  try{
+    if(fsElement()){ (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document); }
+    else { const el=document.documentElement; const r=(el.requestFullscreen || el.webkitRequestFullscreen || function(){}).call(el); if(r && r.catch) r.catch(()=>{}); }
+  }catch(e){}
+}
+function syncFsBtn(){ const b=document.getElementById('fsBtn'); if(b) b.textContent = fsElement() ? '⛶ Exit fullscreen' : '⛶ Fullscreen'; }
+document.addEventListener('fullscreenchange', syncFsBtn);
+document.addEventListener('webkitfullscreenchange', syncFsBtn);
+
 function bindMenu(){
   if(MENU_HTML===null){ const ov0=document.getElementById('overlay'); if(ov0) MENU_HTML = ov0.innerHTML; }   // capture the full start menu once, before any death/win screen overwrites it
   const sb=document.getElementById('startBtn'); if(sb) sb.onclick=startGame;
@@ -10869,6 +10969,8 @@ function bindMenu(){
   const h=document.getElementById('mpHost'); if(h) h.onclick=startHost;
   const d=document.getElementById('mpDuel'); if(d) d.onclick=startDuel;
   const j=document.getElementById('mpJoin'); if(j) j.onclick=startJoin;
+  const fs=document.getElementById('fsBtn');
+  if(fs){ if(!fsSupported()){ fs.style.display='none'; } else { fs.style.display=''; fs.onclick=toggleFullscreen; syncFsBtn(); } }   // desktop only
 }
 // Restore the full start page (Deploy / Build / multiplayer) — used by the editor's "Main menu" button.
 function showMainMenu(){
@@ -10886,7 +10988,7 @@ function editorToMenu(){
   gameOn=false; gameOver=false; shopOpen=false; firing=false; ads=false;
   wave=0; toSpawn=0; spawnQueue=[];
   enemies.slice().forEach(e=>{ scene.remove(e.mesh); if(e.mesh.userData.mixer){ const mi=mixers.indexOf(e.mesh.userData.mixer); if(mi>=0) mixers.splice(mi,1); } }); enemies.length=0;
-  document.exitPointerLock();
+  safeExitPointerLock();
   $('shop').classList.add('hidden');
   const pr=$('prompt'); if(pr) pr.style.display='none';
   showMainMenu();
