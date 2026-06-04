@@ -247,7 +247,7 @@
   #mpBox { margin-top: 16px; display:flex; flex-direction:column; align-items:center; gap:8px; }
   .mpHead { color:#7fa99c; font:600 12px/1 'Chakra Petch',ui-monospace,monospace; letter-spacing:4px; margin-bottom:4px; }
   .mpRow { display:flex; gap:8px; align-items:center; justify-content:center; }
-  #mpBox input { background:#05080b; color:#cfeee6; border:1px solid rgba(56,245,181,0.35); border-radius:6px; padding:8px 10px; font:13px ui-monospace,monospace; text-align:center; }
+  #mpModal input { background:#05080b; color:#cfeee6; border:1px solid rgba(56,245,181,0.35); border-radius:6px; padding:8px 10px; font:13px ui-monospace,monospace; text-align:center; }
   #mpName { width:200px; }
   #mpCode { width:90px; text-transform:lowercase; }
   #mpKills { width:54px; text-align:center; }
@@ -308,6 +308,51 @@
     text-transform:uppercase; transition: border-color .2s, color .2s, background .2s;
   }
   .pBtnGhost:hover { border-color:#38f5b5; color:#eafff7; background:rgba(56,245,181,.1); }
+  /* shared modal (instructions / multiplayer) */
+  .modalBack {
+    position:fixed; inset:0; z-index:60; display:flex; align-items:center; justify-content:center;
+    padding:20px; background:rgba(3,5,8,.78); backdrop-filter:blur(4px);
+  }
+  .modalCard {
+    position:relative; width:100%; max-width:560px; max-height:86vh; overflow:auto;
+    background:rgba(8,16,18,.94); border:1px solid rgba(56,245,181,.22); border-radius:16px;
+    padding:30px 34px; box-shadow:0 24px 70px rgba(0,0,0,.55);
+  }
+  .modalCard h2 {
+    font-family:'Major Mono Display',monospace; color:#38f5b5; letter-spacing:6px; font-size:24px;
+    margin:0 0 16px; text-shadow:0 0 22px rgba(56,245,181,.4); text-align:center;
+  }
+  .modalClose {
+    position:absolute; top:12px; right:14px; width:32px; height:32px; border-radius:8px; cursor:pointer;
+    background:rgba(255,255,255,.04); border:1px solid rgba(56,245,181,.25); color:#9fe6cf; font-size:14px;
+    transition:border-color .15s,color .15s;
+  }
+  .modalClose:hover { border-color:#38f5b5; color:#eafff7; }
+  #instrModal #controls { margin:0; color:#9fe6cf; font-size:13px; letter-spacing:1.5px; line-height:2; text-align:center; }
+  #instrModal #controls b { color:#38f5b5; }
+  .mpSection {
+    margin:10px 0; padding:13px 15px; border-radius:10px; text-align:left;
+    background:rgba(255,255,255,.02); border:1px solid rgba(255,255,255,.06); border-left:3px solid #2a6e5c;
+  }
+  .mpSection.coop { border-left-color:#38f5b5; background:rgba(56,245,181,.05); }
+  .mpSection.duel { border-left-color:#ff5da2; background:rgba(255,93,162,.05); }
+  .mpSection .mpTitle { font:700 14px 'Chakra Petch',ui-monospace,monospace; letter-spacing:3px; margin-bottom:3px; }
+  .mpSection.coop .mpTitle { color:#38f5b5; }
+  .mpSection.duel .mpTitle { color:#ff5da2; }
+  .mpSection.join .mpTitle { color:#9fd8ff; }
+  .mpSection .mpDesc { color:#7fa99c; font-size:12px; line-height:1.5; margin-bottom:10px; }
+  .mpSection .mpActions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .mpHint { color:#5a7d72; font-size:12px; }
+  .mpBtn.coop { background:rgba(56,245,181,0.18); }
+  .mpBtn.duel { color:#ff8fc2; border-color:rgba(255,93,162,0.5); background:rgba(255,93,162,0.14); }
+  .mpBtn.duel:hover { background:rgba(255,93,162,0.26); }
+  .pauseAudio {
+    width:100%; display:flex; flex-direction:column; gap:8px; margin:4px 0; padding:12px 14px;
+    border:1px solid rgba(56,245,181,.14); border-radius:10px; background:rgba(8,16,18,.5);
+  }
+  .pauseAudio .paLbl { display:flex; gap:9px; align-items:center; color:#9fe6cf; font-size:12px; letter-spacing:1px; }
+  .pauseAudio .paLbl input[type=range] { flex:1; accent-color:#38f5b5; }
+  .pauseAudio .paLbl input[type=checkbox] { width:15px; height:15px; accent-color:#38f5b5; cursor:pointer; }
 
   /* Buff indicators */
   #buffs { position:absolute; top:90px; left:26px; display:flex; flex-direction:column; gap:8px; }
@@ -423,37 +468,48 @@
   <div class="sub">// TACTICAL INCURSION PROTOCOL</div>
   <button id="startBtn">Deploy</button>
   <div class="menuBtns">
+    <button id="mpOpenBtn" class="secBtn">🌐 Multiplayer</button>
     <button id="editBtn" class="secBtn">🛠 Build / edit level</button>
+    <button id="instrBtn" class="secBtn">❔ Instructions</button>
     <button id="fsBtn" class="secBtn" style="display:none">⛶ Fullscreen</button>
   </div>
-  <div id="controls" class="menuCard">
-    <b>WASD</b> move &nbsp;·&nbsp; <b>MOUSE</b> look &nbsp;·&nbsp; <b>L-CLICK</b> fire &nbsp;·&nbsp; <b>R-CLICK</b> aim &nbsp;·&nbsp; <b>SHIFT</b> sprint &nbsp;·&nbsp; <b>SPACE</b> jump<br>
-    <b>R</b> reload &nbsp;·&nbsp; <b>G</b> throw grenade &nbsp;·&nbsp; <b>E</b> use station / open cache &nbsp;·&nbsp; <b>1·2·3</b> / <b>scroll</b> weapons<br>
-    <span style="color:#ffd166">Kill enemies for ◆ credits — spend them at the ammo station and supply caches</span><br>
-    <span style="color:#38c8f5">Press <b>P</b> in-game to open the model transform editor</span>
-    <div id="padNote" style="display:none;margin-top:10px;color:#38f5b5">🎮 Controller connected — <b>L-stick</b> move · <b>R-stick</b> look · <b>RT</b> fire · <b>LT</b> aim · <b>A</b> jump · <b>X</b> reload · <b>Y</b> use · <b>B</b> grenade · <b>LB/RB</b> weapons · <b>L3</b> sprint · <b>any button</b> deploys &nbsp; <span style="color:#5a7d72">(press <b>`</b> for controller test)</span></div>
-  </div>
-  <div id="audioCtl" style="margin-top:12px;font-size:12px;color:#9fe6cf;display:flex;gap:16px;align-items:center;justify-content:center;flex-wrap:wrap">
-    <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="muteCb" style="width:14px;height:14px;accent-color:#38f5b5;cursor:pointer">Mute</label>
-    <label style="display:flex;gap:7px;align-items:center">🔊<input type="range" id="volMaster" min="0" max="100" value="80" style="width:96px;accent-color:#38f5b5"></label>
-    <label style="display:flex;gap:7px;align-items:center">♪<input type="range" id="volMusic" min="0" max="100" value="60" style="width:96px;accent-color:#38f5b5"></label>
-    <label style="display:flex;gap:7px;align-items:center">🔫<input type="range" id="volSfx" min="0" max="100" value="100" style="width:96px;accent-color:#38f5b5"></label>
-  </div>
-  <div id="mpBox" class="menuCard">
-    <div class="mpHead">CO-OP · VERSUS</div>
-    <div class="mpRow"><input id="mpName" type="text" maxlength="14" placeholder="your name" autocomplete="off"></div>
-    <div class="mpRow">
-      <button id="mpHost" class="mpBtn">Host co-op</button>
+</div>
+
+<!-- Instructions modal -->
+<div id="instrModal" class="modalBack hidden">
+  <div class="modalCard">
+    <button class="modalClose" data-close="instrModal">✕</button>
+    <h2>INSTRUCTIONS</h2>
+    <div id="controls">
+      <b>WASD</b> move &nbsp;·&nbsp; <b>MOUSE</b> look &nbsp;·&nbsp; <b>L-CLICK</b> fire &nbsp;·&nbsp; <b>R-CLICK</b> aim &nbsp;·&nbsp; <b>SHIFT</b> sprint &nbsp;·&nbsp; <b>SPACE</b> jump<br>
+      <b>R</b> reload &nbsp;·&nbsp; <b>G</b> throw grenade &nbsp;·&nbsp; <b>E</b> use station / open cache &nbsp;·&nbsp; <b>1·2·3</b> / <b>scroll</b> weapons<br>
+      <b>ESC</b> pause &nbsp;·&nbsp; <b>P</b> open the in-game model/transform editor<br>
+      <span style="color:#ffd166">Kill enemies for ◆ credits — spend them at the ammo station and supply caches.</span>
+      <div id="padNote" style="display:none;margin-top:10px;color:#38f5b5">🎮 Controller connected — <b>L-stick</b> move · <b>R-stick</b> look · <b>RT</b> fire · <b>LT</b> aim · <b>A</b> jump · <b>X</b> reload · <b>Y</b> use · <b>B</b> grenade · <b>LB/RB</b> weapons · <b>L3</b> sprint · <b>any button</b> deploys &nbsp; <span style="color:#5a7d72">(press <b>`</b> for controller test)</span></div>
     </div>
-    <div class="mpRow">
-      <button id="mpDuel" class="mpBtn">Host 1v1 duel</button>
-      <span style="color:#5a7d72;font-size:12px">first to</span>
-      <input id="mpKills" type="number" min="1" max="99" value="5" style="width:54px">
-      <span style="color:#5a7d72;font-size:12px">kills</span>
+  </div>
+</div>
+
+<!-- Multiplayer modal -->
+<div id="mpModal" class="modalBack hidden">
+  <div class="modalCard">
+    <button class="modalClose" data-close="mpModal">✕</button>
+    <h2>MULTIPLAYER</h2>
+    <div class="mpRow" style="margin-bottom:6px"><input id="mpName" type="text" maxlength="14" placeholder="your name" autocomplete="off"></div>
+    <div class="mpSection coop">
+      <div class="mpTitle">🤝 CO-OP</div>
+      <div class="mpDesc">Team up and clear waves together. You host — friends join with your room code.</div>
+      <div class="mpActions"><button id="mpHost" class="mpBtn coop">Host co-op</button></div>
     </div>
-    <div class="mpRow">
-      <input id="mpCode" type="text" maxlength="5" placeholder="room code" autocomplete="off">
-      <button id="mpJoin" class="mpBtn">Join</button>
+    <div class="mpSection duel">
+      <div class="mpTitle">⚔ 1 v 1 DUEL</div>
+      <div class="mpDesc">Head-to-head arena fight — first to the kill target wins.</div>
+      <div class="mpActions"><button id="mpDuel" class="mpBtn duel">Host duel</button><span class="mpHint">first to</span><input id="mpKills" type="number" min="1" max="99" value="5"><span class="mpHint">kills</span></div>
+    </div>
+    <div class="mpSection join">
+      <div class="mpTitle">→ JOIN A ROOM</div>
+      <div class="mpDesc">Got a code from the host? Drop in to their co-op or duel.</div>
+      <div class="mpActions"><input id="mpCode" type="text" maxlength="5" placeholder="room code" autocomplete="off"><button id="mpJoin" class="mpBtn">Join</button></div>
     </div>
     <div id="mpStatus"></div>
   </div>
@@ -465,6 +521,12 @@
   <div class="pauseCard">
     <h2>PAUSED</h2>
     <button id="pauseResume" class="pBtnPrimary">Resume</button>
+    <div class="pauseAudio">
+      <label class="paLbl"><input type="checkbox" id="muteCb"> Mute all</label>
+      <label class="paLbl">🔊 Master<input type="range" id="volMaster" min="0" max="100" value="80"></label>
+      <label class="paLbl">♪ Music<input type="range" id="volMusic" min="0" max="100" value="60"></label>
+      <label class="paLbl">🔫 SFX<input type="range" id="volSfx" min="0" max="100" value="100"></label>
+    </div>
     <button id="pauseExit" class="pBtnGhost">⌂ Exit to main menu</button>
   </div>
 </div>
@@ -7649,7 +7711,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 88 · 2026-06-04';
+const BUILD_VERSION = 'build 89 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11241,6 +11303,7 @@ function toggleEditor(){
 
 // ---------- Game state ----------
 function startGame(){
+  closeModal('mpModal'); closeModal('instrModal');   // drop any open menu modal as the world starts
   initAudio();
   startMusic();
   player.hp=100; player.maxHp=100; run = { ...RUN0 }; if(typeof closeUpgradePicker==='function') closeUpgradePicker(); player.pos.set(playerSpawn.x, EYE, playerSpawn.z); player.vel.set(0,0,0);
@@ -11458,10 +11521,8 @@ function bindMenu(){
   const j=document.getElementById('mpJoin'); if(j) j.onclick=startJoin;
   const fs=document.getElementById('fsBtn');
   if(fs){ if(!fsSupported()){ fs.style.display='none'; } else { fs.style.display=''; fs.onclick=toggleFullscreen; syncFsBtn(); } }   // desktop only
-  const mc=document.getElementById('muteCb'); if(mc){ mc.checked=audioSettings.muted; mc.onchange=()=>{ audioSettings.muted=mc.checked; applyAudioSettings(); saveAudioSettings(); }; }
-  const vM=document.getElementById('volMaster'); if(vM){ vM.value=Math.round(audioSettings.master*100); vM.oninput=()=>{ audioSettings.master=(+vM.value)/100; applyAudioSettings(); saveAudioSettings(); }; }
-  const vMu=document.getElementById('volMusic'); if(vMu){ vMu.value=Math.round(audioSettings.music*100); vMu.oninput=()=>{ audioSettings.music=(+vMu.value)/100; applyAudioSettings(); saveAudioSettings(); }; }
-  const vS=document.getElementById('volSfx'); if(vS){ vS.value=Math.round(audioSettings.sfx*100); vS.oninput=()=>{ audioSettings.sfx=(+vS.value)/100; applyAudioSettings(); saveAudioSettings(); initAudio(); SFX.coin(); }; }   // tick so the level is audible while dragging
+  const ib=document.getElementById('instrBtn'); if(ib) ib.onclick=()=>openModal('instrModal');
+  const mo=document.getElementById('mpOpenBtn'); if(mo) mo.onclick=()=>openModal('mpModal');
 }
 // Restore the full start page (Deploy / Build / multiplayer) — used by the editor's "Main menu" button.
 function showMainMenu(){
@@ -11519,6 +11580,17 @@ function bindPauseMenu(){
   const pb=document.getElementById('pauseBtn'); if(pb) pb.onclick=openPause;
   const r=document.getElementById('pauseResume'); if(r) r.onclick=resumeGame;
   const x=document.getElementById('pauseExit'); if(x) x.onclick=exitToMenu;
+  const mc=document.getElementById('muteCb'); if(mc){ mc.checked=audioSettings.muted; mc.onchange=()=>{ audioSettings.muted=mc.checked; applyAudioSettings(); saveAudioSettings(); }; }
+  const vM=document.getElementById('volMaster'); if(vM){ vM.value=Math.round(audioSettings.master*100); vM.oninput=()=>{ audioSettings.master=(+vM.value)/100; applyAudioSettings(); saveAudioSettings(); }; }
+  const vMu=document.getElementById('volMusic'); if(vMu){ vMu.value=Math.round(audioSettings.music*100); vMu.oninput=()=>{ audioSettings.music=(+vMu.value)/100; applyAudioSettings(); saveAudioSettings(); }; }
+  const vS=document.getElementById('volSfx'); if(vS){ vS.value=Math.round(audioSettings.sfx*100); vS.oninput=()=>{ audioSettings.sfx=(+vS.value)/100; applyAudioSettings(); saveAudioSettings(); initAudio(); SFX.coin(); }; }   // tick so it's audible while dragging
+}
+// Generic modal open/close (instructions + multiplayer). Backdrop click or ✕ closes.
+function openModal(id){ const m=document.getElementById(id); if(m) m.classList.remove('hidden'); }
+function closeModal(id){ const m=document.getElementById(id); if(m) m.classList.add('hidden'); }
+function bindModals(){
+  document.querySelectorAll('.modalClose').forEach(b=>{ b.onclick=()=>closeModal(b.dataset.close); });
+  document.querySelectorAll('.modalBack').forEach(m=>{ m.addEventListener('click', e=>{ if(e.target===m) m.classList.add('hidden'); }); });
 }
 // suspended (wave 0) while the editor is open; closing it (P) begins wave 1. Solo only.
 function enterEditor(){
@@ -11531,6 +11603,7 @@ function enterEditor(){
 }
 bindMenu();
 bindPauseMenu();
+bindModals();
 // If the page was opened with a shared level in the URL (#lvl=...), decode it and rebuild the scene.
 (async ()=>{
   challenge = challengeFromUrl();   // a score target may ride alongside the level
