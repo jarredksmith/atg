@@ -154,6 +154,19 @@
   /* end-of-run summary */
   .runStats { color:#cfeee2; font-size:15px; letter-spacing:1px; margin-top:6px; }
   .bestLine { color:#ffd166; font-size:13px; letter-spacing:2px; margin-top:6px; text-shadow:0 0 12px rgba(255,209,102,.35); }
+  /* custom-sounds panel */
+  #soundPanel { position:fixed; inset:0; z-index:75; display:flex; flex-direction:column; align-items:center; justify-content:flex-start;
+    gap:12px; padding:28px 16px; box-sizing:border-box; background:rgba(4,8,11,.95); color:#cfeee2; font-family:'Courier New',monospace; overflow-y:auto; }
+  #soundPanel.hidden { display:none; }
+  #soundPanel h2 { color:#38f5b5; letter-spacing:5px; margin:4px 0; font-size:22px; text-shadow:0 0 18px rgba(56,245,181,.4); }
+  #soundPanel .sndHint { color:#7fae9f; font-size:12px; line-height:1.5; max-width:560px; text-align:center; }
+  #sndList { display:flex; flex-direction:column; gap:7px; width:min(620px,94vw); margin-top:6px; }
+  #soundPanel .sndRow { display:flex; align-items:center; gap:8px; }
+  #soundPanel .sndLab { width:140px; flex:none; color:#9fe6cf; font-size:12px; letter-spacing:1px; text-align:right; }
+  #soundPanel .sndRow input { flex:1; min-width:0; background:#0c1418; border:1px solid #2a3a42; color:#cfeee2; border-radius:5px; padding:6px 8px; font:12px 'Courier New',monospace; }
+  #soundPanel .sndRow button { flex:none; width:30px; background:rgba(56,245,181,.16); border:1px solid #38f5b5; color:#eafff7; border-radius:5px; cursor:pointer; padding:5px 0; }
+  #soundPanel .sndStat { flex:none; width:16px; text-align:center; font-size:13px; color:#5a7d72; }
+  #soundPanel #sndClose { margin-top:14px; padding:10px 30px; background:rgba(56,245,181,.18); border:1px solid #38f5b5; color:#eafff7; border-radius:6px; font:15px 'Courier New',monospace; letter-spacing:2px; cursor:pointer; }
   /* perf meter (toggle with the ` key) */
   #perfHud { position:fixed; bottom:8px; left:8px; z-index:80; background:rgba(4,10,12,.82); border:1px solid rgba(56,245,181,.4);
     color:#9fe6cf; font:12px/1.45 'Courier New',monospace; padding:7px 10px; border-radius:6px; pointer-events:none; white-space:nowrap; }
@@ -363,6 +376,7 @@
   <button id="startBtn">Deploy</button>
   <button id="editBtn">🛠 Build / edit level</button>
   <button id="fsBtn" style="display:none">⛶ Fullscreen</button>
+  <button id="soundBtn">🎧 Custom sounds</button>
   <div id="controls">
     <b>WASD</b> move &nbsp;·&nbsp; <b>MOUSE</b> look &nbsp;·&nbsp; <b>L-CLICK</b> fire &nbsp;·&nbsp; <b>R-CLICK</b> aim &nbsp;·&nbsp; <b>SHIFT</b> sprint &nbsp;·&nbsp; <b>SPACE</b> jump<br>
     <b>R</b> reload &nbsp;·&nbsp; <b>G</b> throw grenade &nbsp;·&nbsp; <b>E</b> use station / open cache &nbsp;·&nbsp; <b>1·2·3</b> / <b>scroll</b> weapons<br>
@@ -374,6 +388,7 @@
     <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="muteCb" style="width:14px;height:14px;accent-color:#38f5b5;cursor:pointer">Mute</label>
     <label style="display:flex;gap:7px;align-items:center">🔊<input type="range" id="volMaster" min="0" max="100" value="80" style="width:96px;accent-color:#38f5b5"></label>
     <label style="display:flex;gap:7px;align-items:center">♪<input type="range" id="volMusic" min="0" max="100" value="60" style="width:96px;accent-color:#38f5b5"></label>
+    <label style="display:flex;gap:7px;align-items:center">🔫<input type="range" id="volSfx" min="0" max="100" value="100" style="width:96px;accent-color:#38f5b5"></label>
   </div>
   <div id="mpBox">
     <div class="mpRow"><input id="mpName" type="text" maxlength="14" placeholder="your name" autocomplete="off"></div>
@@ -394,6 +409,12 @@
   </div>
 </div>
 <div id="perfHud" class="hidden"></div>
+<div id="soundPanel" class="hidden">
+  <h2>CUSTOM SOUNDS</h2>
+  <div class="sndHint">Paste a direct link to an <b>mp3 / wav / ogg</b> for any event, then press ▶ to test. Saved on this device. The host must allow cross-origin (CORS) loading, or the sample won't decode and the built-in sound is used instead.</div>
+  <div id="sndList"></div>
+  <button id="sndClose">Done</button>
+</div>
 <div id="roomBadge"></div>
 <div id="padDebug"></div>
 
@@ -4948,7 +4969,7 @@ const THREE = window.THREE;
 
 // ---------- Audio (procedural, no files — works fully offline) ----------
 let actx = null;
-function initAudio(){ if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)(); if(actx.state==='suspended') actx.resume(); buildAudioBuses(); }
+function initAudio(){ if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)(); if(actx.state==='suspended') actx.resume(); buildAudioBuses(); preloadCustomSounds(); }
 function tone({freq=440, type='sine', dur=0.1, vol=0.2, slideTo=null, attack=0.005}={}){
   if(!actx) return;
   const t = actx.currentTime;
@@ -4976,31 +4997,58 @@ function noise({dur=0.15, vol=0.3, filterFreq=1200, type='lowpass'}={}){
   src.start(t);
 }
 const SFX = {
-  shoot(){ tone({freq:320, type:'square', dur:0.08, vol:0.12, slideTo:120}); noise({dur:0.07, vol:0.18, filterFreq:2200, type:'highpass'}); },
-  reload(){ tone({freq:200, type:'square', dur:0.06, vol:0.1}); setTimeout(()=>tone({freq:300, type:'square', dur:0.08, vol:0.1}),550); },
-  hit(){ tone({freq:600, type:'sine', dur:0.05, vol:0.12, slideTo:900}); },
+  shoot(){ if(playSample((audioSettings.sounds.shoot||{})[curWep])) return; tone({freq:320, type:'square', dur:0.08, vol:0.12, slideTo:120}); noise({dur:0.07, vol:0.18, filterFreq:2200, type:'highpass'}); },
+  reload(){ if(playSample(audioSettings.sounds.reload)) return; tone({freq:200, type:'square', dur:0.06, vol:0.1}); setTimeout(()=>tone({freq:300, type:'square', dur:0.08, vol:0.1}),550); },
+  hit(){ if(playSample(audioSettings.sounds.hit)) return; tone({freq:600, type:'sine', dur:0.05, vol:0.12, slideTo:900}); },
   shatter(){ noise({dur:0.22, vol:0.22, filterFreq:3000, type:'highpass'}); tone({freq:220, type:'square', dur:0.12, vol:0.13, slideTo:70}); setTimeout(()=>noise({dur:0.12, vol:0.12, filterFreq:1600}),40); },
   puff(){ noise({dur:0.18, vol:0.14, filterFreq:700, type:'lowpass'}); tone({freq:160, type:'sine', dur:0.1, vol:0.08, slideTo:90}); },
-  kill(){ tone({freq:160, type:'sawtooth', dur:0.3, vol:0.16, slideTo:50}); noise({dur:0.25, vol:0.15, filterFreq:800}); },
-  hurt(){ tone({freq:140, type:'sawtooth', dur:0.2, vol:0.2, slideTo:70}); },
+  kill(){ if(playSample(audioSettings.sounds.kill)) return; tone({freq:160, type:'sawtooth', dur:0.3, vol:0.16, slideTo:50}); noise({dur:0.25, vol:0.15, filterFreq:800}); },
+  hurt(){ if(playSample(audioSettings.sounds.hurt)) return; tone({freq:140, type:'sawtooth', dur:0.2, vol:0.2, slideTo:70}); },
   pickup(){ tone({freq:520, type:'triangle', dur:0.1, vol:0.18, slideTo:780}); setTimeout(()=>tone({freq:780, type:'triangle', dur:0.12, vol:0.18, slideTo:1100}),90); },
   empty(){ tone({freq:180, type:'square', dur:0.04, vol:0.08}); },
   wave(){ tone({freq:300, type:'triangle', dur:0.15, vol:0.16, slideTo:450}); setTimeout(()=>tone({freq:450, type:'triangle', dur:0.2, vol:0.16, slideTo:600}),140); },
   jump(){ tone({freq:280, type:'sine', dur:0.12, vol:0.1, slideTo:420}); },
-  coin(){ tone({freq:880, type:'square', dur:0.06, vol:0.1, slideTo:1320}); setTimeout(()=>tone({freq:1320, type:'square', dur:0.08, vol:0.1}),55); },
+  coin(){ if(playSample(audioSettings.sounds.coin)) return; tone({freq:880, type:'square', dur:0.06, vol:0.1, slideTo:1320}); setTimeout(()=>tone({freq:1320, type:'square', dur:0.08, vol:0.1}),55); },
   buy(){ tone({freq:660, type:'triangle', dur:0.08, vol:0.16, slideTo:990}); setTimeout(()=>tone({freq:990, type:'triangle', dur:0.1, vol:0.16, slideTo:1320}),80); },
   deny(){ tone({freq:160, type:'sawtooth', dur:0.12, vol:0.14, slideTo:90}); },
   throw(){ tone({freq:220, type:'sine', dur:0.18, vol:0.12, slideTo:380}); },
-  explode(){ tone({freq:90, type:'sawtooth', dur:0.5, vol:0.25, slideTo:35}); noise({dur:0.45, vol:0.3, filterFreq:600}); },
+  explode(){ if(playSample(audioSettings.sounds.explode)) return; tone({freq:90, type:'sawtooth', dur:0.5, vol:0.25, slideTo:35}); noise({dur:0.45, vol:0.3, filterFreq:600}); },
   power(){ tone({freq:440, type:'triangle', dur:0.1, vol:0.16, slideTo:660}); setTimeout(()=>tone({freq:660, type:'triangle', dur:0.1, vol:0.16, slideTo:880}),90); setTimeout(()=>tone({freq:880, type:'triangle', dur:0.14, vol:0.16, slideTo:1320}),180); },
   swap(){ tone({freq:300, type:'square', dur:0.05, vol:0.08, slideTo:500}); },
 };
+
+// ---------- Custom sound samples (optional): load mp3/wav/ogg from a URL and play it instead of the synth ----------
+// URLs are stored in audioSettings.sounds (per device). When a sample is loaded for an event we play it;
+// otherwise we fall back to the procedural SFX above. Samples route through sfxBus, so the SFX volume applies.
+const _soundBuffers = {};   // url -> AudioBuffer | 'loading' | 'error'
+function _emptySounds(){ return { shoot:{}, reload:'', explode:'', coin:'', hit:'', kill:'', hurt:'' }; }
+function _sanitizeSounds(s){ const o=_emptySounds(); if(s && typeof s==='object'){ if(s.shoot && typeof s.shoot==='object'){ for(const k in s.shoot){ if(typeof s.shoot[k]==='string') o.shoot[k]=s.shoot[k]; } } for(const k of ['reload','explode','coin','hit','kill','hurt']){ if(typeof s[k]==='string') o[k]=s[k]; } } return o; }
+function loadSound(url, cb){
+  if(!url){ cb && cb('empty'); return; }
+  if(!actx) initAudio();
+  if(!actx){ cb && cb('error'); return; }
+  const cur=_soundBuffers[url];
+  if(cur && cur.duration!==undefined){ cb && cb('ok'); return; }
+  if(cur==='loading'){ cb && cb('loading'); return; }
+  _soundBuffers[url]='loading'; cb && cb('loading');
+  fetch(url).then(r=>{ if(!r.ok) throw 0; return r.arrayBuffer(); })
+    .then(ab=>new Promise((res,rej)=>{ const pr=actx.decodeAudioData(ab,res,rej); if(pr && pr.then) pr.then(res,rej); }))
+    .then(buf=>{ _soundBuffers[url]=buf; cb && cb('ok'); })
+    .catch(()=>{ _soundBuffers[url]='error'; cb && cb('error'); });
+}
+function playSample(url){
+  if(!url || !actx || !sfxBus) return false;
+  const buf=_soundBuffers[url];
+  if(!(buf && buf.duration!==undefined)){ loadSound(url); return false; }   // not decoded yet -> let the synth play this time
+  try{ const src=actx.createBufferSource(); src.buffer=buf; src.connect(sfxBus); src.start(); return true; }catch(e){ return false; }
+}
+function preloadCustomSounds(){ const s=audioSettings && audioSettings.sounds; if(!s) return; if(s.shoot){ for(const k in s.shoot) loadSound(s.shoot[k]); } for(const k of ['reload','explode','coin','hit','kill','hurt']) loadSound(s[k]); }
 
 // ---------- Audio buses + persisted volume settings (separate from level data) ----------
 let masterBus=null, sfxBus=null, musicBus=null;
 const AUDIO_KEY='breach_audio';
 function _clamp01(x){ x=+x; return isFinite(x)?Math.max(0,Math.min(1,x)):0; }
-function loadAudioSettings(){ try{ const j=JSON.parse(localStorage.getItem(AUDIO_KEY)); if(j) return { master:_clamp01(j.master!=null?j.master:0.8), music:_clamp01(j.music!=null?j.music:0.6), sfx:_clamp01(j.sfx!=null?j.sfx:1), muted:!!j.muted }; }catch(e){} return { master:0.8, music:0.6, sfx:1, muted:false }; }
+function loadAudioSettings(){ try{ const j=JSON.parse(localStorage.getItem(AUDIO_KEY)); if(j) return { master:_clamp01(j.master!=null?j.master:0.8), music:_clamp01(j.music!=null?j.music:0.6), sfx:_clamp01(j.sfx!=null?j.sfx:1), muted:!!j.muted, sounds:_sanitizeSounds(j.sounds) }; }catch(e){} return { master:0.8, music:0.6, sfx:1, muted:false, sounds:_emptySounds() }; }
 const audioSettings = loadAudioSettings();
 function saveAudioSettings(){ try{ localStorage.setItem(AUDIO_KEY, JSON.stringify(audioSettings)); }catch(e){} }
 function applyAudioSettings(){ if(!actx||!masterBus) return; const t=actx.currentTime; masterBus.gain.setTargetAtTime(audioSettings.muted?0:audioSettings.master, t, 0.02); musicBus.gain.setTargetAtTime(audioSettings.music, t, 0.02); sfxBus.gain.setTargetAtTime(audioSettings.sfx, t, 0.02); }
@@ -7498,7 +7546,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 74 · 2026-06-04';
+const BUILD_VERSION = 'build 76 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11181,18 +11229,51 @@ function syncFsBtn(){ const b=document.getElementById('fsBtn'); if(b) b.textCont
 document.addEventListener('fullscreenchange', syncFsBtn);
 document.addEventListener('webkitfullscreenchange', syncFsBtn);
 
+// ---- Custom Sounds panel: per-weapon shoot samples + reload/explosion/coin/hit/kill/hurt ----
+function _sndRow(label, get, set){
+  const row=document.createElement('div'); row.className='sndRow';
+  const lab=document.createElement('label'); lab.className='sndLab'; lab.textContent=label;
+  const inp=document.createElement('input'); inp.type='text'; inp.spellcheck=false; inp.placeholder='https://…/sound.mp3'; inp.value=get()||'';
+  const test=document.createElement('button'); test.textContent='▶'; test.title='Test';
+  const st=document.createElement('span'); st.className='sndStat';
+  const mark=(s)=>{ st.textContent = s==='ok'?'✓':s==='loading'?'…':s==='error'?'✗':''; st.style.color = s==='error'?'#ff6b6b':(s==='ok'?'#38f5b5':'#5a7d72'); };
+  inp.onchange=()=>{ const u=inp.value.trim(); set(u); saveAudioSettings(); if(u){ initAudio(); loadSound(u, mark); } else mark(''); };
+  test.onclick=()=>{ const u=inp.value.trim(); if(!u){ return; } initAudio(); loadSound(u, (s)=>{ mark(s); if(s==='ok'){ playSample(u); } else if(s==='loading'){ setTimeout(()=>{ if(playSample(u)) mark('ok'); }, 500); } }); };
+  const u0=get(); if(u0){ const b=_soundBuffers[u0]; if(b && b.duration!==undefined) mark('ok'); else { mark('loading'); loadSound(u0, mark); } }
+  row.appendChild(lab); row.appendChild(inp); row.appendChild(test); row.appendChild(st);
+  return row;
+}
+function openSounds(){
+  const list=$('sndList'); if(!list) return;
+  if(!audioSettings.sounds) audioSettings.sounds=_emptySounds();
+  if(!audioSettings.sounds.shoot) audioSettings.sounds.shoot={};
+  list.innerHTML='';
+  const W=(typeof WEAPONS!=='undefined')?WEAPONS:{};
+  for(const k of Object.keys(W)){
+    const name=(W[k] && W[k].name) ? W[k].name : k;
+    list.appendChild(_sndRow('Shoot · '+name, ()=>audioSettings.sounds.shoot[k], v=>{ if(v) audioSettings.sounds.shoot[k]=v; else delete audioSettings.sounds.shoot[k]; }));
+  }
+  for(const [lab,key] of [['Reload','reload'],['Grenade explosion','explode'],['Coin pickup','coin'],['Hit marker','hit'],['Enemy kill','kill'],['Player hurt','hurt']]){
+    list.appendChild(_sndRow(lab, ()=>audioSettings.sounds[key], v=>{ audioSettings.sounds[key]=v; }));
+  }
+  const cl=$('sndClose'); if(cl) cl.onclick=closeSounds;
+  $('soundPanel').classList.remove('hidden');
+}
+function closeSounds(){ const p=$('soundPanel'); if(p) p.classList.add('hidden'); }
+
 function bindMenu(){
-  if(MENU_HTML===null){ const ov0=document.getElementById('overlay'); if(ov0) MENU_HTML = ov0.innerHTML; }   // capture the full start menu once, before any death/win screen overwrites it
-  const sb=document.getElementById('startBtn'); if(sb) sb.onclick=startGame;
+  if(MENU_HTML===null){ const ov0=document.getElementById('overlay'); if(ov0) MENU_HTML = ov0.innerHTML; }   // capture the full start menu once, before any death/win screen overwrites it  const sb=document.getElementById('startBtn'); if(sb) sb.onclick=startGame;
   const eb=document.getElementById('editBtn'); if(eb) eb.onclick=enterEditor;
   const h=document.getElementById('mpHost'); if(h) h.onclick=startHost;
   const d=document.getElementById('mpDuel'); if(d) d.onclick=startDuel;
   const j=document.getElementById('mpJoin'); if(j) j.onclick=startJoin;
   const fs=document.getElementById('fsBtn');
   if(fs){ if(!fsSupported()){ fs.style.display='none'; } else { fs.style.display=''; fs.onclick=toggleFullscreen; syncFsBtn(); } }   // desktop only
+  const sndb=document.getElementById('soundBtn'); if(sndb) sndb.onclick=openSounds;
   const mc=document.getElementById('muteCb'); if(mc){ mc.checked=audioSettings.muted; mc.onchange=()=>{ audioSettings.muted=mc.checked; applyAudioSettings(); saveAudioSettings(); }; }
   const vM=document.getElementById('volMaster'); if(vM){ vM.value=Math.round(audioSettings.master*100); vM.oninput=()=>{ audioSettings.master=(+vM.value)/100; applyAudioSettings(); saveAudioSettings(); }; }
   const vMu=document.getElementById('volMusic'); if(vMu){ vMu.value=Math.round(audioSettings.music*100); vMu.oninput=()=>{ audioSettings.music=(+vMu.value)/100; applyAudioSettings(); saveAudioSettings(); }; }
+  const vS=document.getElementById('volSfx'); if(vS){ vS.value=Math.round(audioSettings.sfx*100); vS.oninput=()=>{ audioSettings.sfx=(+vS.value)/100; applyAudioSettings(); saveAudioSettings(); initAudio(); SFX.coin(); }; }   // tick so the level is audible while dragging
 }
 // Restore the full start page (Deploy / Build / multiplayer) — used by the editor's "Main menu" button.
 function showMainMenu(){
