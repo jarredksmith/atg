@@ -6485,7 +6485,7 @@ const enemyGeo = new THREE.CapsuleGeometry(0.7, 1.4, 4, 10);
 // AI / collision / networking code is unchanged — only the visual child swaps.
 // Per-enemy-type model config: each type (grunt/runner/brute/gunner) gets its own GLB + framing.
 // Back-compat: an old single-model level (savedLevel.enemy) is applied to every type.
-const ENEMY_MODEL0 = { url:'', scale:1, face:0, cr:0, yoff:0, xoff:0, zoff:0, clip:'' };   // clip='' = auto-pick idle/walk/run
+const ENEMY_MODEL0 = { url:'', scale:1, face:0, cr:0, ch:0, yoff:0, xoff:0, zoff:0, clip:'' };   // clip='' = auto-pick idle/walk/run
 const enemyModels = {};
 const enemyModelClips = {};   // typeKey -> animation clip names discovered when its model loads
 function enemyModelCfg(typeKey){
@@ -6496,7 +6496,7 @@ function enemyModelCfg(typeKey){
 function applyEnemyModelData(perType, legacy){   // perType = new map, legacy = old single config
   for(const k of ENEMY_TYPE_KEYS){
     const src = (perType && perType[k]) || legacy || {};
-    enemyModels[k] = { url: src.url||'', scale: src.scale||1, face: src.face||0, cr: src.cr||0, yoff: src.yoff||0, xoff: src.xoff||0, zoff: src.zoff||0, clip: src.clip||'' };
+    enemyModels[k] = { url: src.url||'', scale: src.scale||1, face: src.face||0, cr: src.cr||0, ch: src.ch||0, yoff: src.yoff||0, xoff: src.xoff||0, zoff: src.zoff||0, clip: src.clip||'' };
   }
 }
 applyEnemyModelData(savedLevel && savedLevel.enemies, savedLevel && savedLevel.enemy);
@@ -6505,6 +6505,22 @@ const _seatInv = new THREE.Matrix4();
 function swapEnemyModel(url, typeKey){ enemyModelCfg(typeKey||editorEnemyType).url = (url||'').trim(); }
 
 // Build the visual for one enemy body Group: the uploaded GLB (animated) if set, else the capsule.
+// An invisible cylinder shots are raycast against. Skinned-mesh raycasting uses the BIND pose (geometry
+// collapses toward the feet/origin once animated), so we hit this proxy instead — consistent + tunable.
+const _ENEMY_PROXY_MAT = new THREE.MeshBasicMaterial(); _ENEMY_PROXY_MAT.visible = false;   // not drawn, still raycastable
+function setEnemyHitProxy(body, r, h){
+  r = Math.max(0.2, r||0.9); h = Math.max(0.4, h||2.6);
+  if(body.userData.hitProxy){ const old=body.userData.hitProxy; if(old.geometry) old.geometry.dispose(); body.remove(old); }
+  const px = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 10), _ENEMY_PROXY_MAT);
+  px.position.set(0, h/2 - 1.4, 0);   // body sits at world y=1.4, so the cylinder spans floor -> h
+  px.userData.isHitProxy = true;
+  body.add(px); body.userData.hitProxy = px; body.userData.colR = r; body.userData.colH = h;
+  // keep the editor's green preview cylinder in lockstep with the real collider
+  if(body===previewEnemy && previewCollider && previewCollider.userData.cyl){
+    const c = previewCollider.userData.cyl; if(c.geometry) c.geometry.dispose();
+    c.geometry = new THREE.CylinderGeometry(r, r, h, 22, 1, true); c.position.y = h/2 - 1.4;
+  }
+}
 // modelY offsets a feet-origin GLB up so it isn't half-buried; the capsule is centered so it uses 0.
 function buildEnemyVisual(body){
   // clear any previous visual
@@ -6518,6 +6534,8 @@ function buildEnemyVisual(body){
     eye.position.set(0, 0.7, -0.55);   // slightly forward so you can read facing
     cap.add(eye);
     body.add(cap); body.userData.visual = cap; body.userData.modelY = 0; body.userData.hasModel = false; body.userData.footprint = mc.cr > 0 ? mc.cr : 0.9*ty.scale;
+    cap.traverse(o=>{ o.raycast = ()=>{}; });   // shots test the hit-proxy cylinder, not the capsule mesh
+    setEnemyHitProxy(body, body.userData.footprint, mc.ch > 0 ? mc.ch : 2.8*ty.scale);   // capsule is 2.8u tall
   };
   if(!mc.url){ useCapsule(); return; }
   useCapsule();   // show the capsule immediately; replace it when the GLB arrives
@@ -6538,9 +6556,12 @@ function buildEnemyVisual(body){
         const cx = (lbox.min.x+lbox.max.x)/2, cz = (lbox.min.z+lbox.max.z)/2;
         model.position.set(model.position.x - cx + mc.xoff, model.position.y - lbox.min.y - 1.4 + mc.yoff, model.position.z - cz + mc.zoff);
         body.userData.footprint = Math.max(0.9, Math.min(3.5, Math.max((lbox.max.x-lbox.min.x)/2, (lbox.max.z-lbox.min.z)/2)));   // collision radius from the real footprint
+        body.userData.autoColH = Math.max(0.6, lbox.max.y - lbox.min.y);   // real model height -> default collider height
       }
       if(mc.cr > 0) body.userData.footprint = mc.cr;   // manual collider-radius override
       body.userData.visual = model;
+      model.traverse(o=>{ if(o.isMesh) o.raycast = ()=>{}; });   // shots test the hit-proxy cylinder, not the (skinned) model mesh
+      setEnemyHitProxy(body, body.userData.footprint, mc.ch > 0 ? mc.ch : (body.userData.autoColH || 2.6));
       body.userData.modelY = 0;
       body.userData.hasModel = true; body.userData.faceOff = mc.face;   // per-enemy facing nudge, read by the lookAt code
       model.userData.seat = { p:model.position.clone(), q:model.quaternion.clone(), s:model.scale.clone() };   // locked each frame so animation root-motion/scale tracks can't fling or shrink the model
@@ -6564,7 +6585,9 @@ function buildPreviewEnemy(typeKey){
   const body = new THREE.Group(); body.position.copy(PREVIEW_POS); body.userData.enemyType = tk;
   buildEnemyVisual(body); scene.add(body); previewEnemy = body;
   const grp = new THREE.Group(); grp.position.copy(PREVIEW_POS);
-  const cyl = new THREE.Mesh(new THREE.CylinderGeometry(1,1,2.8,22,1,true), new THREE.MeshBasicMaterial({ color:0x38f5b5, wireframe:true, transparent:true, opacity:0.55, depthTest:false }));
+  const pr = body.userData.colR || 0.9, ph = body.userData.colH || 2.8;
+  const cyl = new THREE.Mesh(new THREE.CylinderGeometry(pr,pr,ph,22,1,true), new THREE.MeshBasicMaterial({ color:0x38f5b5, wireframe:true, transparent:true, opacity:0.55, depthTest:false }));
+  cyl.position.y = ph/2 - 1.4;   // grp sits at y=1.4; span floor -> height (updated live by setEnemyHitProxy when a model loads)
   cyl.renderOrder = 9100; grp.add(cyl); grp.userData.cyl = cyl;
   scene.add(grp); previewCollider = grp;
 }
@@ -7496,6 +7519,7 @@ let editorHideEnemies = true;  // hide enemies while editing (default on)
 // the editor is closed so you can walk around and watch the boxes.
 let editorShowColliders = false;
 const colliderVizGroup = new THREE.Group(); colliderVizGroup.renderOrder = 999; scene.add(colliderVizGroup);
+const _enemyVizMat = new THREE.MeshBasicMaterial({ color:0xff5da2, wireframe:true, transparent:true, opacity:0.7, depthTest:false });   // enemy hit-cylinder overlay
 let colliderVizTimer = 0;
 function clearColliderViz(){ for(const c of colliderVizGroup.children){ if(c.geometry) c.geometry.dispose(); } colliderVizGroup.clear(); }
 function updateColliderViz(dt){
@@ -7505,6 +7529,12 @@ function updateColliderViz(dt){
   const add = (b, col)=>{ if(!b || !isFinite(b.min.x) || b.isEmpty()) return; const h=new THREE.Box3Helper(b.clone(), col); if(h.material){ h.material.depthTest=false; h.material.transparent=true; h.material.opacity=0.85; } colliderVizGroup.add(h); };
   for(const c of colliders){ const bs = c.userData && (c.userData.boxes || (c.userData.box && [c.userData.box])); if(!bs) continue; for(const b of bs) add(b, 0x38f5b5); }
   for(const o of dynamicProps){ if(o.userData && o.userData.box) add(o.userData.box, 0xffaa33); }
+  // enemy damage hit-volumes (the cylinder shots actually test against) — pink, distinct from props
+  const enemyBodies = (typeof clientMode!=='undefined' && clientMode) ? Object.values(NET.enemyMeshes||{}).map(o=>o.mesh) : enemies.map(e=>e.mesh);
+  for(const m of enemyBodies){ const u=m && m.userData; if(!u || !u.hitProxy) continue; m.updateMatrixWorld(true);
+    const wf = new THREE.Mesh(new THREE.CylinderGeometry(u.colR, u.colR, u.colH, 16, 1, true), _enemyVizMat);
+    wf.position.setFromMatrixPosition(u.hitProxy.matrixWorld); wf.renderOrder = 999; colliderVizGroup.add(wf);
+  }
 }
 const TOP_VIEW_H = 200;   // orthographic camera height (ortho, so this only affects clipping, not zoom)
 // Orthographic top-down camera (locked straight down), with pan + zoom for placement.
@@ -7723,7 +7753,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 97 · 2026-06-04';
+const BUILD_VERSION = 'build 98 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9667,7 +9697,7 @@ function serializeLevel(){
     world:   Object.assign({}, worldCfg),
     chest:   { url: chestModelUrl, scale: chestModelScale },
     coin:    { url: coinCfg.url, scale: coinCfg.scale, on: coinCfg.on !== false },
-    enemies: ENEMY_TYPE_KEYS.reduce((a,k)=>{ const m=enemyModelCfg(k); a[k]={ url:m.url, scale:m.scale, face:m.face, cr:m.cr, yoff:m.yoff, xoff:m.xoff, zoff:m.zoff, clip:m.clip }; return a; }, {}),
+    enemies: ENEMY_TYPE_KEYS.reduce((a,k)=>{ const m=enemyModelCfg(k); a[k]={ url:m.url, scale:m.scale, face:m.face, cr:m.cr, ch:m.ch, yoff:m.yoff, xoff:m.xoff, zoff:m.zoff, clip:m.clip }; return a; }, {}),
     props:   propModels.filter(Boolean).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
@@ -10150,6 +10180,15 @@ function renderEditorFields(){
     ecR.addEventListener('mousedown',()=>pushUndoSnapshot()); ecN.addEventListener('focus',()=>pushUndoSnapshot());
     ecR.oninput=()=>applyEc(ecR.value); ecN.onchange=()=>applyEc(ecN.value);
     ecRow.appendChild(ecSp); ecRow.appendChild(ecR); ecRow.appendChild(ecN); eHost.appendChild(ecRow);
+    // collider HEIGHT — the vertical span of the damage hit-cylinder (0 = auto-fit to the model's height)
+    const chRow=document.createElement('label'); chRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
+    const chSp=document.createElement('span'); chSp.textContent='Collider height'; chSp.style.minWidth='86px';
+    const chR=document.createElement('input'); chR.type='range'; chR.min='0'; chR.max='8'; chR.step='0.1'; chR.value=mc.ch; chR.style.cssText='flex:1;accent-color:#ff8a5b;';
+    const chN=document.createElement('input'); chN.type='number'; chN.min='0'; chN.max='8'; chN.step='0.1'; chN.value=mc.ch; chN.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+    const applyCh=(v)=>{ const m=Math.max(0,Math.min(8,Math.round((parseFloat(v)||0)*10)/10)); chR.value=m; chN.value=m; mc.ch=m; refreshEnemyVisuals(); };
+    chR.addEventListener('mousedown',()=>pushUndoSnapshot()); chN.addEventListener('focus',()=>pushUndoSnapshot());
+    chR.oninput=()=>applyCh(chR.value); chN.onchange=()=>applyCh(chN.value);
+    chRow.appendChild(chSp); chRow.appendChild(chR); chRow.appendChild(chN); eHost.appendChild(chRow);
     // vertical offset — raise/lower the visual model to fix hovering or sinking
     const eyRow=document.createElement('label'); eyRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
     const eySp=document.createElement('span'); eySp.textContent='Vertical offset'; eySp.style.minWidth='86px';
@@ -10180,7 +10219,7 @@ function renderEditorFields(){
     const af=document.createElement('button'); af.textContent='⤢ Auto-fit size';
     af.onclick=()=>{ if(!previewEnemy) buildPreviewEnemy(editorEnemyType); const ok=autoFitEnemyScale(); const note=$('edCopied'); if(note) note.textContent = ok ? ('Auto-fit ✓ scale '+(+enemyModelCfg(editorEnemyType).scale).toFixed(2)) : 'Load a model + open the preview first (give it a moment to load).'; renderEditorFields(); };
     pvRow.appendChild(pv); pvRow.appendChild(af); eHost.appendChild(pvRow);
-    hint(eHost, '', '3px 0 0').textContent = 'Preview shows the model + its collider (green cylinder) at a fixed spot in front of the arena centre. Offsets re-center an off-pivot model; Vertical offset fixes hover/sink; Collider radius 0 = auto-fit. Auto-fit size rescales the model to ~human height.';
+    hint(eHost, '', '3px 0 0').textContent = 'Preview shows the model + its damage collider (green cylinder). Collider radius 0 = auto-fit width; Collider height 0 = auto-fit to the model. Toggle "Show colliders" (Game tab) to see the pink hit-cylinders on live enemies during play. Offsets re-center an off-pivot model; Vertical offset fixes hover/sink.';
 
     // ===== GAME / WAVES section =====
     const gHost = gameHost || worldHost;
