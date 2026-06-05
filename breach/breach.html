@@ -265,18 +265,18 @@
   .mpBtn:hover { background:rgba(56,245,181,0.22); }
   #mpStatus { color:#ffd166; font-size:12px; letter-spacing:1px; min-height:16px; }
   #roomBadge { display:none; position:fixed; top:12px; left:50%; transform:translateX(-50%); z-index:40; background:rgba(5,10,12,0.7); color:#38f5b5; border:1px solid rgba(56,245,181,0.4); border-radius:6px; padding:4px 12px; font:600 13px ui-monospace,monospace; letter-spacing:3px; pointer-events:none; }
-  #scoreboard { display:none; position:fixed; top:42px; right:10px; z-index:41; background:rgba(5,10,12,0.72); border:1px solid rgba(56,245,181,0.28); border-radius:8px; padding:6px 8px; min-width:150px; max-width:220px; pointer-events:none; font:600 12px ui-monospace,monospace; }
+  #scoreboard { display:none; position:fixed; top:206px; left:18px; z-index:41; background:rgba(5,10,12,0.72); border:1px solid rgba(56,245,181,0.28); border-radius:8px; padding:6px 8px; min-width:150px; max-width:220px; pointer-events:none; font:600 12px ui-monospace,monospace; }
   #scoreboard .sbTitle { color:#7fdcc4; font-size:9px; letter-spacing:2px; opacity:.85; margin:0 2px 5px; text-transform:uppercase; }
   #scoreboard .sbRow { display:flex; justify-content:space-between; gap:10px; padding:2px 4px; border-radius:4px; color:#cfeee2; }
   #scoreboard .sbRow.me { background:rgba(56,245,181,0.16); color:#eafff7; }
   #scoreboard .sbName { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #scoreboard .sbK { color:#ffd166; }
-  body.touch #scoreboard { top:38px; min-width:118px; font-size:11px; padding:4px 6px; }
-  #killFeed { position:fixed; top:210px; left:18px; z-index:41; display:flex; flex-direction:column; gap:3px; pointer-events:none; font:600 12px ui-monospace,monospace; }
+  body.touch #scoreboard { top: calc(60px + env(safe-area-inset-top)); right: calc(8px + env(safe-area-inset-right)); left:auto; min-width:118px; font-size:11px; padding:4px 6px; }
+  #killFeed { position:fixed; bottom:104px; left:18px; z-index:41; display:flex; flex-direction:column; gap:3px; pointer-events:none; font:600 12px ui-monospace,monospace; }
   #killFeed .kfRow { background:rgba(5,10,12,0.62); border:1px solid rgba(56,245,181,0.18); border-radius:5px; padding:2px 7px; opacity:1; transition:opacity .8s; display:flex; align-items:center; gap:6px; white-space:nowrap; }
   #killFeed .kfRow.kfFade { opacity:0; }
   #killFeed .kfArrow { color:#ff6b6b; }
-  body.touch #killFeed { top:82px; left:8px; font-size:10px; gap:2px; }
+  body.touch #killFeed { top: calc(140px + env(safe-area-inset-top)); left: calc(8px + env(safe-area-inset-left)); bottom:auto; font-size:10px; gap:2px; }
   #padDebug { display:none; position:fixed; top:12px; left:12px; z-index:60; background:rgba(5,10,12,0.85); color:#9fe6cf; border:1px solid rgba(56,245,181,0.4); border-radius:6px; padding:8px 12px; font:11px/1.5 ui-monospace,monospace; white-space:pre; pointer-events:none; max-width:340px; }
   #controls b { color:#a8d6c8; }
   .hidden { display:none !important; }
@@ -6897,6 +6897,7 @@ const NET = {
 };
 // duel-only local state
 let duelDead = false, duelRespawnTimer = 0, duelInvuln = 0, lastDamagedBy = null;
+let _kcInit=false; const _kcLook=new THREE.Vector3(), _kcTarget=new THREE.Vector3();   // death-killcam pan state
 const DUEL_SPAWNS = [ {x:-50,z:-50,yaw:Math.PI*0.25}, {x:50,z:50,yaw:Math.PI*1.25}, {x:-50,z:50,yaw:Math.PI*0.75}, {x:50,z:-50,yaw:-Math.PI*0.25} ];
 const DUEL_KILL_CREDITS = 75;   // credits earned per kill in 1v1 (so loot crates + ammo station are usable)
 function duelSpawnFor(id){ return DUEL_SPAWNS[id % DUEL_SPAWNS.length]; }
@@ -7028,14 +7029,19 @@ function applyPvpDamage(dmg, from){
   player.hp -= dmg; lastDamagedBy = (from!=null?from:lastDamagedBy); flashDamage(); SFX.hurt(); updateHUD();
   if(player.hp<=0) duelDie();
 }
+function updateRespawnOverlay(){
+  const sub=document.getElementById('respawnSub'); if(!sub) return;
+  const by = (lastDamagedBy!=null && lastDamagedBy!==NET.myId) ? killName(lastDamagedBy) : null;
+  sub.textContent = (by?('Eliminated by '+by+'  \u00b7  '):'')+'respawning in '+Math.max(1,Math.ceil(duelRespawnTimer))+'\u2026';
+}
 function duelDie(){
-  duelDead = true; duelRespawnTimer = 2.5;
+  duelDead = true; duelRespawnTimer = 2.5; _kcInit=false;
   netDeath(player.pos.x, 0, player.pos.z);   // burst where I fell, mirrored to all peers
   // report the kill to the host (the host is authoritative for score)
   if(NET.mode==='host'){ registerDuelKill(lastDamagedBy, NET.myId); }
   else { try{ NET.conn && NET.conn.send({t:'died', by:lastDamagedBy}); }catch(e){} }
   const ov=document.getElementById('overlay'); if(ov){ ov.classList.remove('hidden');
-    ov.innerHTML='<h1 style="color:#ff2d55;text-shadow:0 0 30px rgba(255,45,85,.5)">ELIMINATED</h1><div class="sub">respawning…</div>'; }
+    ov.innerHTML='<h1 style="color:#ff2d55;text-shadow:0 0 30px rgba(255,45,85,.5)">ELIMINATED</h1><div class="sub" id="respawnSub">respawning\u2026</div>'; }
 }
 function duelRespawn(){
   duelDead = false; duelInvuln = 1.2;
@@ -8036,7 +8042,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 113 · 2026-06-04';
+const BUILD_VERSION = 'build 115 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9373,6 +9379,20 @@ function loop(){
       camera.rotation.z  = (Math.random()-0.5) * 0.06 * s;
       shake = Math.max(0, shake - dt*2.2);
     } else { shake = 0; camera.rotation.z = 0; }
+  }
+
+  // PvP death killcam — while waiting to respawn, pan the view onto whoever killed you
+  if(duelDead && pvpMode()){
+    gun.visible=false;
+    const rp = (lastDamagedBy!=null && lastDamagedBy!==NET.myId) ? NET.players[lastDamagedBy] : null;
+    if(rp && rp.mesh){
+      camera.position.set(player.pos.x, player.pos.y+1.4, player.pos.z);
+      if(!_kcInit){ const _d=new THREE.Vector3(); camera.getWorldDirection(_d); _kcLook.copy(camera.position).addScaledVector(_d,10); _kcInit=true; }
+      const tp=rp.mesh.position; _kcTarget.set(tp.x, tp.y+1.4, tp.z);
+      _kcLook.lerp(_kcTarget, Math.min(1, dt*5));
+      camera.lookAt(_kcLook);
+    }
+    updateRespawnOverlay();
   }
 
   // weapon sway + recoil + reload dip; ADS physically slides the gun to screen center
