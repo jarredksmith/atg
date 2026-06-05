@@ -8222,7 +8222,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 138 · 2026-06-04';
+const BUILD_VERSION = 'build 139 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12300,7 +12300,8 @@ function _sndRow(label, get, set){
 // Token auth as a GET param (no preflight) + trailing slash avoids the redirect-CORS issue; the API and
 // the preview files both serve Access-Control-Allow-Origin:* so decodeAudioData works. Get a free token
 // at freesound.org/apiv2/apply. Previews don't need OAuth2 (only downloading originals does).
-function fsGetKey(){ try{ return (localStorage.getItem('fs_api_key')||''); }catch(e){ return ''; } }
+const FS_DEFAULT_KEY = '2xg37rawZgZaYmQd1yz8unpUSlAscbw5t1xdPPEr';   // baked in so search works out of the box; the field below overrides it
+function fsGetKey(){ try{ return (localStorage.getItem('fs_api_key')||'') || FS_DEFAULT_KEY; }catch(e){ return FS_DEFAULT_KEY; } }
 function fsSetKey(k){ try{ localStorage.setItem('fs_api_key', k||''); }catch(e){} }
 let fsLastQuery='', fsLastResults=[]; let _fsAudio=null;
 function fsLicShort(u){ u=(u||'').toLowerCase(); if(u.indexOf('publicdomain')>=0||u.indexOf('zero')>=0) return 'CC0'; if(u.indexOf('by-nc')>=0) return 'CC-BY-NC'; if(u.indexOf('sampling')>=0) return 'Sampling+'; if(u.indexOf('/by')>=0) return 'CC-BY'; return 'CC'; }
@@ -12332,7 +12333,7 @@ function renderFreesoundBrowser(host, refresh){
   const B='background:rgba(56,245,181,.16);border:1px solid #38f5b5;color:#eafff7;border-radius:4px;cursor:pointer;padding:3px 8px;font-size:11px;';
   const wrap=document.createElement('div'); wrap.style.cssText='margin-top:14px;border-top:1px solid #233;padding-top:10px;';
   const head=document.createElement('div'); head.className='hint'; head.style.margin='2px 0 6px';
-  head.innerHTML='<b>Freesound</b> \u2014 search free CC sound effects, preview, and assign to any event. Get a free token at <span style="color:#9fe6cf">freesound.org/apiv2/apply</span>.';
+  head.innerHTML='<b>Freesound</b> \u2014 search free CC sound effects, preview, and assign to any event. A shared API token is built in; paste your own below to use your own quota.';
   wrap.appendChild(head);
   const tokRow=document.createElement('div'); tokRow.style.cssText='display:flex;gap:5px;margin-bottom:6px;';
   const tok=document.createElement('input'); tok.type='text'; tok.spellcheck=false; tok.placeholder='Freesound API token'; tok.value=fsGetKey(); tok.style.cssText='flex:1;min-width:0;'+I; tok.onchange=()=>fsSetKey(tok.value.trim());
