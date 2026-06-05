@@ -7575,7 +7575,7 @@ function netApplyAddProp(d){
   NET.sentProps.set(d.nid, d.dyn ? 'dyn' : (d.t||[]).slice());  // claim immediately so our reconciler won't echo it
   spawnProp(d.src, d.t, (obj)=>{
     if(d.att) obj.userData.attribution=d.att;
-    applyPropDynState(obj, { dyn:d.dyn, mass:d.mass, brk:d.brk, hp:d.hp, bst:d.bst, fc:d.fc, fz:d.fz, dsh:d.dsh });   // host simulates; clients interpolate it from the D snapshot
+    applyPropDynState(obj, { dyn:d.dyn, mass:d.mass, brk:d.brk, hp:d.hp, bst:d.bst, fc:d.fc, fz:d.fz, dsh:d.dsh, ng:d.ng });   // host simulates; clients interpolate it from the D snapshot
     netFixSelection();
   }, undefined, d.anim, d.mat||null, undefined, d.nid);
   return true;
@@ -7716,8 +7716,8 @@ function handleClientMsg(conn, msg){
   else if(msg.t==='rocket'){ const o=new THREE.Vector3(msg.o[0],msg.o[1],msg.o[2]), d=new THREE.Vector3(msg.d[0],msg.d[1],msg.d[2]); fireRocket(o,d,id,true,msg.r||7,WEAPONS.launcher.dmg); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'rocket', o:msg.o, d:msg.d, r:msg.r, by:id}); }catch(e){} } } }   // a client fired a rocket: host simulates it + relays the visual
   else if(msg.t==='push'){ const o=propByNid(msg.nid); if(o) pushDynamic(o, new THREE.Vector3(msg.dir[0],msg.dir[1],msg.dir[2]), msg.s||6, msg.pt?{x:msg.pt[0],y:msg.pt[1],z:msg.pt[2]}:null); }   // a client shot a dynamic prop (legacy knockback-only)
   else if(msg.t==='propHit'){ const o=propByNid(msg.nid); if(o){ const dir=new THREE.Vector3(msg.dir[0],msg.dir[1],msg.dir[2]); const pt=msg.pt?{x:msg.pt[0],y:msg.pt[1],z:msg.pt[2]}:null; const broke=damageProp(o, msg.d||0, pt, dir, msg.s||6, id); if(!broke) pushDynamic(o, dir, msg.s||6, pt); } }   // a client shot a prop: damage (breaks/detonates) + knockback, credited to the client
-  else if(msg.t==='grab'){ if(!_remoteHold[msg.nid]) _remoteHold[msg.nid]={by:id}; }   // a client grabbed a prop
-  else if(msg.t==='hold'){ const h=_remoteHold[msg.nid]; if(!h) _remoteHold[msg.nid]={by:id, target:msg.p}; else if(h.by===id) h.target=msg.p; }   // ...and is carrying it
+  else if(msg.t==='grab'){ const _go=dynamicById(msg.nid); if(_go && _go.userData.noGrab) return; if(!_remoteHold[msg.nid]) _remoteHold[msg.nid]={by:id}; }   // a client grabbed a prop
+  else if(msg.t==='hold'){ const _ho=dynamicById(msg.nid); if(_ho && _ho.userData.noGrab) return; const h=_remoteHold[msg.nid]; if(!h) _remoteHold[msg.nid]={by:id, target:msg.p}; else if(h.by===id) h.target=msg.p; }   // ...and is carrying it
   else if(msg.t==='holdEnd'){ const h=_remoteHold[msg.nid]; if(h && h.by===id){ if(msg.v){ const o=dynamicById(msg.nid); const b=o && o.userData.phys && o.userData.phys.body; if(b){ b.setLinvel({x:msg.v[0],y:msg.v[1],z:msg.v[2]}, true); o.userData._thrownT=performance.now()+THROW_ARM_MS; o.userData._thrownBy=id; } } delete _remoteHold[msg.nid]; } }   // ...and dropped/threw it
   else if(msg.t==='break'){   // host shattered a prop — show the debris locally (pDel removes the prop itself)
     const ctr=new THREE.Vector3(msg.ctr[0],msg.ctr[1],msg.ctr[2]); const sz=new THREE.Vector3(msg.sz[0],msg.sz[1],msg.sz[2]);
@@ -8532,7 +8532,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 155 · 2026-06-05';
+const BUILD_VERSION = 'build 156 · 2026-06-05';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8843,6 +8843,7 @@ function setPropDynamic(obj, on){
 function applyPropDynState(obj, p){
   if(!p || !p.dyn) return;
   setPropDynamic(obj, true);
+  if(p.ng) obj.userData.noGrab=true;
   if(p.mass!=null) obj.userData.mass = p.mass;
   if(p.brk===false){ obj.userData.breakable = false; }
   else { obj.userData.breakable = true; if(p.hp!=null){ obj.userData.maxHp = p.hp; obj.userData.hp = p.hp; } obj.userData.breakStyle = (p.bst==='puff') ? 'puff' : 'shatter';
@@ -8885,7 +8886,7 @@ const _holdTarget=new THREE.Vector3(), _holdRay=new THREE.Raycaster(), _hFwd=new
 function _aimedProp(){
   camera.getWorldPosition(_hPos); camera.getWorldDirection(_hFwd);
   _holdRay.set(_hPos, _hFwd); _holdRay.far=HOLD_GRAB_RANGE;
-  const meshes=[]; for(const o of dynamicProps){ if(o.userData.phys && o.userData.nid!=null) meshes.push(o); }
+  const meshes=[]; for(const o of dynamicProps){ if(o.userData.phys && o.userData.nid!=null && !o.userData.noGrab) meshes.push(o); }
   const hits=_holdRay.intersectObjects(meshes, true);
   if(!hits.length) return null;
   let node=hits[0].object; while(node && !(node.userData && node.userData.phys)) node=node.parent;
@@ -10779,6 +10780,7 @@ function propEntry(o){
   const e={ src:o.userData.src||PROP_MODEL_URL, t:[ (o.userData.physHome?o.userData.physHome.x:o.position.x), (o.userData.physHome?o.userData.physHome.y:o.position.y), (o.userData.physHome?o.userData.physHome.z:o.position.z), o.rotation.x,o.rotation.y,o.rotation.z,o.scale.x,o.scale.y,o.scale.z] };
   if(o.userData.animMode==='trigger') e.anim='trigger';
   if(o.userData.phys){ e.dyn=true; if(o.userData.mass!=null) e.mass=o.userData.mass;
+    if(o.userData.noGrab) e.ng=true;
     if(o.userData.breakable===false) e.brk=false;   // breakable defaults true; only store when off
     else { if(o.userData.maxHp!=null) e.hp=o.userData.maxHp; if(o.userData.breakStyle==='puff') e.bst='puff';
       if(o.userData.fragCount!=null) e.fc=o.userData.fragCount;
@@ -11739,6 +11741,13 @@ function renderEditorFields(){
             ? 'Falls, tumbles, stacks on the floor / ramps / crate tops; heavier = harder to knock. Resets to here on Deploy.'
             : 'Physics engine not loaded — host this file over http(s) to enable (file:// blocks it). Marked dynamic; will simulate once hosted.';
           animHost.appendChild(note);
+
+          // Grabbable: can the gravity gun pick this prop up, carry and throw it?
+          const grb=document.createElement('label'); grb.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin-top:8px;cursor:pointer;';
+          const grbcb=document.createElement('input'); grbcb.type='checkbox'; grbcb.checked=(sel.userData.noGrab!==true); grbcb.style.accentColor='#38f5b5';
+          grbcb.onchange=()=>{ pushUndoSnapshot(); sel.userData.noGrab = !grbcb.checked; };
+          const grbsp=document.createElement('span'); grbsp.innerHTML='<b>Grabbable</b> \u2014 can be picked up &amp; thrown';
+          grb.appendChild(grbcb); grb.appendChild(grbsp); animHost.appendChild(grb);
 
           // Destructible: take damage from shots and shatter into debris at 0 HP
           if(sel.userData.breakable==null) sel.userData.breakable = true;
