@@ -557,6 +557,7 @@
       <div class="mpDesc">Auto-balanced Red vs Blue, no friendly fire. First team to the kill target wins. Players are assigned as they join.</div>
       <div class="mpActions"><button id="mpTDM" class="mpBtn duel">Host TDM</button><span class="mpHint">first to</span><input id="mpTDMKills" type="number" min="1" max="199" value="30"><span class="mpHint">kills</span></div>
       <div class="mpActions"><button id="mpCP" class="mpBtn duel">Host KOTH</button><span class="mpHint">first to</span><input id="mpCPScore" type="number" min="50" max="999" value="200"><span class="mpHint">pts</span></div>
+      <div class="mpActions"><span class="mpHint">add</span><input id="mpBots" type="number" min="0" max="7" value="3"><span class="mpHint">AI bots to any hosted match</span></div>
     </div>
     <div class="mpSection join">
       <div class="mpTitle">→ JOIN A ROOM</div>
@@ -6982,6 +6983,7 @@ const NET = {
   killTarget:5,        // duel: first to this many kills wins
   duelScore:{},        // duel/ffa/tdm: playerId -> kills (host-authoritative)
   cpOwner:-1, cpCap:0, cpCapTeam:-1, cpContested:false, cpScore:{0:0,1:0},   // control-point (KOTH) state
+  botCount:0,          // PvP: number of AI bots the host fills the match with
   teams:{},            // tdm: playerId -> 0 (red) | 1 (blue)
   team:0,              // my team (tdm)
   joined:false,        // client: guards one-time startGame on welcome
@@ -7060,6 +7062,7 @@ const TEAM_NAME=['RED','BLUE']; const TEAM_COLOR=[0xff4d5e, 0x3a9bff]; const TEA
 // ---------- Control Point (King of the Hill): hold the centre zone to score; first team to the target wins ----------
 const CP_RADIUS=5.5, CP_CAPTURE_TIME=4, CP_SCORE_RATE=5; const CP_POS=new THREE.Vector3(0,0,0);
 let cpZone=null; let _cpBcT=0;
+let bots=[]; const BOT_ID_BASE=900; const _bv0=new THREE.Vector3(), _bv1=new THREE.Vector3(), _bv2=new THREE.Vector3(); const BOT_NAMES=['Vex','Rook','Nyx','Zane','Echo','Kilo','Juno','Mako'];
 function buildCpZone(){
   if(cpZone){ scene.remove(cpZone); cpZone=null; }
   cpZone=new THREE.Group(); cpZone.position.set(CP_POS.x,0,CP_POS.z);
@@ -7083,11 +7086,87 @@ function cpRecolor(){
 }
 function _cpIdOnTeam(tm){ if(NET.teams[NET.myId]===tm) return NET.myId; for(const id in NET.teams){ if(NET.teams[id]===tm) return +id; } return NET.myId; }
 function broadcastCp(){ const m={t:'cp', o:NET.cpOwner, c:+(NET.cpCap||0).toFixed(3), ct:NET.cpCapTeam, x:NET.cpContested?1:0, s:NET.cpScore}; for(const id in NET.conns){ try{ NET.conns[id].send(m); }catch(e){} } }
+// ---------- AI bots: host-simulated PvP opponents that roam, target, shoot, die + respawn. Clients
+// see them as ordinary remote avatars (they ride the world snapshot); the host owns all their logic. ----------
+function makeBot(team, name){
+  const g=new THREE.Group(); buildAvatarVisual(g);
+  const label=makeNameSprite(name, teamMode()?team:undefined); label.position.y=2.5; g.add(label); g.userData.label=label;
+  g.userData._name=name;
+  if(teamMode() && team>=0) tintAvatar(g, team);
+  scene.add(g); return g;
+}
+function botById(id){ for(const b of bots){ if(b.id===+id) return b; } return null; }
+function clearBots(){ for(const b of bots){ if(b.mesh) scene.remove(b.mesh); if(NET.teams) delete NET.teams[b.id]; if(NET.duelScore) delete NET.duelScore[b.id]; } bots=[]; }
+function spawnBots(n){
+  clearBots(); if(!(n>0)) return;
+  for(let i=0;i<n;i++){
+    const id=BOT_ID_BASE+i; let team=-1;
+    if(teamMode()){ let c0=(NET.team===0?1:0), c1=(NET.team===1?1:0); for(const b of bots){ if(b.team===0)c0++; else if(b.team===1)c1++; } team=(c0<=c1)?0:1; }
+    const nm=BOT_NAMES[i%BOT_NAMES.length]+(i>=BOT_NAMES.length?(' '+(i+1)):'');
+    const sp=randomSpawn(); const mesh=makeBot(team, nm); mesh.userData.botId=id; mesh.position.set(sp.x,0,sp.z); mesh.rotation.y=sp.yaw;
+    bots.push({ id, team, name:nm, mesh, pos:new THREE.Vector3(sp.x,0,sp.z), yaw:sp.yaw, hp:100, maxHp:100, dead:false, respawnT:0, fireCd:Math.random()*0.6, strafe:Math.random()<0.5?1:-1, retargetT:0, target:null });
+    if(teamMode()) NET.teams[id]=team;
+    NET.duelScore[id]=0;
+  }
+  if(teamMode()) broadcastTeams();
+  broadcastDuelScore();
+}
+function cpOwnedBy(tm){ return NET.cpOwner===tm; }
+function _botTargetAlive(t){ if(!t) return false; if(t.kind==='host') return !duelDead; if(t.kind==='client'){ const rp=NET.players[t.id]; return !!rp && (rp.hp==null||rp.hp>0); } if(t.kind==='bot') return t.bot && !t.bot.dead; return false; }
+function _botAcquire(b){
+  let best=null, bd=1e9; const tm=teamMode();
+  if(!duelDead && !(tm && NET.team===b.team)){ const d=Math.hypot(b.pos.x-player.pos.x, b.pos.z-player.pos.z); if(d<bd){ bd=d; best={kind:'host', id:NET.myId, pos:player.pos}; } }
+  for(const id in NET.players){ const rp=NET.players[id]; if(!rp||!rp.posEye) continue; if(tm && NET.teams[id]===b.team) continue; if((rp.hp!=null&&rp.hp<=0)) continue; const d=Math.hypot(b.pos.x-rp.posEye.x, b.pos.z-rp.posEye.z); if(d<bd){ bd=d; best={kind:'client', id:+id, pos:rp.posEye}; } }
+  for(const o of bots){ if(o===b||o.dead) continue; if(tm && o.team===b.team) continue; const d=Math.hypot(b.pos.x-o.pos.x, b.pos.z-o.pos.z); if(d<bd){ bd=d; best={kind:'bot', id:o.id, pos:o.pos, bot:o}; } }
+  return best;
+}
+function _botLOS(ex,ez,tx,tz){ for(let i=1;i<6;i++){ const t=i/6, x=ex+(tx-ex)*t, z=ez+(tz-ez)*t; if(typeof insideSolid==='function' && insideSolid(x,z,0)) return false; } return true; }
+function _botDamage(b, tgt, dmg){
+  if(tgt.kind==='host') applyPvpDamage(dmg, b.id);
+  else if(tgt.kind==='client') sendToPlayer(tgt.id, {t:'pvpHit', d:dmg, from:b.id});
+  else if(tgt.kind==='bot'){ const o=tgt.bot; if(o&&!o.dead){ o.hp-=dmg; if(o.hp<=0){ registerDuelKill(b.id, o.id); botDie(o); } } }
+}
+function botDie(b){ b.dead=true; b.respawnT=2.5; if(b.mesh) b.mesh.visible=false; if(typeof netDeath==='function') netDeath(b.pos.x,0,b.pos.z); }
+function updateBots(dt){
+  if(NET.mode!=='host' || !pvpMode() || !gameOn || !bots.length) return;
+  const koth = NET.gameMode==='cp', lim=ARENA-2, spd=SPEED*0.85;
+  for(const b of bots){
+    if(b.dead){ b.respawnT-=dt; if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,0,sp.z); b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; if(b.mesh){ b.mesh.visible=true; b.mesh.position.set(sp.x,0,sp.z); } } continue; }
+    b.retargetT-=dt;
+    if(b.retargetT<=0 || !_botTargetAlive(b.target)){ b.target=_botAcquire(b); b.retargetT=0.4+Math.random()*0.3; }
+    const tgt=b.target;
+    let destX, destZ;
+    if(koth && !cpOwnedBy(b.team)){ destX=CP_POS.x; destZ=CP_POS.z; }
+    else if(tgt){ destX=tgt.pos.x; destZ=tgt.pos.z; }
+    else { destX=CP_POS.x; destZ=CP_POS.z; }
+    let dx=destX-b.pos.x, dz=destZ-b.pos.z; const dist=Math.hypot(dx,dz)||1; let mvx,mvz;
+    if(tgt && dist<9 && !(koth && !cpOwnedBy(b.team))){ mvx=(-dz/dist)*b.strafe; mvz=(dx/dist)*b.strafe; if(Math.random()<0.012) b.strafe*=-1; }
+    else { mvx=dx/dist; mvz=dz/dist; }
+    let nx=Math.max(-lim,Math.min(lim, b.pos.x+mvx*spd*dt)), nz=Math.max(-lim,Math.min(lim, b.pos.z+mvz*spd*dt));
+    if(typeof clearAt!=='function' || clearAt(nx,nz,0)){ b.pos.x=nx; b.pos.z=nz; } else { b.strafe*=-1; }
+    b.yaw = tgt ? Math.atan2(tgt.pos.x-b.pos.x, tgt.pos.z-b.pos.z) : Math.atan2(mvx,mvz);
+    if(b.mesh){ b.mesh.position.set(b.pos.x,0,b.pos.z); b.mesh.rotation.y=b.yaw; }
+    b.fireCd-=dt;
+    if(tgt && b.fireCd<=0){
+      const ty=(tgt.pos.y!=null?Math.min(1.5,tgt.pos.y):1.4);
+      const fdist=Math.hypot(tgt.pos.x-b.pos.x, ty-1.4, tgt.pos.z-b.pos.z);
+      if(fdist<52 && _botLOS(b.pos.x,b.pos.z, tgt.pos.x,tgt.pos.z)){
+        b.fireCd=0.55+Math.random()*0.5;
+        const aim=_bv2.set(tgt.pos.x-b.pos.x, ty-1.4, tgt.pos.z-b.pos.z).normalize();
+        aim.x+=(Math.random()*2-1)*0.04; aim.y+=(Math.random()*2-1)*0.03; aim.z+=(Math.random()*2-1)*0.04; aim.normalize();
+        const o=[b.pos.x,1.4,b.pos.z], d=[aim.x,aim.y,aim.z];
+        remoteFire(b.id, o, d); for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'fire', from:b.id, o, d}); }catch(e){} }
+        if(Math.random()<0.6) _botDamage(b, tgt, 11+Math.random()*6);
+      }
+    }
+  }
+}
 function updateControlPoint(dt){
   if(NET.mode!=='host' || NET.gameMode!=='cp' || !gameOn) return;
   const R2=CP_RADIUS*CP_RADIUS; let inR=0, inB=0;
   if(!duelDead){ const dx=player.pos.x-CP_POS.x, dz=player.pos.z-CP_POS.z; if(dx*dx+dz*dz<=R2){ (NET.team===1?inB++:inR++); } }
   for(const id in NET.players){ const rp=NET.players[id]; if(!rp||!rp.posEye) continue; const dx=rp.posEye.x-CP_POS.x, dz=rp.posEye.z-CP_POS.z; if(dx*dx+dz*dz<=R2){ (NET.teams[id]===1?inB++:inR++); } }
+  for(const b of bots){ if(b.dead) continue; const dx=b.pos.x-CP_POS.x, dz=b.pos.z-CP_POS.z; if(dx*dx+dz*dz<=R2){ (b.team===1?inB++:inR++); } }
   const contested=inR>0&&inB>0; const occ=(inR>0&&inB===0)?0:((inB>0&&inR===0)?1:-1);
   NET.cpContested=contested;
   if(contested){ /* both teams present: capture + score frozen */ }
@@ -7149,7 +7228,7 @@ function renderScoreboard(){
   if(!pvpMode() || !gameOn){ if(el.style.display!=='none'){ el.style.display='none'; _sbSig=''; } return; }
   const rows=[]; const seen={};
   const add=(id)=>{ if(seen[id]) return; seen[id]=1; const k=NET.duelScore[id]||0;
-    const nm = (+id===NET.myId) ? ((NET.name||'You')+' (you)') : ((NET.players[id]&&NET.players[id].name)||('P'+id));
+    const nm = (+id===NET.myId) ? ((NET.name||'You')+' (you)') : killName(id);
     rows.push({id:+id, k, nm}); };
   for(const id in NET.duelScore) add(id);
   add(NET.myId); for(const id in NET.players) add(id);
@@ -7173,7 +7252,7 @@ function renderScoreboard(){
 let _sbSig='';
 function _esc(t){ return String(t).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 // ---- kill feed (PvP): a transient "killer > victim" ticker, top-left under the minimap ----
-function killName(id){ return (+id===NET.myId) ? (NET.name||'You') : ((NET.players[id]&&NET.players[id].name)||('P'+id)); }
+function killName(id){ if(+id===NET.myId) return NET.name||'You'; const b=(typeof botById==='function')?botById(id):null; if(b) return b.name; return (NET.players[id]&&NET.players[id].name)||('P'+id); }
 function killColor(id){ if(!teamMode()) return (+id===NET.myId?'#eafff7':'#cfeee2'); const tm=NET.teams[id]; return tm===0?'#ff8a93':(tm===1?'#9fd0ff':'#cfeee2'); }
 function addKillFeed(killerId, victimId){
   if(killerId==null) return;
@@ -7191,7 +7270,7 @@ function applyPvpDamage(dmg, from){
   if(duelDead || duelInvuln>0) return;
   if(sameTeam(from, NET.myId)) return;   // no friendly fire in team modes
   if(buffs.shield>0){ const a=Math.min(buffs.shield,dmg); buffs.shield-=a; dmg-=a; }
-  player.hp -= dmg; lastDamagedBy = (from!=null?from:lastDamagedBy); flashDamage(); SFX.hurt(); addShake(Math.min(0.5, dmg/55)); { const rp=(from!=null)?NET.players[from]:null; if(rp&&rp.posEye) hurtDir(rp.posEye.x, rp.posEye.z); } updateHUD();
+  player.hp -= dmg; lastDamagedBy = (from!=null?from:lastDamagedBy); flashDamage(); SFX.hurt(); addShake(Math.min(0.5, dmg/55)); { const rp=(from!=null)?NET.players[from]:null; if(rp&&rp.posEye) hurtDir(rp.posEye.x, rp.posEye.z); else { const bb=(typeof botById==='function')?botById(from):null; if(bb) hurtDir(bb.pos.x, bb.pos.z); } } updateHUD();
   if(player.hp<=0) duelDie();
 }
 function updateRespawnOverlay(){
@@ -7384,6 +7463,7 @@ function serializeWorld(){
   const P=[{ id:0, p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:owned.indexOf(curWep), hp:Math.max(0,player.hp), n:NET.name||'Host' }];
   for(const id in NET.players){ const rp=NET.players[id];
     P.push({ id:+id, p:[rp.posEye.x,rp.posEye.y,rp.posEye.z], y:rp.yaw, pi:0, w:rp.wep, hp:rp.hp, n:rp.name }); }
+  for(const b of bots){ if(b.dead) continue; P.push({ id:b.id, p:[b.pos.x,EYE,b.pos.z], y:b.yaw, pi:0, w:0, hp:b.hp, n:b.name }); }
   const E=enemies.map(e=>({ id:e.id, p:[e.mesh.position.x,e.mesh.position.y,e.mesh.position.z] }));
   const C=coins.map(c=>({ id:c.id, p:[c.mesh.position.x,c.mesh.position.z] }));
   // dynamic physics props (position + orientation) so clients see them roll
@@ -7565,6 +7645,7 @@ function handleClientMsg(conn, msg){
   else if(msg.t==='pvpHit'){ applyPvpDamage(msg.d, msg.from); }       // a client shot the host
   else if(msg.t==='fire'){ remoteFire(id, msg.o, msg.d); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'fire', from:id, o:msg.o, d:msg.d}); }catch(e){} } } }   // show + relay the shot
   else if(msg.t==='died'){ registerDuelKill(msg.by, id); }            // a client died; credit the killer
+  else if(msg.t==='botHit'){ const b=botById(msg.id); if(b && !b.dead && !sameTeam(msg.from, msg.id)){ b.hp-=msg.d; if(b.hp<=0){ registerDuelKill(msg.from, msg.id); botDie(b); } } }   // a client shot a bot
   else if(msg.t==='push'){ const o=propByNid(msg.nid); if(o) pushDynamic(o, new THREE.Vector3(msg.dir[0],msg.dir[1],msg.dir[2]), msg.s||6, msg.pt?{x:msg.pt[0],y:msg.pt[1],z:msg.pt[2]}:null); }   // a client shot a dynamic prop
   else if(msg.t==='break'){   // host shattered a prop — show the debris locally (pDel removes the prop itself)
     const ctr=new THREE.Vector3(msg.ctr[0],msg.ctr[1],msg.ctr[2]); const sz=new THREE.Vector3(msg.sz[0],msg.sz[1],msg.sz[2]);
@@ -7623,6 +7704,7 @@ function hostStart(code, mode, killTarget){
   NET.mode='host'; NET.myId=0; NET.roomCode=code; NET.nextId=1;
   netIdPrefix='h'; seedPropSync();   // new props the host adds get 'h-' ids; existing props are already known to joiners via the welcome level
   NET.gameMode = mode || 'coop';
+  { const bi=document.getElementById('mpBots'); let bn=parseInt(bi&&bi.value,10); NET.botCount=(bn>=0&&bn<=7)?bn:0; }
   if(killTarget!=null) NET.killTarget = killTarget;
   NET.duelScore = {0:0};
   NET.teams = {0:0}; NET.team = 0;   // host starts on RED in team modes
@@ -8297,7 +8379,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 144 · 2026-06-04';
+const BUILD_VERSION = 'build 145 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9002,9 +9084,13 @@ function shoot(){
         // walk up to the remote player's group, then tell that player they were hit
         let node=hit.object, pid=null;
         while(node && pid==null){ for(const id in NET.players){ if(NET.players[id].mesh===node){ pid=+id; break; } } node=node.parent; }
-        if(pid!=null && sameTeam(NET.myId, pid)){ spark(hit.point, 0x7fdcc4); }   // teammate — no friendly fire
-        else if(pid!=null){
-          sendToPlayer(pid, {t:'pvpHit', d:w.dmg*dmgMul*hsMul, from:NET.myId});
+        let botId=null; if(pid==null){ let bn=hit.object; while(bn && botId==null){ if(bn.userData && bn.userData.botId!=null) botId=bn.userData.botId; bn=bn.parent; } }
+        const tid = pid!=null?pid:botId; const dmg=w.dmg*dmgMul*hsMul;
+        if(tid!=null && sameTeam(NET.myId, tid)){ spark(hit.point, 0x7fdcc4); }   // teammate — no friendly fire
+        else if(tid!=null){
+          if(botId!=null && NET.mode==='host'){ const b=botById(botId); if(b&&!b.dead){ b.hp-=dmg; if(b.hp<=0){ registerDuelKill(NET.myId, botId); botDie(b); } } }
+          else if(pid!=null && pid>=BOT_ID_BASE && clientMode){ if(NET.conn) try{ NET.conn.send({t:'botHit', id:pid, d:dmg, from:NET.myId}); }catch(e){} }
+          else sendToPlayer(pid, {t:'pvpHit', d:dmg, from:NET.myId});
           spark(hit.point, isHead?0xffd166:0xff6b6b); if(p===0){ showHitmarker(isHead); SFX.hit(); if(isHead) SFX.hit(); }
         } else { spark(hit.point, 0x9fd8ff); }
       } else if(clientMode){
@@ -9778,6 +9864,7 @@ function loop(){
   updateFlipbooks(dt);   // sprite-sheet explosions / smoke / fire
   updateLowHp(dt);       // low-health vignette + heartbeat
   updateHurtDir(dt);     // directional hit indicator
+  updateBots(dt);                        // AI opponents (host)
   updateControlPoint(dt); cpRender();   // KOTH zone capture/score + HUD
   // bolt streak trails + impact flashes (fade + expand, then dispose)
   for(let i=boltTrails.length-1;i>=0;i--){
@@ -12206,6 +12293,7 @@ function startGame(){
   grenades.slice().forEach(g=>scene.remove(g.mesh)); grenades.length=0;
   if(typeof enemyShots!=='undefined'){ enemyShots.slice().forEach(s=>scene.remove(s.mesh)); enemyShots.length=0; }
   if(typeof netReset==='function') netReset();   // clear stale remote avatars / mirrored enemies & coins
+  if(typeof clearBots==='function') clearBots();
   // client: adopt the host's level (props + lights) so everyone shares the same map
   if(NET.pendingLevel){ loadLevelFromNet(NET.pendingLevel); NET.pendingLevel=null; }
   if(NET.pendingSounds){ NET.sounds=_sanitizeSounds(NET.pendingSounds); NET.pendingSounds=null; if(typeof preloadCustomSounds==='function') preloadCustomSounds(); }   // play the host's SFX this session
@@ -12223,6 +12311,7 @@ function startGame(){
     duelDead=false; duelRespawnTimer=0; duelInvuln=1.2; lastDamagedBy=null;
     if(NET.gameMode==='cp'){ NET.cpOwner=-1; NET.cpCap=0; NET.cpCapTeam=-1; NET.cpContested=false; NET.cpScore={0:0,1:0}; _cpBcT=0; buildCpZone(); } else if(cpZone){ cpZone.visible=false; }
     giveDuelLoadout();
+    if(NET.mode==='host') spawnBots(NET.botCount||0);
     const sp = randomSpawn();
     player.pos.set(sp.x, EYE, sp.z); player.yaw = sp.yaw;
     toSpawn = 0;
