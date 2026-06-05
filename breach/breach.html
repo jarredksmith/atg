@@ -7728,7 +7728,7 @@ function hostStart(code, mode, killTarget){
   NET.mode='host'; NET.myId=0; NET.roomCode=code; NET.nextId=1;
   netIdPrefix='h'; seedPropSync();   // new props the host adds get 'h-' ids; existing props are already known to joiners via the welcome level
   NET.gameMode = mode || 'coop';
-  { const bi=document.getElementById('mpBots'); let bn=parseInt(bi&&bi.value,10); NET.botCount=(bn>=0&&bn<=7)?bn:0; }
+  { const bi=document.getElementById('mpBots'); let bn=parseInt(bi&&bi.value,10); NET.botCount=(NET.gameMode==='duel')?0:((bn>=0&&bn<=7)?bn:0); }   // duel is always 1v1, no bots
   if(killTarget!=null) NET.killTarget = killTarget;
   NET.duelScore = {0:0};
   NET.teams = {0:0}; NET.team = 0;   // host starts on RED in team modes
@@ -8479,7 +8479,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 151 · 2026-06-04';
+const BUILD_VERSION = 'build 152 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9294,7 +9294,8 @@ function shoot(){
   if(duelMode){
     // In a duel the only valid targets are the other players' capsules.
     const playerMeshes = Object.values(NET.players).map(rp=>rp.mesh);
-    rayTargets = [...playerMeshes, ...colliders, ...dynamicProps, floor].filter(o => o && o.isObject3D);
+    const botMeshes = bots.map(b=>b.mesh);   // host's bots live in the bots[] array, not NET.players — include them
+    rayTargets = [...playerMeshes, ...botMeshes, ...colliders, ...dynamicProps, floor].filter(o => o && o.isObject3D);
   } else {
     enemyMeshes = clientMode ? Object.values(NET.enemyMeshes).map(o=>o.mesh) : enemies.map(e=>e.mesh);
     // Only raycast against real Object3D instances (guards against any non-mesh collider entries)
