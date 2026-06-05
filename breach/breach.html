@@ -6602,13 +6602,20 @@ function swapEnemyModel(url, typeKey){ enemyModelCfg(typeKey||editorEnemyType).u
 // An invisible cylinder shots are raycast against. Skinned-mesh raycasting uses the BIND pose (geometry
 // collapses toward the feet/origin once animated), so we hit this proxy instead — consistent + tunable.
 const _ENEMY_PROXY_MAT = new THREE.MeshBasicMaterial(); _ENEMY_PROXY_MAT.visible = false;   // not drawn, still raycastable
+const HEADSHOT_MUL = 2;   // headshots deal 2x. The head zone is an invisible sphere above a shortened body proxy.
+function _mkHeadProxy(y, r){ const hd=new THREE.Mesh(new THREE.SphereGeometry(r,8,8), _ENEMY_PROXY_MAT); hd.position.set(0,y,0); hd.userData.isHitProxy=true; hd.userData.isHead=true; return hd; }
 function setEnemyHitProxy(body, r, h){
   r = Math.max(0.2, r||0.9); h = Math.max(0.4, h||2.6);
   if(body.userData.hitProxy){ const old=body.userData.hitProxy; if(old.geometry) old.geometry.dispose(); body.remove(old); }
-  const px = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 10), _ENEMY_PROXY_MAT);
-  px.position.set(0, h/2 - 1.4, 0);   // body sits at world y=1.4, so the cylinder spans floor -> h
+  if(body.userData.headProxy){ const oh=body.userData.headProxy; if(oh.geometry) oh.geometry.dispose(); body.remove(oh); }
+  const hb = h*0.82;   // body proxy stops at the neck; the head zone sits above it
+  const px = new THREE.Mesh(new THREE.CylinderGeometry(r, r, hb, 10), _ENEMY_PROXY_MAT);
+  px.position.set(0, hb/2 - 1.4, 0);   // body sits at world y=1.4, so the cylinder spans floor -> 0.82h
   px.userData.isHitProxy = true;
   body.add(px); body.userData.hitProxy = px; body.userData.colR = r; body.userData.colH = h;
+  const rs = Math.min(Math.max(r*0.62, 0.28), 0.55);
+  const hd = _mkHeadProxy((h - rs) - 1.4, rs);   // head sphere whose top aligns with the model top (~world h)
+  body.add(hd); body.userData.headProxy = hd;
   // keep the editor's green preview cylinder in lockstep with the real collider
   if(body===previewEnemy && previewCollider && previewCollider.userData.cyl){
     const c = previewCollider.userData.cyl; if(c.geometry) c.geometry.dispose();
@@ -6864,6 +6871,64 @@ function updateCoins(dt){
   }
 }
 
+// ---- map powerups: host/solo-owned pickup pads that grant a buff and respawn on a timer ----
+// Mirrors coins (host-authoritative; clients see them via the snapshot and the host grants on proximity).
+const POWERUP_KINDS = {
+  health: { c:0x38f5b5, label:'+50 INTEGRITY' },
+  damage: { c:0xff6b6b, label:'DOUBLE DAMAGE' },
+  speed:  { c:0xa8e6ff, label:'SPEED BOOST' },
+  shield: { c:0xffd166, label:'SHIELD' },
+};
+const POWERUP_COOLDOWN = 15;   // seconds before a used pad returns
+let powerups = [];
+let _puId = 1;
+function buildPowerupMesh(kind){
+  const k = POWERUP_KINDS[kind] || POWERUP_KINDS.health;
+  const g = new THREE.Group();
+  const pad = new THREE.Mesh(new THREE.CylinderGeometry(1.15,1.15,0.12,20), new THREE.MeshStandardMaterial({ color:k.c, emissive:k.c, emissiveIntensity:0.6, transparent:true, opacity:0.55, roughness:0.4 }));
+  pad.position.y=0.06; g.add(pad);
+  const icon = new THREE.Mesh(new THREE.OctahedronGeometry(0.42), new THREE.MeshStandardMaterial({ color:0xffffff, emissive:k.c, emissiveIntensity:0.9, roughness:0.3 }));
+  icon.position.y=1.25; g.add(icon); g.userData.icon=icon;
+  return g;
+}
+function _animatePickup(g, dt){ const ic=g.userData.icon; if(ic){ ic.rotation.y += dt*1.8; ic.position.y = 1.25 + Math.sin(performance.now()*0.003)*0.12; } }
+// Layout scaled to the current arena: a health pad at center + the three buffs on a ring.
+function powerupLayout(){
+  const r = Math.max(14, ARENA*0.55);
+  return [ {x:0,z:0,kind:'health'}, {x:r,z:0,kind:'damage'}, {x:-r,z:0,kind:'speed'}, {x:0,z:r,kind:'shield'} ];
+}
+function clearPowerups(){ for(const p of powerups){ if(p.mesh) scene.remove(p.mesh); } powerups = []; if(typeof NET!=='undefined' && NET.powerupMeshes){ for(const id in NET.powerupMeshes){ scene.remove(NET.powerupMeshes[id]); } NET.powerupMeshes={}; } }
+function spawnPowerups(){
+  clearPowerups();
+  if(NET.mode==='client') return;   // clients receive pads via the world snapshot
+  for(const spot of powerupLayout()){
+    const mesh = buildPowerupMesh(spot.kind); mesh.position.set(spot.x, 0, spot.z); scene.add(mesh);
+    powerups.push({ id:_puId++, x:spot.x, z:spot.z, kind:spot.kind, ready:true, cd:0, mesh });
+  }
+}
+function applyPowerupLocal(kind){
+  if(kind==='health'){ player.hp = Math.min(player.maxHp, player.hp + 50); SFX.power && SFX.power(); updateHUD(); }
+  else if(kind==='damage') applyDamage();
+  else if(kind==='speed') applySpeed();
+  else if(kind==='shield') applyShield();
+  const k = POWERUP_KINDS[kind]; if(k) flashToast(k.label);
+}
+function grantPowerup(playerEntry, kind){
+  if(playerEntry.id===NET.myId) applyPowerupLocal(kind);
+  else sendToPlayer(playerEntry.id, { t:'power', k:kind });
+}
+function updatePowerups(dt){
+  if(!powerups.length) return;
+  const players = allPlayers();
+  for(const p of powerups){
+    if(!p.ready){ p.cd -= dt; if(p.cd<=0){ p.ready=true; if(p.mesh) p.mesh.visible=true; } continue; }
+    if(p.mesh){ p.mesh.visible=true; _animatePickup(p.mesh, dt); }
+    let near=null, nd=1e9;
+    for(const pl of players){ const d=Math.hypot(pl.pos.x-p.x, pl.pos.z-p.z); if(d<nd){ nd=d; near=pl; } }
+    if(near && nd < 1.7){ grantPowerup(near, p.kind); p.ready=false; p.cd=POWERUP_COOLDOWN; if(p.mesh) p.mesh.visible=false; }
+  }
+}
+
 // ====================================================================================
 // ============================  ONLINE CO-OP (P2P / PeerJS)  ==========================
 // Host-authoritative co-op. One player hosts (gets a room code = their peer id); friends
@@ -6891,6 +6956,7 @@ const NET = {
   players:{},          // remote players visible to me: id -> {mesh, posEye, target, yaw, hp, wep, name}
   enemyMeshes:{},      // client only: enemyId -> {mesh, target}
   coinMeshes:{},       // client only: coinId  -> mesh
+  powerupMeshes:{},    // client only: powerupId -> mesh
   deadChests:{},       // client only: chestId -> true, suppresses a crate we just bought until the host's snapshot drops it
   pendingLevel:null,   // client: host level data, applied at spawn
   sentProps:new Map(), // live prop sync: nid -> last transform tuple peers have been told about
@@ -7128,14 +7194,16 @@ let playerModelClips = [];   // animation clip names discovered when the avatar 
 function buildAvatarVisual(g){
   if(g.userData.visual){ if(g.userData.mixer){ const mi=mixers.indexOf(g.userData.mixer); if(mi>=0) mixers.splice(mi,1); g.userData.mixer=null; } g.remove(g.userData.visual); g.userData.visual=null; }
   if(g.userData.hitProxy){ g.remove(g.userData.hitProxy); g.userData.hitProxy=null; }
+  if(g.userData.headProxy){ g.remove(g.userData.headProxy); g.userData.headProxy=null; }
   const mc = playerModelCfg;
   const useCapsule = ()=>{
     const wrap=new THREE.Group();
     const body=new THREE.Mesh(remoteBodyGeo, new THREE.MeshStandardMaterial({ color:0x2f7fff, emissive:0x10316c, emissiveIntensity:.55, roughness:.6 }));
     body.position.y=1.1; body.castShadow=true; wrap.add(body);
     const head=new THREE.Mesh(new THREE.ConeGeometry(0.22,0.5,8), new THREE.MeshStandardMaterial({ color:0x9fd8ff, emissive:0x2f7fff, emissiveIntensity:.4 }));
-    head.rotation.x=Math.PI/2; head.position.set(0,1.55,-0.45); wrap.add(head);   // points -Z (forward)
+    head.rotation.x=Math.PI/2; head.position.set(0,1.55,-0.45); head.raycast=()=>{}; wrap.add(head);   // points -Z (forward); head zone is the proxy below
     g.add(wrap); g.userData.visual=wrap; g.userData.hasModel=false;
+    const hpx=_mkHeadProxy(1.66, 0.32); g.add(hpx); g.userData.headProxy=hpx;
   };
   if(!mc.url){ useCapsule(); return; }
   useCapsule();   // placeholder until the GLB arrives
@@ -7158,7 +7226,8 @@ function buildAvatarVisual(g){
       model.rotation.y += (mc.face||0);
       g.userData.visual=model; g.userData.hasModel=true;
       model.userData.seat={ p:model.position.clone(), q:model.quaternion.clone(), s:model.scale.clone() };   // re-pinned each frame so root-motion can't fling the model
-      const px=new THREE.Mesh(new THREE.CylinderGeometry(fr,fr,h,10), _ENEMY_PROXY_MAT); px.position.y=h/2; g.add(px); g.userData.hitProxy=px;
+      const hb=h*0.82; const px=new THREE.Mesh(new THREE.CylinderGeometry(fr,fr,hb,10), _ENEMY_PROXY_MAT); px.position.y=hb/2; g.add(px); g.userData.hitProxy=px;
+      const rs=Math.min(Math.max(fr*0.7,0.26),0.45); const hpx=_mkHeadProxy(h-rs, rs); g.add(hpx); g.userData.headProxy=hpx;
       playerModelClips = (gltf.animations||[]).map(a=>a.name||'');   // expose clip names to the Player editor
       if(typeof refreshPlayerClipOptions==='function') refreshPlayerClipOptions();
       const mx=playEnemyStates(model, gltf, mc.clips);   // idle/walk/run, crossfaded by the avatar's movement
@@ -7218,10 +7287,11 @@ function serializeWorld(){
   const D = dynamicProps.length ? dynamicProps.filter(o=>o.userData.nid).map(o=>({ id:o.userData.nid, p:[o.position.x,o.position.y,o.position.z], q:[o.quaternion.x,o.quaternion.y,o.quaternion.z,o.quaternion.w] })) : undefined;
   // loot crates (id, position, item ids) so clients see + can open the same crates
   const K = chests.length ? chests.map(ch=>({ id:ch.id, p:[ch.pos.x,ch.pos.z], it:ch.items.map(i=>i.id) })) : undefined;
+  const PU = powerups.length ? powerups.map(p=>({ id:p.id, p:[p.x,p.z], k:p.kind, r:p.ready?1:0 })) : undefined;
   // objective state (so clients see the survival timer / extraction beacon + hold, not just "WAVE n")
   const O = { o:objectiveActive(), s:+surviveLeft.toFixed(1), h:+extractHoldT.toFixed(2),
               ex:[+extractPos.x.toFixed(2), +extractPos.z.toFixed(2)], er:gameCfg.extractRadius||3.5, eh:gameCfg.extractHold||5, wn:gameCfg.winWaves||0 };
-  return { t:'world', P, E, C, D, K, O, wv:wave };
+  return { t:'world', P, E, C, D, K, PU, O, wv:wave };
 }
 function dynamicById(id){ for(const o of dynamicProps){ if(o.userData.phys && o.userData.phys.id===id) return o; } return null; }
 function broadcastWorld(){ const w=serializeWorld(); for(const id in NET.conns){ try{ NET.conns[id].send(w); }catch(e){} } }
@@ -7318,6 +7388,13 @@ function applyWorld(msg){
   for(const c of msg.C){ cs.add(c.id); upsertCoinMesh(c); }
   for(const id in NET.coinMeshes){ if(!cs.has(+id)){ scene.remove(NET.coinMeshes[id]); delete NET.coinMeshes[id]; } }
   const ec=document.getElementById('enemyCount'); if(ec) ec.textContent='HOSTILES: '+msg.E.length;
+  if(NET.mode==='client'){
+    const PU = msg.PU || []; const ps=new Set();
+    for(const pu of PU){ ps.add(pu.id); let m=NET.powerupMeshes[pu.id];
+      if(!m){ m=buildPowerupMesh(pu.k); m.position.set(pu.p[0],0,pu.p[1]); scene.add(m); NET.powerupMeshes[pu.id]=m; }
+      m.visible = !!pu.r; }
+    for(const id in NET.powerupMeshes){ if(!ps.has(+id)){ scene.remove(NET.powerupMeshes[id]); delete NET.powerupMeshes[id]; } }
+  }
   // dynamic physics props: clients place them where the host says (set targets for smoothing)
   if(msg.D){ for(const d of msg.D){ const o=propByNid(d.id); if(o){ o.userData._netTarget = d.p; o.quaternion.set(d.q[0],d.q[1],d.q[2],d.q[3]); } } }
   // loot crates: clients mirror the host's crate list (so proximity + opening + buying all work)
@@ -7351,6 +7428,7 @@ function netInterpolate(dt){
       setEnemyAnimState(rp.mesh, _st);
     } }
   if(NET.mode==='client'){
+    for(const id in NET.powerupMeshes){ const m=NET.powerupMeshes[id]; if(m.visible) _animatePickup(m, dt); }
     for(const id in NET.enemyMeshes){ const em=NET.enemyMeshes[id]; em.mesh.position.lerp(em.target, k); em.mesh.lookAt(player.pos.x, em.mesh.position.y, player.pos.z); if(em.mesh.userData.hasModel) em.mesh.rotateY(em.mesh.userData.faceOff||0); }
     for(const o of dynamicProps){ const tp=o.userData._netTarget; if(tp){ o.position.lerp(new THREE.Vector3(tp[0],tp[1],tp[2]), k); } }
     if(_clientBeaconOn && extractZone){ const pulse=0.6+0.4*Math.sin(performance.now()*0.004);
@@ -7415,6 +7493,7 @@ function handleHostMsg(msg){
   else if(msg.t==='world'){ applyWorld(msg); }
   else if(msg.t==='hurt'){ applyEnemyDamageToSelf(msg.d); }
   else if(msg.t==='credit'){ credits+=msg.v; SFX.coin(); updateHUD(); }
+  else if(msg.t==='power'){ applyPowerupLocal(msg.k); }
   else if(msg.t==='pvpHit'){ applyPvpDamage(msg.d, msg.from); }        // the host shot this client
   else if(msg.t==='fire'){ remoteFire(msg.from, msg.o, msg.d); }       // someone fired
   else if(msg.t==='score'){ NET.duelScore=msg.s; duelHUD(); }
@@ -7591,6 +7670,59 @@ function throwGrenade(){
   scene.add(mesh);
   grenades.push({ mesh, vel, fuse: GRENADE.fuse });
 }
+// ---------- Sprite-sheet (flipbook) VFX ----------
+// Realistic explosions/smoke/fire from pre-rendered flipbook PNGs you host next to breach.html in a
+// `vfx/` folder. Each effect is a billboard whose texture offset steps through the sheet's frames over
+// its lifetime. If a sheet isn't present (404) the effect quietly falls back to the procedural version.
+// Frame order is left-to-right, top-to-bottom. Adjust cols/rows/frames to match whatever sheet you drop in.
+const VFX_BASE = 'vfx/';   // relative to breach.html on your host
+const VFX = {
+  explosion: { url:VFX_BASE+'explosion.png', cols:8, rows:8, frames:64, dur:0.75, size:6,  blend:'add',    grow:1.15, fade:false },
+  smoke:     { url:VFX_BASE+'smoke.png',     cols:8, rows:8, frames:64, dur:1.8,  size:5,  blend:'normal', grow:2.4,  fade:true  },
+  fire:      { url:VFX_BASE+'fire.png',      cols:6, rows:6, frames:36, dur:0.9,  size:3,  blend:'add',    grow:1.1,  fade:true  },
+  muzzle:    { url:VFX_BASE+'muzzle.png',    cols:4, rows:4, frames:16, dur:0.10, size:1.1,blend:'add',    grow:1.0,  fade:false },
+};
+const _vfxTex = {};         // kind -> {tex} | 'loading' | 'fail'
+const _flipbooks = [];
+function loadVfxTexture(kind){
+  const cfg = VFX[kind]; if(!cfg || !cfg.url) return;
+  if(_vfxTex[kind]) return;   // loaded, loading, or failed already
+  _vfxTex[kind]='loading';
+  new THREE.TextureLoader().load(cfg.url,
+    (t)=>{ t.minFilter=THREE.LinearFilter; t.magFilter=THREE.LinearFilter; t.wrapS=t.wrapT=THREE.ClampToEdgeWrapping; if('colorSpace' in t) t.colorSpace=THREE.SRGBColorSpace; _vfxTex[kind]={tex:t}; },
+    undefined,
+    ()=>{ _vfxTex[kind]='fail'; });   // missing sheet -> procedural fallback, silently
+}
+function preloadVfx(){ for(const k in VFX) loadVfxTexture(k); }
+// Spawn a flipbook at a world position. Returns true if a sheet was available (so callers can skip their
+// procedural fallback), false if not (texture missing or still loading on the very first use).
+function playFlipbook(kind, pos, scale){
+  const cfg = VFX[kind]; if(!cfg) return false;
+  const entry = _vfxTex[kind];
+  if(!entry || entry==='loading' || entry==='fail' || !entry.tex){ if(!entry) loadVfxTexture(kind); return false; }
+  const tex = entry.tex.clone(); tex.needsUpdate=true;
+  tex.repeat.set(1/cfg.cols, 1/cfg.rows);
+  const mat = new THREE.SpriteMaterial({ map:tex, transparent:true, depthWrite:false, opacity:1,
+    blending: cfg.blend==='add' ? THREE.AdditiveBlending : THREE.NormalBlending, rotation: Math.random()*Math.PI*2 });
+  const sp = new THREE.Sprite(mat);
+  const base = (cfg.size||1) * (scale||1);
+  sp.scale.setScalar(base); sp.position.copy(pos); sp.renderOrder = 9000;
+  scene.add(sp);
+  _flipbooks.push({ sp, tex, cfg, t:0, base });
+  return true;
+}
+function updateFlipbooks(dt){
+  for(let i=_flipbooks.length-1;i>=0;i--){
+    const f=_flipbooks[i]; f.t += dt; const cfg=f.cfg; const prog=f.t/cfg.dur;
+    if(prog>=1){ scene.remove(f.sp); f.tex.dispose(); f.sp.material.dispose(); _flipbooks.splice(i,1); continue; }
+    let frame = Math.floor(prog*cfg.frames); if(frame>=cfg.frames) frame=cfg.frames-1;
+    const col = frame % cfg.cols, row = Math.floor(frame/cfg.cols);
+    f.tex.offset.set(col/cfg.cols, 1 - (row+1)/cfg.rows);   // sheet origin is top-left
+    if(cfg.grow && cfg.grow!==1) f.sp.scale.setScalar(f.base*(1 + (cfg.grow-1)*prog));
+    if(cfg.fade) f.sp.material.opacity = 1 - prog*prog;
+  }
+}
+
 function explodeGrenade(g){
   SFX.explode();
   // camera shake — stronger the closer the player is to the blast
@@ -7599,12 +7731,18 @@ function explodeGrenade(g){
   addShake(shakeAmt * 0.9);
   // visual blast (scales with the configured radius)
   const R = GRENADE.radius;
-  const blast = new THREE.Mesh(new THREE.SphereGeometry(1,16,16),
-    new THREE.MeshBasicMaterial({color:0xffaa44, transparent:true, opacity:0.8}));
-  blast.position.copy(g.mesh.position); scene.add(blast);
-  const bl = new THREE.PointLight(0xffaa44, 30, Math.max(12, R*2.5)); bl.position.copy(g.mesh.position); scene.add(bl);
+  const pos = g.mesh.position.clone();
+  const bl = new THREE.PointLight(0xffaa44, 30, Math.max(12, R*2.5)); bl.position.copy(pos); scene.add(bl);   // light flash always
+  const usedSheet = playFlipbook('explosion', pos, Math.max(0.4, R*0.18));   // realistic flipbook if hosted
+  let blast = null;
+  if(usedSheet){ playFlipbook('smoke', pos, Math.max(0.4, R*0.16)); }
+  else {
+    blast = new THREE.Mesh(new THREE.SphereGeometry(1,16,16),
+      new THREE.MeshBasicMaterial({color:0xffaa44, transparent:true, opacity:0.8}));
+    blast.position.copy(pos); scene.add(blast);
+  }
   explosions.push({ mesh:blast, light:bl, life:0.35, maxR:R });
-  for(let i=0;i<14;i++) { const sp=g.mesh.position.clone(); spark(sp, 0xffaa44); }
+  for(let i=0;i<(usedSheet?6:14);i++) { spark(pos, 0xffaa44); }
   // AoE damage: full at the center, linear falloff to 0 at the radius
   for(const en of enemies.slice()){
     const d = en.mesh.position.distanceTo(g.mesh.position);
@@ -7633,10 +7771,10 @@ function updateGrenades(dt){
   for(let i=explosions.length-1;i>=0;i--){
     const e=explosions[i]; e.life-=dt;
     const prog = (0.35 - e.life) / 0.35;                 // 0 -> 1 over its life
-    e.mesh.scale.setScalar(Math.max(0.4, prog * (e.maxR || 8)));   // expand out to the blast radius
-    e.mesh.material.opacity = Math.max(0, e.life/0.35*0.8);
-    e.light.intensity = Math.max(0, e.life/0.35*30);
-    if(e.life<=0){ scene.remove(e.mesh); scene.remove(e.light); explosions.splice(i,1); }
+    if(e.mesh){ e.mesh.scale.setScalar(Math.max(0.4, prog * (e.maxR || 8)));   // expand out to the blast radius
+      e.mesh.material.opacity = Math.max(0, e.life/0.35*0.8); }
+    if(e.light) e.light.intensity = Math.max(0, e.life/0.35*30);
+    if(e.life<=0){ if(e.mesh) scene.remove(e.mesh); if(e.light) scene.remove(e.light); explosions.splice(i,1); }
   }
 }
 
@@ -7935,6 +8073,7 @@ const tracers = [];
 // (and their avatar plays its attack clip). Host relays client shots to the other clients (star topology).
 const _muzFlashes = [];
 function muzzleFlashAt(pos){
+  if(playFlipbook('muzzle', pos, 0.5)) return;   // flipbook muzzle flash if a sheet is hosted
   const m = new THREE.Mesh(new THREE.SphereGeometry(0.22,6,6), new THREE.MeshBasicMaterial({color:0xffe08a, transparent:true, opacity:0.95, blending:THREE.AdditiveBlending, depthWrite:false}));
   m.position.copy(pos); scene.add(m); _muzFlashes.push({mesh:m, life:0.07});
 }
@@ -7955,10 +8094,14 @@ function remoteFire(pid, o, d){
   if(typeof SFX!=='undefined' && SFX.shootAt){ SFX.shootAt(from); }   // distance-attenuated shot (falls back to nothing if unsupported)
 }
 function tracer(from, to){
-  const g = new THREE.BufferGeometry().setFromPoints([from, to]);
-  const m = new THREE.LineBasicMaterial({color:0xffe08a, transparent:true, opacity:.9});
-  const line = new THREE.Line(g,m); scene.add(line);
-  tracers.push({line, life:0.06});
+  const d = new THREE.Vector3().subVectors(to, from); const len = d.length(); if(len < 0.05) return;
+  const m = new THREE.MeshBasicMaterial({ color:0xfff1c0, transparent:true, opacity:0.95, blending:THREE.AdditiveBlending, depthWrite:false });
+  const beam = new THREE.Mesh(_tracerGeo, m);
+  beam.position.copy(from).addScaledVector(d, 0.5);
+  beam.quaternion.setFromUnitVectors(_UP, d.normalize());
+  beam.scale.set(0.045, len, 0.045);
+  scene.add(beam);
+  tracers.push({ line: beam, life:0.06 });
 }
 
 // hit particles
@@ -8042,7 +8185,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 115 · 2026-06-04';
+const BUILD_VERSION = 'build 119 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8715,6 +8858,8 @@ function shoot(){
     if(hits.length){
       const hit = hits[0];
       endPoint = hit.point.clone();
+      const isHead = !!(hit.object.userData && hit.object.userData.isHead);
+      const hsMul = isHead ? HEADSHOT_MUL : 1;
       // dynamic physics prop? push it (host/solo apply directly; clients ask the host)
       let dn = hit.object, dprop = null;
       while(dn && !dprop){ if(dn.userData && dn.userData.phys) dprop = dn; dn = dn.parent; }
@@ -8738,26 +8883,26 @@ function shoot(){
         while(node && pid==null){ for(const id in NET.players){ if(NET.players[id].mesh===node){ pid=+id; break; } } node=node.parent; }
         if(pid!=null && sameTeam(NET.myId, pid)){ spark(hit.point, 0x7fdcc4); }   // teammate — no friendly fire
         else if(pid!=null){
-          sendToPlayer(pid, {t:'pvpHit', d:w.dmg*dmgMul, from:NET.myId});
-          spark(hit.point, 0xff6b6b); if(p===0){ showHitmarker(); SFX.hit(); }
+          sendToPlayer(pid, {t:'pvpHit', d:w.dmg*dmgMul*hsMul, from:NET.myId});
+          spark(hit.point, isHead?0xffd166:0xff6b6b); if(p===0){ showHitmarker(isHead); SFX.hit(); if(isHead) SFX.hit(); }
         } else { spark(hit.point, 0x9fd8ff); }
       } else if(clientMode){
         // find the enemy id by walking up to the networked enemy mesh, then report it to the host
         let node = hit.object, id = null;
         while(node && id==null){ if(node.userData && node.userData.enemyId!=null) id=node.userData.enemyId; node = node.parent; }
         if(id!=null){
-          if(NET.conn) try{ NET.conn.send({t:'hit', e:id, d:w.dmg*dmgMul}); }catch(e){}
-          spark(hit.point, 0xff6b6b); if(p===0){ showHitmarker(); SFX.hit(); }
+          if(NET.conn) try{ NET.conn.send({t:'hit', e:id, d:w.dmg*dmgMul*hsMul}); }catch(e){}
+          spark(hit.point, isHead?0xffd166:0xff6b6b); if(p===0){ showHitmarker(isHead); SFX.hit(); if(isHead) SFX.hit(); }
         } else { spark(hit.point, 0x9fd8ff); }
       } else {
         // find enemy by walking up from the hit object (handles child meshes)
         let node = hit.object, en = null;
         while(node && !en){ en = enemies.find(e=>e.mesh===node); node = node.parent; }
         if(en){
-          const dealt = w.dmg*dmgMul;
+          const dealt = w.dmg*dmgMul*hsMul;
           en.hp -= dealt;
-          spark(hit.point, 0xff6b6b);
-          spawnDamageNumber(hit.point, dealt, en.hp<=0);
+          spark(hit.point, isHead?0xffd166:0xff6b6b);
+          spawnDamageNumber(hit.point, dealt, en.hp<=0, isHead);
           flashEnemy(en);
           if(p===0){ showHitmarker(en.hp<=0); SFX.hit(); }
           if(en.hp<=0) killEnemy(en);
@@ -8888,7 +9033,7 @@ const dmgNumbers = [];           // world-space sprites that rise + fade
 // Floating hit-number look is authorable in the editor (on/off, font size, hit + kill colors) and saved.
 let dmgNumCfg = { on:true, size:44, hitColor:'#ffe08a', killColor:'#ff6b6b' };
 if(savedLevel && savedLevel.dmgNum){ const d=savedLevel.dmgNum; if(d.on!=null) dmgNumCfg.on=!!d.on; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
-function spawnDamageNumber(pos, amount, kill){
+function spawnDamageNumber(pos, amount, kill, head){
   if(!dmgNumCfg.on) return;
   const n = Math.max(1, Math.round(amount));
   const fs = Math.max(10, Math.min(120, dmgNumCfg.size||44));
@@ -8896,8 +9041,8 @@ function spawnDamageNumber(pos, amount, kill){
   const cx = cv.getContext('2d');
   cx.font = 'bold '+fs+'px system-ui, sans-serif'; cx.textAlign='center'; cx.textBaseline='middle';
   cx.lineWidth = Math.max(3, fs*0.14); cx.strokeStyle = 'rgba(0,0,0,0.85)';
-  cx.fillStyle = kill ? (dmgNumCfg.killColor||'#ff6b6b') : (dmgNumCfg.hitColor||'#ffe08a');
-  const txt = kill ? (n + '!') : ('' + n);
+  cx.fillStyle = kill ? (dmgNumCfg.killColor||'#ff6b6b') : (head ? '#ffd166' : (dmgNumCfg.hitColor||'#ffe08a'));
+  const txt = kill ? (n + '!') : (head ? (n + '!') : ('' + n));
   cx.strokeText(txt, cv.width/2, cv.height/2); cx.fillText(txt, cv.width/2, cv.height/2);
   const tex = new THREE.CanvasTexture(cv); tex.minFilter = THREE.LinearFilter;
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map:tex, transparent:true, depthTest:false, depthWrite:false }));
@@ -8928,8 +9073,33 @@ function updateFloaters(dt){
 }
 // ---- Ranged enemies (Gunner) fire travelling projectiles; cover blocks line of sight ----
 const enemyShots = [];
-const enemyShotGeo = new THREE.SphereGeometry(0.16, 8, 8);
-const enemyShotMat = new THREE.MeshBasicMaterial({ color:0x6fe0ff });
+const _UP = new THREE.Vector3(0,1,0);
+// player/remote tracer = a glowing additive beam (shared unit cylinder along Y, open-ended)
+const _tracerGeo = new THREE.CylinderGeometry(1,1,1,6,1,true);
+// enemy projectile = a hot core + an additive halo, stretched along travel, leaving a streak trail
+const _boltCoreGeo = new THREE.SphereGeometry(0.1, 8, 8);
+const _boltCoreMat = new THREE.MeshBasicMaterial({ color:0xeafaff });
+const _boltGlowGeo = new THREE.SphereGeometry(0.26, 10, 10);
+const _boltGlowMat = new THREE.MeshBasicMaterial({ color:0x39c6ff, transparent:true, opacity:0.55, blending:THREE.AdditiveBlending, depthWrite:false });
+const _boltFlashMat = new THREE.MeshBasicMaterial({ color:0x9fe6ff, transparent:true, opacity:0.9, blending:THREE.AdditiveBlending, depthWrite:false });
+const boltTrails = [];   // fading additive puffs left behind bolts + impact flashes
+function makeEnemyBolt(){
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(_boltCoreGeo, _boltCoreMat));
+  const glow = new THREE.Mesh(_boltGlowGeo, _boltGlowMat); g.add(glow); g.userData.glow = glow;
+  return g;
+}
+function emitBoltTrail(p){
+  const m = new THREE.Mesh(_boltGlowGeo, _boltGlowMat.clone());
+  m.position.copy(p); const s = 0.5 + Math.random()*0.15; m.scale.setScalar(s);
+  scene.add(m); boltTrails.push({ mesh:m, life:0.16, max:0.16, s, fade:0.5 });
+}
+function boltImpact(p, color){
+  spark(p, color||0x6fe0ff);
+  const m = new THREE.Mesh(_boltGlowGeo, _boltFlashMat.clone());
+  m.position.copy(p); m.scale.setScalar(0.6);
+  scene.add(m); boltTrails.push({ mesh:m, life:0.18, max:0.18, s:2.4, fade:0.9 });
+}
 // True if a wall / static prop sits on the segment between two floor points (sampled at chest height).
 function segmentBlocked(ax, az, bx, bz, y){
   const steps = 14;
@@ -8944,8 +9114,11 @@ function fireEnemyShot(en, target){
   flashEnemy(en);
   const from = new THREE.Vector3(en.mesh.position.x, 1.4, en.mesh.position.z);
   const dir = new THREE.Vector3(target.pos.x - from.x, 1.3 - from.y, target.pos.z - from.z).normalize();
-  const mesh = new THREE.Mesh(enemyShotGeo, enemyShotMat);
-  mesh.position.copy(from); scene.add(mesh);
+  const mesh = makeEnemyBolt();
+  mesh.position.copy(from);
+  mesh.quaternion.setFromUnitVectors(_UP, dir.clone().normalize());   // align local +Y to travel
+  if(mesh.userData.glow) mesh.userData.glow.scale.set(1, 2.4, 1);     // stretch the halo into a bolt
+  scene.add(mesh);
   enemyShots.push({ mesh, vel: dir.multiplyScalar(en.projSpeed), dmg: en.dmg, born: performance.now(), life: 3500 });
   if(SFX && SFX.shoot) SFX.shoot();
 }
@@ -8957,10 +9130,11 @@ function updateEnemyShots(dt){
     const s = enemyShots[i];
     s.mesh.position.addScaledVector(s.vel, dt);
     const p = s.mesh.position;
+    emitBoltTrail(p);
     let dead = (now - s.born) > s.life || p.y < 0.1;
     if(!dead){ for(const pl of ps){ const dx=pl.pos.x-p.x, dy=((pl.pos.y!=null?pl.pos.y:1.4))-p.y, dz=pl.pos.z-p.z; if(dx*dx+dy*dy+dz*dz < 1.1*1.1){ if(pl.hurt) pl.hurt(s.dmg); dead=true; break; } } }
     if(!dead){ for(const c of colliders){ const b=c.userData.box; if(!b) continue; if(p.x>=b.min.x&&p.x<=b.max.x&&p.y>=b.min.y&&p.y<=b.max.y&&p.z>=b.min.z&&p.z<=b.max.z){ dead=true; break; } } }
-    if(dead){ spark(p, 0x6fe0ff); scene.remove(s.mesh); enemyShots.splice(i,1); }
+    if(dead){ boltImpact(p, 0x6fe0ff); scene.remove(s.mesh); enemyShots.splice(i,1); }
   }
 }
 function flashDamage(){
@@ -9420,12 +9594,20 @@ function loop(){
   for(let i=tracers.length-1;i>=0;i--){
     const tr = tracers[i]; tr.life -= dt;
     tr.line.material.opacity = Math.max(0,tr.life/0.06)*0.9;
-    if(tr.life<=0){ scene.remove(tr.line); tracers.splice(i,1); }
+    if(tr.life<=0){ scene.remove(tr.line); if(tr.line.material&&tr.line.material.dispose) tr.line.material.dispose(); tracers.splice(i,1); }
   }
   // muzzle flashes (remote gunfire)
   for(let i=_muzFlashes.length-1;i>=0;i--){
     const f=_muzFlashes[i]; f.life-=dt; f.mesh.material.opacity=Math.max(0,f.life/0.07)*0.95;
     if(f.life<=0){ scene.remove(f.mesh); _muzFlashes.splice(i,1); }
+  }
+  updateFlipbooks(dt);   // sprite-sheet explosions / smoke / fire
+  // bolt streak trails + impact flashes (fade + expand, then dispose)
+  for(let i=boltTrails.length-1;i>=0;i--){
+    const t=boltTrails[i]; t.life-=dt; const k=Math.max(0,t.life/t.max);
+    t.mesh.material.opacity = t.fade*k;
+    t.mesh.scale.setScalar(t.s*(0.5+1.0*(1-k)));
+    if(t.life<=0){ scene.remove(t.mesh); if(t.mesh.material&&t.mesh.material.dispose) t.mesh.material.dispose(); boltTrails.splice(i,1); }
   }
   // sparks
   for(let i=sparks.length-1;i>=0;i--){
@@ -9469,6 +9651,7 @@ function loop(){
   // pickups, coins, buffs, grenades, chests, proximity
   updateBossBar(isClient || duelMode);   // boss health bar (host/solo)
   if(!isClient && !duelMode) updateCoins(dt);   // coins are host-owned; clients see them via snapshots
+  if(!isClient && !editorOpen) updatePowerups(dt);   // powerups are host/solo-owned (all combat modes)
   updateBuffs(dt);
   updateGrenades(dt);
   updateFloaters(dt);   // floating damage numbers + enemy hit-flash decay
@@ -11808,6 +11991,8 @@ function startGame(){
   WEAPONS.shotgun.mag=6; WEAPONS.shotgun.reserve=24;
   reloading=false; score=0; wave=1; credits=0; grenadeCount=0; runKills=0;
   if(typeof startObjective==='function') startObjective();   // reset survival timer for this run
+  if(typeof spawnPowerups==='function') spawnPowerups();   // lay out map powerups for this run
+  if(typeof preloadVfx==='function') preloadVfx();   // warm the flipbook VFX textures (no-op if already loaded)
   if(pvpMode()) credits = 150;   // starting stipend so the economy is usable from the first life
   buffs.damage=0; buffs.speed=0; buffs.shield=0;
   // reset aim/shake state
