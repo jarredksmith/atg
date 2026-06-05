@@ -508,7 +508,7 @@
     <button class="modalClose" data-close="instrModal">✕</button>
     <h2>INSTRUCTIONS</h2>
     <div id="controls">
-      <b>WASD</b> move &nbsp;·&nbsp; <b>MOUSE</b> look &nbsp;·&nbsp; <b>L-CLICK</b> fire &nbsp;·&nbsp; <b>R-CLICK</b> aim &nbsp;·&nbsp; <b>SHIFT</b> sprint &nbsp;·&nbsp; <b>SPACE</b> jump<br>
+      <b>WASD</b> move &nbsp;·&nbsp; <b>MOUSE</b> look &nbsp;·&nbsp; <b>L-CLICK</b> fire &nbsp;·&nbsp; <b>R-CLICK</b> aim &nbsp;·&nbsp; <b>SHIFT</b> sprint &nbsp;·&nbsp; <b>SPACE</b> jump &nbsp;·&nbsp; <b>SPRINT+CROUCH</b> slide<br>
       <b>R</b> reload &nbsp;·&nbsp; <b>G</b> throw grenade &nbsp;·&nbsp; <b>E</b> use station / open cache &nbsp;·&nbsp; <b>1·2·3</b> / <b>scroll</b> weapons<br>
       <b>ESC</b> pause &nbsp;·&nbsp; <b>P</b> open the in-game model/transform editor<br>
       <span style="color:#ffd166">Kill enemies for ◆ credits — spend them at the ammo station and supply caches.</span>
@@ -6234,6 +6234,7 @@ let _editorOpenFlag = false;   // mirror of editorOpen, declared early so applyW
 applyWorldCfg();
 // crouch (hold Ctrl or C): lowers the view and slows movement
 let crouching = false, crouchT = 0;
+let sliding=false, slideT=0, slideCD=0, _prevCrouchHeld=false; const slideDir=new THREE.Vector3(); const SLIDE_DUR=0.55;
 const CROUCH_DIP = 0.8;     // how far the camera lowers when fully crouched
 const keys = {};
 // ---- Touch / mobile input ----
@@ -6411,6 +6412,8 @@ vmScene.add(gun);
 const vmMuzzle = new THREE.Object3D();
 vmMuzzle.position.set(GUN_OFFSET.x, GUN_OFFSET.y + 0.04, GUN_OFFSET.z - 1.02);
 gun.add(vmMuzzle);
+const MUZZLE_DEFAULT = { x:GUN_OFFSET.x, y:GUN_OFFSET.y + 0.04, z:GUN_OFFSET.z - 1.02 };   // where tracers + the flash originate
+function applyWeaponMuzzle(key){ const v=wepView(key); vmMuzzle.position.set(v.mzx!=null?v.mzx:MUZZLE_DEFAULT.x, v.mzy!=null?v.mzy:MUZZLE_DEFAULT.y, v.mzz!=null?v.mzz:MUZZLE_DEFAULT.z); }
 const _muzNdc = new THREE.Vector2();
 // A neutral fallback environment so metallic gun materials reflect *something* even on levels with no sky.
 let _vmEnvFallback = null, _vmEnvTried = false;
@@ -6449,7 +6452,7 @@ const _gunLoading = {};      // weapon key -> true while a model load is in flig
 function wepModelUrl(key){ const w=WEAPONS[key]; return (w && w.model) ? w.model : gunModelUrl; }
 // Default per-weapon transform (falls back to the shared GUN_* framing when a weapon has no saved view).
 function wepView(key){ const w=WEAPONS[key]; return (w && w.view) ? w.view
-  : { px:GUN_OFFSET.x, py:GUN_OFFSET.y, pz:GUN_OFFSET.z, rx:GUN_ROT.x*DEG, ry:GUN_ROT.y*DEG, rz:GUN_ROT.z*DEG, s:GUN_SCALE }; }
+  : { px:GUN_OFFSET.x, py:GUN_OFFSET.y, pz:GUN_OFFSET.z, rx:GUN_ROT.x*DEG, ry:GUN_ROT.y*DEG, rz:GUN_ROT.z*DEG, s:GUN_SCALE, mzx:GUN_OFFSET.x, mzy:GUN_OFFSET.y+0.04, mzz:GUN_OFFSET.z-1.02 }; }
 
 function applyWepView(model, key){
   const v = wepView(key);
@@ -6529,6 +6532,7 @@ if(savedLevel && savedLevel.weapons){ for(const k in WEAPONS){ const wd = savedL
 let owned = ['rifle'];           // weapons the player has
 let curWep = 'rifle';            // current weapon key
 loadGunModel();                  // load the starting weapon's viewmodel (now that WEAPONS/curWep exist)
+applyWeaponMuzzle(curWep);        // position the muzzle point for the starting weapon
 function W(){ return WEAPONS[curWep]; }
 let reloading = false;
 let lastShot = 0, recoil = 0;
@@ -6537,13 +6541,14 @@ function refillAllWeapons(){
   for(const k in WEAPONS){ const w=WEAPONS[k]; w.mag=w.magSize; w.reserve=w.reserveMax; }
 }
 // Duel loadout: hand the player all three weapons fully loaded (duels are a gunfight, not an economy).
-function giveDuelLoadout(){ owned=['rifle','smg','shotgun']; curWep='rifle'; refillAllWeapons(); reloading=false; applyWeaponAim('rifle'); }
+function giveDuelLoadout(){ owned=['rifle','smg','shotgun']; curWep='rifle'; refillAllWeapons(); reloading=false; applyWeaponAim('rifle'); applyWeaponMuzzle('rifle'); }
 
 function switchWeapon(key){
   if(!owned.includes(key) || key===curWep || reloading) return;
   curWep = key; SFX.swap(); showWeaponToast(); updateHUD();
   showWeaponModel(key);   // show this weapon's own viewmodel (loads on first use)
   applyWeaponAim(key);    // load this weapon's saved ADS pose
+  applyWeaponMuzzle(key); // load this weapon's saved muzzle position
   if(editorOpen && editorActive==='aim' && editorTargets.aim.syncFromWeapon){ editorTargets.aim.syncFromWeapon(); if(typeof renderEditorFields==='function') renderEditorFields(); }
   // retint the viewmodel sight (placeholder only; the loaded model carries its own materials)
   if(sight && sight.material) sight.material.emissive.setHex(WEAPONS[key].color);
@@ -7192,7 +7197,7 @@ function makeNameSprite(text, team){
 }
 const remoteBodyGeo = new THREE.CapsuleGeometry(0.5, 1.2, 4, 8);
 // ---- Player avatar (what teammates / duel opponents see). Default = blue capsule; swappable for a GLB. ----
-const PLAYER_MODEL0 = { url:'', scale:1, face:0, yoff:0, xoff:0, zoff:0, clips:{ idle:'', walk:'', run:'', attack:'' } };   // face in radians
+const PLAYER_MODEL0 = { url:'', scale:1, face:0, rx:0, rz:0, yoff:0, xoff:0, zoff:0, clips:{ idle:'', walk:'', run:'', attack:'' } };   // face/rx/rz in radians
 let playerModelCfg = Object.assign({}, PLAYER_MODEL0, { clips:{ idle:'', walk:'', run:'', attack:'' } });
 let playerModelClips = [];   // animation clip names discovered when the avatar model loads
 function buildAvatarVisual(g){
@@ -7227,7 +7232,7 @@ function buildAvatarVisual(g){
         model.position.set(model.position.x-cx+mc.xoff, model.position.y-lbox.min.y+mc.yoff, model.position.z-cz+mc.zoff);   // feet at the group origin (ground)
         h=Math.max(0.6, lbox.max.y-lbox.min.y); fr=Math.max(0.3, Math.min(2, Math.max((lbox.max.x-lbox.min.x)/2,(lbox.max.z-lbox.min.z)/2)));
       }
-      model.rotation.y += (mc.face||0);
+      model.rotation.x = (mc.rx||0); model.rotation.z = (mc.rz||0); model.rotation.y += (mc.face||0);   // full orient: pitch / roll / facing
       g.userData.visual=model; g.userData.hasModel=true;
       model.userData.seat={ p:model.position.clone(), q:model.quaternion.clone(), s:model.scale.clone() };   // re-pinned each frame so root-motion can't fling the model
       const hb=h*0.82; const px=new THREE.Mesh(new THREE.CylinderGeometry(fr,fr,hb,10), _ENEMY_PROXY_MAT); px.position.y=hb/2; g.add(px); g.userData.hitProxy=px;
@@ -8197,7 +8202,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 127 · 2026-06-04';
+const BUILD_VERSION = 'build 130 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9491,8 +9496,25 @@ function loop(){
   player.vel.x = wish.x * sp;
   player.vel.z = wish.z * sp;
 
+  // --- slide: tap crouch while sprinting + running on the ground ---
+  const _sprinting = (keys['ShiftLeft']||padSprint||touchSprint);
+  const _crouchHeld = (keys['ControlLeft']||keys['ControlRight']||keys['KeyC']||padCrouch);
+  if(slideCD>0) slideCD -= dt;
+  const _slideEdge = _crouchHeld && !_prevCrouchHeld; _prevCrouchHeld = _crouchHeld;
+  if(!sliding && slideCD<=0 && _slideEdge && _sprinting && player.onGround && wish.lengthSq()>0.01 && !shopOpen && !editorOpen){
+    sliding = true; slideT = SLIDE_DUR; slideDir.copy(wish).normalize();
+  }
+  if(sliding){
+    slideT -= dt;
+    const k = Math.max(0, slideT/SLIDE_DUR);
+    const slSpeed = SPEED*SPRINT*1.75 * (0.4 + 0.6*k) * (buffs.speed>0?1.4:1) * run.speedMul;   // fast launch, decays to a walk
+    player.vel.x = slideDir.x*slSpeed; player.vel.z = slideDir.z*slSpeed;
+    crouching = true; crouchT = Math.min(1, crouchT + dt*10);   // dip low during the slide
+    if(slideT<=0 || !player.onGround){ sliding=false; slideCD=0.55; }
+  }
+
   // jump + gravity
-  if((keys['Space']||padJump||touchJump) && player.onGround){ player.vel.y = JUMP; player.onGround=false; SFX.jump(); }
+  if((keys['Space']||padJump||touchJump) && player.onGround){ player.vel.y = JUMP; player.onGround=false; sliding=false; SFX.jump(); }
   touchJump = false;   // tap is consumed for one frame
   player.vel.y -= GRAV*dt;
   // one-shot vertical knock from physics props (e.g. a fast body launching the player)
@@ -9835,8 +9857,7 @@ function applyPlayerLevel(pl){ if(!pl) return; if(pl.state) Object.assign(editor
 const editorTargets = {
   gun: {
     label: 'Gun',
-    state: (savedLevel && savedLevel.gun && savedLevel.gun.state) ? Object.assign({}, savedLevel.gun.state)
-      : { px:GUN_OFFSET.x, py:GUN_OFFSET.y, pz:GUN_OFFSET.z, rx:GUN_ROT.x*DEG, ry:GUN_ROT.y*DEG, rz:GUN_ROT.z*DEG, s:GUN_SCALE },
+    state: Object.assign({ px:GUN_OFFSET.x, py:GUN_OFFSET.y, pz:GUN_OFFSET.z, rx:GUN_ROT.x*DEG, ry:GUN_ROT.y*DEG, rz:GUN_ROT.z*DEG, s:GUN_SCALE, mzx:GUN_OFFSET.x, mzy:GUN_OFFSET.y+0.04, mzz:GUN_OFFSET.z-1.02 }, (savedLevel && savedLevel.gun && savedLevel.gun.state) || {}),
     fields: [
       { k:'px', label:'Pos X', min:-2, max:2, step:STEP_POS },
       { k:'py', label:'Pos Y', min:-2, max:2, step:STEP_POS },
@@ -9845,6 +9866,9 @@ const editorTargets = {
       { k:'ry', label:'Rot Y', min:-180, max:180, step:STEP_ROT },
       { k:'rz', label:'Rot Z', min:-180, max:180, step:STEP_ROT },
       { k:'s',  label:'Scale', min:0.00001, max:3, step:STEP_SCALE },
+      { k:'mzx', label:'Muzzle X', min:-2, max:2, step:STEP_POS },
+      { k:'mzy', label:'Muzzle Y', min:-2, max:2, step:STEP_POS },
+      { k:'mzz', label:'Muzzle Z', min:-3, max:1, step:STEP_POS },
     ],
     obj: ()=>gunModel,
     urlField: true,
@@ -9852,12 +9876,13 @@ const editorTargets = {
     getUrl(){ const w=WEAPONS[curWep]; return (w && w.model) ? w.model : gunModelUrl; },
     setUrl(u){ swapGunModel(u, curWep); },
     // pull this weapon's saved view into the editor state (called when you switch the edited weapon)
-    syncFromWeapon(){ const v=wepView(curWep); this.state.px=v.px; this.state.py=v.py; this.state.pz=v.pz; this.state.rx=v.rx; this.state.ry=v.ry; this.state.rz=v.rz; this.state.s=v.s; },
-    apply(){ const o=this.obj(), s=this.state; if(!o) return;
+    syncFromWeapon(){ const v=wepView(curWep); this.state.px=v.px; this.state.py=v.py; this.state.pz=v.pz; this.state.rx=v.rx; this.state.ry=v.ry; this.state.rz=v.rz; this.state.s=v.s; this.state.mzx=(v.mzx!=null?v.mzx:MUZZLE_DEFAULT.x); this.state.mzy=(v.mzy!=null?v.mzy:MUZZLE_DEFAULT.y); this.state.mzz=(v.mzz!=null?v.mzz:MUZZLE_DEFAULT.z); },
+    apply(){ const o=this.obj(), s=this.state;
+      vmMuzzle.position.set(s.mzx, s.mzy, s.mzz);   // muzzle/tracer/flash origin (no model needed)
+      WEAPONS[curWep].view = { px:s.px, py:s.py, pz:s.pz, rx:s.rx, ry:s.ry, rz:s.rz, s:s.s, mzx:s.mzx, mzy:s.mzy, mzz:s.mzz };
+      if(!o) return;
       o.position.set(s.px,s.py,s.pz); o.scale.setScalar(s.s);
-      o.rotation.set(s.rx*RAD, s.ry*RAD, s.rz*RAD);
-      // persist the edited transform onto the current weapon so it sticks per-gun and serializes
-      WEAPONS[curWep].view = { px:s.px, py:s.py, pz:s.pz, rx:s.rx, ry:s.ry, rz:s.rz, s:s.s }; },
+      o.rotation.set(s.rx*RAD, s.ry*RAD, s.rz*RAD); },
     code(){ const s=this.state;
       return '// ===== Gun viewmodel =====\n'
         + 'const GUN_MODEL_URL = ' + JSON.stringify(gunModelUrl) + ';\n'
@@ -9912,10 +9937,12 @@ const editorTargets = {
   },
   player: {
     label: 'Player',
-    state: (savedLevel && savedLevel.player && savedLevel.player.state) ? Object.assign({ s:1, face:0, yoff:0, xoff:0, zoff:0 }, savedLevel.player.state) : { s:1, face:0, yoff:0, xoff:0, zoff:0 },
+    state: (savedLevel && savedLevel.player && savedLevel.player.state) ? Object.assign({ s:1, face:0, rx:0, rz:0, yoff:0, xoff:0, zoff:0 }, savedLevel.player.state) : { s:1, face:0, rx:0, rz:0, yoff:0, xoff:0, zoff:0 },
     fields: [
       { k:'s',    label:'Scale',    min:0.05, max:6, step:0.001 },
       { k:'face', label:'Facing°',  min:-180, max:180, step:1 },
+      { k:'rx',   label:'Pitch°',   min:-180, max:180, step:1 },
+      { k:'rz',   label:'Roll°',    min:-180, max:180, step:1 },
       { k:'yoff', label:'Y offset', min:-3, max:3, step:0.05 },
       { k:'xoff', label:'X offset', min:-3, max:3, step:0.05 },
       { k:'zoff', label:'Z offset', min:-3, max:3, step:0.05 },
@@ -9924,7 +9951,7 @@ const editorTargets = {
     urlField: true,
     getUrl(){ return playerModelCfg.url; },
     setUrl(u){ playerModelCfg.url=(u||'').trim(); this.apply(); },
-    apply(){ const s=this.state; playerModelCfg.scale=s.s; playerModelCfg.face=(s.face||0)*RAD; playerModelCfg.yoff=s.yoff; playerModelCfg.xoff=s.xoff; playerModelCfg.zoff=s.zoff; rebuildAvatars(); },
+    apply(){ const s=this.state; playerModelCfg.scale=s.s; playerModelCfg.face=(s.face||0)*RAD; playerModelCfg.rx=(s.rx||0)*RAD; playerModelCfg.rz=(s.rz||0)*RAD; playerModelCfg.yoff=s.yoff; playerModelCfg.xoff=s.xoff; playerModelCfg.zoff=s.zoff; rebuildAvatars(); },
     code(){ return '// ===== Player avatar (remote/duel) =====\\n'
         + 'const PLAYER_MODEL_URL = ' + JSON.stringify(playerModelCfg.url) + ';\\n'
         + 'const PLAYER_MODEL_SCALE = ' + fmt(this.state.s) + ';'; }
@@ -11284,6 +11311,7 @@ function renderEditorFields(){
             const wasReloading = reloading; reloading = false; const prev=curWep; curWep=key;
             // force the switch (switchWeapon early-returns if same/owned checks fail)
             SFX.swap(); showWeaponToast(); updateHUD(); showWeaponModel(key); reloading = wasReloading;
+            applyWeaponAim(key); applyWeaponMuzzle(key);
           }
           tgt.syncFromWeapon();
           renderEditorFields();
