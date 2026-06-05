@@ -6537,12 +6537,14 @@ function refillAllWeapons(){
   for(const k in WEAPONS){ const w=WEAPONS[k]; w.mag=w.magSize; w.reserve=w.reserveMax; }
 }
 // Duel loadout: hand the player all three weapons fully loaded (duels are a gunfight, not an economy).
-function giveDuelLoadout(){ owned=['rifle','smg','shotgun']; curWep='rifle'; refillAllWeapons(); reloading=false; }
+function giveDuelLoadout(){ owned=['rifle','smg','shotgun']; curWep='rifle'; refillAllWeapons(); reloading=false; applyWeaponAim('rifle'); }
 
 function switchWeapon(key){
   if(!owned.includes(key) || key===curWep || reloading) return;
   curWep = key; SFX.swap(); showWeaponToast(); updateHUD();
   showWeaponModel(key);   // show this weapon's own viewmodel (loads on first use)
+  applyWeaponAim(key);    // load this weapon's saved ADS pose
+  if(editorOpen && editorActive==='aim' && editorTargets.aim.syncFromWeapon){ editorTargets.aim.syncFromWeapon(); if(typeof renderEditorFields==='function') renderEditorFields(); }
   // retint the viewmodel sight (placeholder only; the loaded model carries its own materials)
   if(sight && sight.material) sight.material.emissive.setHex(WEAPONS[key].color);
 }
@@ -7102,6 +7104,8 @@ function updateRespawnOverlay(){
 }
 function duelDie(){
   duelDead = true; duelRespawnTimer = 2.5; _kcInit=false;
+  if(shopOpen) closeShop();   // can't respawn while a crate freezes the loop
+  choosingUpgrade = false;
   netDeath(player.pos.x, 0, player.pos.z);   // burst where I fell, mirrored to all peers
   // report the kill to the host (the host is authoritative for score)
   if(NET.mode==='host'){ registerDuelKill(lastDamagedBy, NET.myId); }
@@ -7704,6 +7708,7 @@ function playFlipbook(kind, pos, scale, parent){
   tex.repeat.set(1/cfg.cols, 1/cfg.rows);
   const mat = new THREE.SpriteMaterial({ map:tex, transparent:true, depthWrite:false, opacity:1,
     blending: cfg.blend==='add' ? THREE.AdditiveBlending : THREE.NormalBlending, rotation: Math.random()*Math.PI*2 });
+  if(parent){ mat.depthTest=false; }   // viewmodel space: always draw over the gun
   const sp = new THREE.Sprite(mat);
   const base = (cfg.size||1) * (scale||1);
   sp.scale.setScalar(base); sp.position.copy(pos); sp.renderOrder = 9000;
@@ -8019,6 +8024,7 @@ function interact(){
 }
 
 function openShop(chest){
+  if(duelDead) return;   // no shopping while waiting to respawn
   shopOpen = true; shopMode = chest;
   firing = false; ads = false;
   safeExitPointerLock();
@@ -8185,7 +8191,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 121 · 2026-06-04';
+const BUILD_VERSION = 'build 124 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8261,6 +8267,12 @@ function pollGamepad(dt){
 const ADS_AIM = new THREE.Vector3(0.20866, -0.47289, -0.04449);
 // Extra rotation applied to the gun while aimed (radians, blended in by adsBlend). Tunable in the Aim tab.
 const ADS_ROT = new THREE.Euler(0.13820, 0.13102, 0.00939);
+// Per-weapon ADS pose: each weapon remembers its own aim. ADS_AIM/ADS_ROT/adsFovLive are the live values
+// the loop reads; applyWeaponAim() loads the equipped weapon's saved pose into them.
+const AIM_DEFAULT = { x:ADS_AIM.x, y:ADS_AIM.y, z:ADS_AIM.z, rx:ADS_ROT.x*180/Math.PI, ry:ADS_ROT.y*180/Math.PI, rz:ADS_ROT.z*180/Math.PI, fov:ADS_FOV };
+const aimByWep = {};
+function getWeaponAim(key){ if(!aimByWep[key]) aimByWep[key]=Object.assign({}, AIM_DEFAULT); return aimByWep[key]; }
+function applyWeaponAim(key){ const a=getWeaponAim(key); ADS_AIM.set(a.x,a.y,a.z); ADS_ROT.set(a.rx*Math.PI/180, a.ry*Math.PI/180, a.rz*Math.PI/180); adsFovLive = a.fov; }
 // apply saved aim pose if present
 if(savedLevel && savedLevel.aim && savedLevel.aim.state){
   const a = savedLevel.aim.state, D2R = Math.PI/180;
@@ -8826,7 +8838,7 @@ function shoot(){
   recoil = Math.min(recoil + (0.018*w.pellets*0.5 + 0.014) * (adsBlend>0.5?0.5:1), 0.10);
   player.pitch += (0.010 + Math.random()*0.006) * (adsBlend>0.5?0.5:1);
   muzzle.intensity = 6; flashMat.opacity = 1;
-  playFlipbook('muzzle', new THREE.Vector3(0,0,0.02), 0.4, vmMuzzle);   // muzzle.png on your own gun (viewmodel overlay)
+  playFlipbook('muzzle', new THREE.Vector3(0,0,-0.05), 0.5, vmMuzzle);   // muzzle.png on your own gun, just in front of the barrel
 
   const dmgMul = (buffs.damage ? 2 : 1) * run.dmgMul;
   const clientMode = NET.mode==='client';
@@ -9408,7 +9420,7 @@ function loop(){
     if(v!==_pbShow){ _pbShow=v; const pb=document.getElementById('pauseBtn'); if(pb) pb.style.display = v?'flex':'none'; } }
   if(hitStop > 0){ hitStop -= rawDt; dt = rawDt * 0.12; }   // impact freeze: slow the sim briefly (real-time countdown)
   if(!gameOn) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }
-  if(shopOpen || choosingUpgrade || (paused && NET.mode==='off')) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }  // freeze world while shopping / picking an upgrade / paused (solo)
+  if((shopOpen || choosingUpgrade || (paused && NET.mode==='off')) && !(duelDead && pvpMode())) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }  // freeze world while shopping / picking an upgrade / paused (solo) — but never while waiting to respawn
 
   pollGamepad(dt);   // controller input feeds the same flags as keyboard/mouse
   if(isTouch && !shopOpen && !editorOpen && !choosingUpgrade){   // touch look: applied here since there's no pointer lock on mobile
@@ -9857,7 +9869,9 @@ const editorTargets = {
       { k:'fov', label:'ADS FOV', min:20, max:78, step:0.1 },
     ],
     obj: ()=>null,
-    apply(){ const s=this.state; ADS_AIM.set(s.x,s.y,s.z); ADS_ROT.set(s.rx*RAD, s.ry*RAD, s.rz*RAD); adsFovLive = s.fov; },
+    perWeapon: true,
+    syncFromWeapon(){ Object.assign(this.state, getWeaponAim(curWep)); },
+    apply(){ const s=this.state; const w=getWeaponAim(curWep); w.x=s.x; w.y=s.y; w.z=s.z; w.rx=s.rx; w.ry=s.ry; w.rz=s.rz; w.fov=s.fov; ADS_AIM.set(s.x,s.y,s.z); ADS_ROT.set(s.rx*RAD, s.ry*RAD, s.rz*RAD); adsFovLive = s.fov; },
     code(){ const s=this.state;
       return '// ===== Aim-down-sights pose =====\n'
         + 'const ADS_FOV = ' + (+s.fov).toFixed(2) + ';\n'
@@ -10222,6 +10236,7 @@ function serializeLevel(){
     gun:     { url: gunModelUrl,     state: Object.assign({}, editorTargets.gun.state) },
     weapons: Object.keys(WEAPONS).reduce((acc,k)=>{ const w=WEAPONS[k]; if(w.model || w.view) acc[k]={ model:w.model||'', view:w.view||null }; return acc; }, {}),
     aim:     { state: Object.assign({}, editorTargets.aim.state) },
+    aimWep:  JSON.parse(JSON.stringify(aimByWep)),
     station: { url: stationModelUrl, state: Object.assign({}, editorTargets.station.state) },
     player:  { url: playerModelCfg.url, state: Object.assign({}, editorTargets.player.state), clips: Object.assign({}, playerModelCfg.clips) },
     world:   Object.assign({}, worldCfg),
@@ -10287,7 +10302,9 @@ function restoreLevel(level){
     if(editorTargets.gun.syncFromWeapon) editorTargets.gun.syncFromWeapon();
     showWeaponModel(curWep);
   }
-  if(level.aim){ Object.assign(editorTargets.aim.state, level.aim.state||{}); editorTargets.aim.apply(); }
+  if(level.aimWep){ for(const k in level.aimWep) aimByWep[k]=Object.assign({}, AIM_DEFAULT, level.aimWep[k]); }
+  if(level.aim){ Object.assign(editorTargets.aim.state, level.aim.state||{}); if(!level.aimWep){ for(const k of Object.keys(WEAPONS)) aimByWep[k]=Object.assign({}, level.aim.state); } }
+  applyWeaponAim(curWep); if(editorTargets.aim.syncFromWeapon) editorTargets.aim.syncFromWeapon();
   if(level.station){ if(level.station.url && level.station.url!==stationModelUrl) swapStationModel(level.station.url); Object.assign(editorTargets.station.state, level.station.state||{}); editorTargets.station.apply(); }
   // world + loot
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }
@@ -11225,9 +11242,22 @@ function renderEditorFields(){
     }
   }
 
-  // model URL row (gun/station/props) + add controls (props: box/model, lights: add light) + delete
+  // model URL row + per-weapon pickers + add controls + delete
   const urlHost = editorEl.querySelector('#edUrl');
   urlHost.innerHTML = '';
+  if(tgt.perWeapon && !tgt.urlField){   // aim tab: pick which weapon's ADS pose to edit
+    const wh = document.createElement('div'); wh.className='hint'; wh.style.margin='2px 0 3px';
+    wh.innerHTML = '<b>Editing aim per weapon</b> — each weapon saves its own ADS pose';
+    urlHost.appendChild(wh);
+    const wrow = document.createElement('div'); wrow.className='row2'; wrow.style.marginBottom='6px';
+    for(const key of Object.keys(WEAPONS)){
+      const b=document.createElement('button'); b.textContent=WEAPONS[key].name;
+      if(key===curWep){ b.style.background='rgba(56,245,181,0.28)'; b.style.color='#eafff7'; }
+      b.onclick=()=>{ if(key!==curWep){ if(!owned.includes(key)) owned.push(key); const wasReloading=reloading; reloading=false; curWep=key; SFX.swap(); showWeaponToast(); updateHUD(); showWeaponModel(key); reloading=wasReloading; } applyWeaponAim(key); tgt.syncFromWeapon(); renderEditorFields(); };
+      wrow.appendChild(b);
+    }
+    urlHost.appendChild(wrow);
+  }
   if(tgt.urlField){
     if(tgt.perWeapon){
       const wh = document.createElement('div'); wh.className='hint'; wh.style.margin='2px 0 3px';
