@@ -6247,7 +6247,8 @@ function applyWorldCfg(){
   // HDRI / equirectangular sky
   if(typeof applySkyHdri==='function') applySkyHdri(worldCfg.sky_hdri||'');
 }
-let _editorOpenFlag = false;   // mirror of editorOpen, declared early so applyWorldCfg reads it at init (TDZ-safe)
+let editorOpen = false;        // transform editor panel open — declared early to stay TDZ-safe during init
+let _editorOpenFlag = false;   // mirror of editorOpen, read by applyWorldCfg at init
 applyWorldCfg();
 // crouch (hold Ctrl or C): lowers the view and slows movement
 let crouching = false, crouchT = 0;
@@ -7937,7 +7938,7 @@ function updateChests(dt){
 
 // ---------- Shop / interaction ----------
 let shopOpen = false;
-let editorOpen = false;   // transform editor panel open (soft-pauses combat)
+// editorOpen is declared early (next to applyWorldCfg) to avoid a temporal-dead-zone error during init
 let editorTopView = false;     // overhead straight-down camera for placement
 let editorFreeFly = false;     // free-fly camera: detach from the player, fly anywhere with WASD + mouse-look
 const flyPos = new THREE.Vector3();   // free-fly camera position (seeded from the player on enable)
@@ -8220,7 +8221,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 135 · 2026-06-04';
+const BUILD_VERSION = 'build 136 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
