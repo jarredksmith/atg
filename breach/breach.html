@@ -157,6 +157,7 @@
   #cpHud .cpFill { height:100%; width:0; transition:width .15s; }
   #cpHud .cpFill.red { background:#ff4d5e; } #cpHud .cpFill.blue { background:#3a9bff; }
   #cpMid { font-size:13px; letter-spacing:1px; font-weight:700; color:#9fe6cf; min-width:112px; text-align:center; }
+  #grabHint { position:fixed; left:50%; top:58%; transform:translateX(-50%); z-index:8; display:none; color:#cfeee2; background:rgba(6,12,15,.5); border:1px solid rgba(120,200,180,.25); border-radius:6px; padding:3px 10px; font:600 12px ui-monospace,monospace; letter-spacing:1px; pointer-events:none; }
 
   /* challenge link UI */
   .chalLine { color:#9fd8ff; font-size:13px; letter-spacing:1px; margin-top:8px; }
@@ -502,6 +503,7 @@
 <div id="damage"></div>
 <div id="lowhp"></div>
 <div id="hurtDir"><svg viewBox="-50 -50 100 100"><path d="M -10 -43 A 45 45 0 0 1 10 -43" fill="none" stroke="#ff8a93" stroke-width="1.4" stroke-linecap="round"/></svg></div>
+<div id="grabHint"></div>
 <div id="cpHud"><div class="cpSide"><span id="cpR">0</span><div class="cpBar"><div id="cpRfill" class="cpFill red"></div></div></div><div id="cpMid">NEUTRAL</div><div class="cpSide"><span id="cpB">0</span><div class="cpBar"><div id="cpBfill" class="cpFill blue"></div></div></div></div>
 
 <div id="overlay">
@@ -7279,7 +7281,7 @@ function updateRespawnOverlay(){
   sub.textContent = (by?('Eliminated by '+by+'  \u00b7  '):'')+'respawning in '+Math.max(1,Math.ceil(duelRespawnTimer))+'\u2026';
 }
 function duelDie(){
-  duelDead = true; duelRespawnTimer = 2.5; _kcInit=false;
+  duelDead = true; duelRespawnTimer = 2.5; _kcInit=false; releaseHeld();
   if(shopOpen) closeShop();   // can't respawn while a crate freezes the loop
   choosingUpgrade = false;
   netDeath(player.pos.x, 0, player.pos.z);   // burst where I fell, mirrored to all peers
@@ -7628,6 +7630,7 @@ function netTick(dt){
     NET.sendTimer=0.05;
     if(NET.mode==='client' && NET.conn && NET.conn.open){
       try{ NET.conn.send({ t:'st', p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:owned.indexOf(curWep), hp:Math.max(0,player.hp), n:NET.name }); }catch(e){}
+      if(heldProp && heldNidLocal!=null){ const tgt=_localHoldTarget(); try{ NET.conn.send({ t:'hold', nid:heldNidLocal, p:[tgt.x,tgt.y,tgt.z] }); }catch(e){} }
     } else if(NET.mode==='host'){
       broadcastWorld();
     }
@@ -7647,6 +7650,9 @@ function handleClientMsg(conn, msg){
   else if(msg.t==='died'){ registerDuelKill(msg.by, id); }            // a client died; credit the killer
   else if(msg.t==='botHit'){ const b=botById(msg.id); if(b && !b.dead && !sameTeam(msg.from, msg.id)){ b.hp-=msg.d; if(b.hp<=0){ registerDuelKill(msg.from, msg.id); botDie(b); } } }   // a client shot a bot
   else if(msg.t==='push'){ const o=propByNid(msg.nid); if(o) pushDynamic(o, new THREE.Vector3(msg.dir[0],msg.dir[1],msg.dir[2]), msg.s||6, msg.pt?{x:msg.pt[0],y:msg.pt[1],z:msg.pt[2]}:null); }   // a client shot a dynamic prop
+  else if(msg.t==='grab'){ if(!_remoteHold[msg.nid]) _remoteHold[msg.nid]={by:id}; }   // a client grabbed a prop
+  else if(msg.t==='hold'){ const h=_remoteHold[msg.nid]; if(!h) _remoteHold[msg.nid]={by:id, target:msg.p}; else if(h.by===id) h.target=msg.p; }   // ...and is carrying it
+  else if(msg.t==='holdEnd'){ const h=_remoteHold[msg.nid]; if(h && h.by===id){ if(msg.v){ const o=dynamicById(msg.nid); const b=o && o.userData.phys && o.userData.phys.body; if(b) b.setLinvel({x:msg.v[0],y:msg.v[1],z:msg.v[2]}, true); } delete _remoteHold[msg.nid]; } }   // ...and dropped/threw it
   else if(msg.t==='break'){   // host shattered a prop — show the debris locally (pDel removes the prop itself)
     const ctr=new THREE.Vector3(msg.ctr[0],msg.ctr[1],msg.ctr[2]); const sz=new THREE.Vector3(msg.sz[0],msg.sz[1],msg.sz[2]);
     if(msg.st==='puff'){ spark(ctr, msg.c||0xcfeee6); if(typeof SFX!=='undefined' && SFX.puff) SFX.puff(); }
@@ -8186,8 +8192,9 @@ function checkProximity(){
 }
 
 function interact(){
+  if(heldProp){ releaseHeld(); return; }   // carrying a prop -> drop it
   if(shopOpen){ closeShop(); return; }
-  if(!nearTarget) return;
+  if(!nearTarget){ tryGrabProp(); return; }   // nothing to use -> try to pick up a prop
   if(nearTarget.type==='station'){
     // direct purchase, no menu
     const w=W();
@@ -8379,7 +8386,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 145 · 2026-06-04';
+const BUILD_VERSION = 'build 146 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8467,9 +8474,10 @@ if(savedLevel && savedLevel.aim && savedLevel.aim.state){
   ADS_AIM.set(a.x, a.y, a.z); ADS_ROT.set(a.rx*D2R, a.ry*D2R, a.rz*D2R); adsFovLive = a.fov;
 }
 const HIP_SENS = 0.0022, ADS_SENS = 0.0012;  // slower look while aiming for precision
+addEventListener('wheel', e=>{ if(heldProp){ heldDist=Math.max(HOLD_MIN, Math.min(HOLD_MAX, heldDist - e.deltaY*0.003)); } }, {passive:true});
 addEventListener('mousedown', e=>{
   if(shopOpen || editorOpen || paused) return;
-  if(e.button===0) firing=true;
+  if(e.button===0){ if(heldProp){ throwHeld(); return; } firing=true; }
   else if(e.button===2) ads = true;   // right-click: aim down sights
 });
 addEventListener('mouseup', e=>{
@@ -8718,6 +8726,76 @@ function pushDynamic(obj, dir, strength, point){
   if(point){ _impPt.x=point.x; _impPt.y=point.y; _impPt.z=point.z; p.body.applyImpulseAtPoint(_impJ, _impPt, true); }
   else p.body.applyImpulse(_impJ, true);
 }
+// ---------- Build mechanic: gravity-gun style grab / carry / stack / throw of dynamic props ----------
+// Host/solo author the physics (drive the held body's velocity toward a point in front of the camera);
+// a connected client streams its aim to the host, which moves the body (host stays authoritative).
+let heldProp=null, heldDist=4, heldNidLocal=null, _grabHintT=0, _holdSendT=0, _grabAvail=false;
+const _remoteHold={};   // host: nid -> { by, target:[x,y,z] } for props clients are carrying
+const HOLD_MIN=2.2, HOLD_MAX=6.5, HOLD_GRAB_RANGE=6.5, HOLD_K=14, HOLD_MAXV=22, HOLD_BREAK=7.5, THROW_SPEED=17;
+const _holdTarget=new THREE.Vector3(), _holdRay=new THREE.Raycaster(), _hFwd=new THREE.Vector3(), _hPos=new THREE.Vector3();
+function _aimedProp(){
+  camera.getWorldPosition(_hPos); camera.getWorldDirection(_hFwd);
+  _holdRay.set(_hPos, _hFwd); _holdRay.far=HOLD_GRAB_RANGE;
+  const meshes=[]; for(const o of dynamicProps){ if(o.userData.phys && o.userData.nid!=null) meshes.push(o); }
+  const hits=_holdRay.intersectObjects(meshes, true);
+  if(!hits.length) return null;
+  let node=hits[0].object; while(node && !(node.userData && node.userData.phys)) node=node.parent;
+  return (node && node.userData && node.userData.phys) ? node : null;
+}
+function tryGrabProp(){
+  if(!gameOn || editorOpen || shopOpen || paused || duelDead) return false;
+  const obj=_aimedProp(); if(!obj) return false;
+  heldProp=obj; camera.getWorldPosition(_hPos);
+  heldDist=Math.max(HOLD_MIN, Math.min(HOLD_MAX, _hPos.distanceTo(obj.position)));
+  if(NET.mode==='client'){ heldNidLocal=obj.userData.nid; sendToPlayer(0, {t:'grab', nid:heldNidLocal}); }
+  if(typeof SFX!=='undefined' && SFX.swap) SFX.swap();
+  updateGrabHint(); return true;
+}
+function _localHoldTarget(){
+  camera.getWorldPosition(_hPos); camera.getWorldDirection(_hFwd);
+  _holdTarget.copy(_hPos).addScaledVector(_hFwd, heldDist);
+  if(_holdTarget.y<0.6) _holdTarget.y=0.6;
+  return _holdTarget;
+}
+function _driveOneHeld(body, target){
+  const t=body.translation();
+  let vx=(target.x-t.x)*HOLD_K, vy=(target.y-t.y)*HOLD_K, vz=(target.z-t.z)*HOLD_K;
+  const sp=Math.hypot(vx,vy,vz); if(sp>HOLD_MAXV){ const k=HOLD_MAXV/sp; vx*=k; vy*=k; vz*=k; }
+  body.setLinvel({x:vx,y:vy,z:vz}, true);
+  const av=body.angvel(); body.setAngvel({x:av.x*0.8, y:av.y*0.8, z:av.z*0.8}, true);
+  return Math.hypot(target.x-t.x, target.y-t.y, target.z-t.z);
+}
+function driveAllHeld(){
+  if(NET.mode==='client') return;   // a pure client doesn't own physics; the host drives bodies
+  if(heldProp){ const b=heldProp.userData.phys && heldProp.userData.phys.body; if(b){ if(_driveOneHeld(b, _localHoldTarget()) > HOLD_BREAK) releaseHeld(); } else heldProp=null; }
+  for(const nid in _remoteHold){ const h=_remoteHold[nid]; if(!h.target) continue; const o=dynamicById(nid); const b=o && o.userData.phys && o.userData.phys.body; if(b){ _holdTarget.set(h.target[0],h.target[1],h.target[2]); if(_holdTarget.y<0.6) _holdTarget.y=0.6; if(_driveOneHeld(b, _holdTarget) > HOLD_BREAK*1.5) delete _remoteHold[nid]; } else delete _remoteHold[nid]; }
+}
+function releaseHeld(){
+  if(!heldProp) return;
+  if(NET.mode==='client' && heldNidLocal!=null){ sendToPlayer(0, {t:'holdEnd', nid:heldNidLocal}); heldNidLocal=null; }
+  heldProp=null; updateGrabHint();
+}
+function throwHeld(){
+  if(!heldProp) return;
+  camera.getWorldDirection(_hFwd); const obj=heldProp; heldProp=null;
+  if(NET.mode==='client'){ const nid=heldNidLocal; heldNidLocal=null; sendToPlayer(0, {t:'holdEnd', nid, v:[_hFwd.x*THROW_SPEED, _hFwd.y*THROW_SPEED+3, _hFwd.z*THROW_SPEED]}); }
+  else { const b=obj.userData.phys && obj.userData.phys.body; if(b){ const m=obj.userData.mass||1, pw=THROW_SPEED*m; _impJ.x=_hFwd.x*pw; _impJ.y=_hFwd.y*pw+pw*0.18; _impJ.z=_hFwd.z*pw; b.applyImpulse(_impJ, true); } }
+  if(typeof SFX!=='undefined' && SFX.swap) SFX.swap();
+  updateGrabHint();
+}
+function updateGrabHint(){
+  const el=document.getElementById('grabHint'); if(!el) return;
+  let txt='';
+  if(heldProp) txt='[E] Drop \u00b7 Click Throw \u00b7 Scroll Distance';
+  else if(_grabAvail) txt='[E] Grab';
+  if(txt){ if(el.textContent!==txt) el.textContent=txt; el.style.display='block'; } else el.style.display='none';
+}
+function tickGrabHint(dt){
+  if(heldProp){ _grabHintT=0; updateGrabHint(); return; }
+  _grabHintT-=dt; if(_grabHintT>0) return; _grabHintT=0.12;
+  const avail = !!(gameOn && !editorOpen && !shopOpen && !paused && !duelDead && _aimedProp());
+  if(avail!==_grabAvail){ _grabAvail=avail; updateGrabHint(); }
+}
 
 // ---------- Destruction (breakable dynamic props) ----------
 // A dynamic prop can be flagged breakable with a hit-point pool. Shots (and hard impacts) deduct HP;
@@ -8892,6 +8970,7 @@ function damageProp(obj, dmg, point, dir, power){
 // Step the simulation (fixed timestep) and sync dynamic meshes from their bodies. Host/solo only.
 function updatePhysics(dt){
   if(!physWorld) return;
+  driveAllHeld();   // command velocity of any grabbed prop toward its hold point before stepping
   if(!dynamicProps.length && !fragments.length){ physAccum = 0; return; }   // nothing dynamic to simulate (debris counts!)
   physAccum += Math.min(dt, 0.1);
   let n = 0;
@@ -8930,6 +9009,7 @@ function resolvePlayerProps(dt){
   const clientMode = NET.mode==='client';
   const feetY = player.pos.y - EYE, headY = player.pos.y + 0.2;
   for(const obj of dynamicProps){
+    if(obj===heldProp) continue;   // carried prop is driven by the grab system
     const p = obj.userData.phys, info = obj.userData.physInfo; if(!p || !p.body || !info) continue;
     let prev = obj.userData._prevPP; if(!prev){ prev = obj.userData._prevPP = obj.position.clone(); }
     const vx = (obj.position.x - prev.x)/Math.max(1e-3, dt), vz = (obj.position.z - prev.z)/Math.max(1e-3, dt);
@@ -9846,7 +9926,7 @@ function loop(){
   recoil *= 0.85;
   muzzle.intensity *= 0.6; flashMat.opacity *= 0.5;
 
-  if(firing || padFiring || touchFiring) shoot();
+  if((firing || padFiring || touchFiring) && !heldProp) shoot();
 
   // tracers
   for(let i=tracers.length-1;i>=0;i--){
@@ -9865,6 +9945,7 @@ function loop(){
   updateLowHp(dt);       // low-health vignette + heartbeat
   updateHurtDir(dt);     // directional hit indicator
   updateBots(dt);                        // AI opponents (host)
+  tickGrabHint(dt);                      // "[E] Grab" / carry prompt
   updateControlPoint(dt); cpRender();   // KOTH zone capture/score + HUD
   // bolt streak trails + impact flashes (fade + expand, then dispose)
   for(let i=boltTrails.length-1;i>=0;i--){
@@ -12226,6 +12307,7 @@ function setSceneWireframe(on){
 }
 
 function toggleEditor(){
+  releaseHeld();
   if(!editorOpen && pvpMode()){ if(typeof flashToast==='function') flashToast('Editor is disabled in this mode'); return; }   // no mid-match settings changes / cheating
   editorOpen = !editorOpen; _editorOpenFlag = editorOpen;
   if(editorOpen){
@@ -12294,6 +12376,7 @@ function startGame(){
   if(typeof enemyShots!=='undefined'){ enemyShots.slice().forEach(s=>scene.remove(s.mesh)); enemyShots.length=0; }
   if(typeof netReset==='function') netReset();   // clear stale remote avatars / mirrored enemies & coins
   if(typeof clearBots==='function') clearBots();
+  heldProp=null; heldNidLocal=null; for(const k in _remoteHold) delete _remoteHold[k];
   // client: adopt the host's level (props + lights) so everyone shares the same map
   if(NET.pendingLevel){ loadLevelFromNet(NET.pendingLevel); NET.pendingLevel=null; }
   if(NET.pendingSounds){ NET.sounds=_sanitizeSounds(NET.pendingSounds); NET.pendingSounds=null; if(typeof preloadCustomSounds==='function') preloadCustomSounds(); }   // play the host's SFX this session
@@ -12389,6 +12472,7 @@ function gameWon(){
   bindEndScreen();
 }
 function endGame(){
+  releaseHeld();
   stopMusic();
   gameOn=false; gameOver=true; safeExitPointerLock(); if(typeof extractZone!=='undefined' && extractZone) extractZone.visible=false; if(typeof closeUpgradePicker==='function') closeUpgradePicker();
   firing=false; ads=false; shopOpen=false;
