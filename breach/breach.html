@@ -7652,7 +7652,7 @@ function handleClientMsg(conn, msg){
   else if(msg.t==='push'){ const o=propByNid(msg.nid); if(o) pushDynamic(o, new THREE.Vector3(msg.dir[0],msg.dir[1],msg.dir[2]), msg.s||6, msg.pt?{x:msg.pt[0],y:msg.pt[1],z:msg.pt[2]}:null); }   // a client shot a dynamic prop
   else if(msg.t==='grab'){ if(!_remoteHold[msg.nid]) _remoteHold[msg.nid]={by:id}; }   // a client grabbed a prop
   else if(msg.t==='hold'){ const h=_remoteHold[msg.nid]; if(!h) _remoteHold[msg.nid]={by:id, target:msg.p}; else if(h.by===id) h.target=msg.p; }   // ...and is carrying it
-  else if(msg.t==='holdEnd'){ const h=_remoteHold[msg.nid]; if(h && h.by===id){ if(msg.v){ const o=dynamicById(msg.nid); const b=o && o.userData.phys && o.userData.phys.body; if(b) b.setLinvel({x:msg.v[0],y:msg.v[1],z:msg.v[2]}, true); } delete _remoteHold[msg.nid]; } }   // ...and dropped/threw it
+  else if(msg.t==='holdEnd'){ const h=_remoteHold[msg.nid]; if(h && h.by===id){ if(msg.v){ const o=dynamicById(msg.nid); const b=o && o.userData.phys && o.userData.phys.body; if(b){ b.setLinvel({x:msg.v[0],y:msg.v[1],z:msg.v[2]}, true); o.userData._thrownT=performance.now()+THROW_ARM_MS; o.userData._thrownBy=id; } } delete _remoteHold[msg.nid]; } }   // ...and dropped/threw it
   else if(msg.t==='break'){   // host shattered a prop — show the debris locally (pDel removes the prop itself)
     const ctr=new THREE.Vector3(msg.ctr[0],msg.ctr[1],msg.ctr[2]); const sz=new THREE.Vector3(msg.sz[0],msg.sz[1],msg.sz[2]);
     if(msg.st==='puff'){ spark(ctr, msg.c||0xcfeee6); if(typeof SFX!=='undefined' && SFX.puff) SFX.puff(); }
@@ -8386,7 +8386,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 146 · 2026-06-04';
+const BUILD_VERSION = 'build 147 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8732,6 +8732,7 @@ function pushDynamic(obj, dir, strength, point){
 let heldProp=null, heldDist=4, heldNidLocal=null, _grabHintT=0, _holdSendT=0, _grabAvail=false;
 const _remoteHold={};   // host: nid -> { by, target:[x,y,z] } for props clients are carrying
 const HOLD_MIN=2.2, HOLD_MAX=6.5, HOLD_GRAB_RANGE=6.5, HOLD_K=14, HOLD_MAXV=22, HOLD_BREAK=7.5, THROW_SPEED=17;
+const THROW_DMG_MIN_SPEED=6, THROW_DMG_K=2.0, THROW_DMG_MAX=60, THROW_ARM_MS=1500;   // a thrown prop is "armed" for a moment and hurts what it hits, scaled by impact speed * mass
 const _holdTarget=new THREE.Vector3(), _holdRay=new THREE.Raycaster(), _hFwd=new THREE.Vector3(), _hPos=new THREE.Vector3();
 function _aimedProp(){
   camera.getWorldPosition(_hPos); camera.getWorldDirection(_hFwd);
@@ -8779,7 +8780,7 @@ function throwHeld(){
   if(!heldProp) return;
   camera.getWorldDirection(_hFwd); const obj=heldProp; heldProp=null;
   if(NET.mode==='client'){ const nid=heldNidLocal; heldNidLocal=null; sendToPlayer(0, {t:'holdEnd', nid, v:[_hFwd.x*THROW_SPEED, _hFwd.y*THROW_SPEED+3, _hFwd.z*THROW_SPEED]}); }
-  else { const b=obj.userData.phys && obj.userData.phys.body; if(b){ const m=obj.userData.mass||1, pw=THROW_SPEED*m; _impJ.x=_hFwd.x*pw; _impJ.y=_hFwd.y*pw+pw*0.18; _impJ.z=_hFwd.z*pw; b.applyImpulse(_impJ, true); } }
+  else { const b=obj.userData.phys && obj.userData.phys.body; if(b){ const m=obj.userData.mass||1, pw=THROW_SPEED*m; _impJ.x=_hFwd.x*pw; _impJ.y=_hFwd.y*pw+pw*0.18; _impJ.z=_hFwd.z*pw; b.applyImpulse(_impJ, true); obj.userData._thrownT=performance.now()+THROW_ARM_MS; obj.userData._thrownBy=NET.myId; } }
   if(typeof SFX!=='undefined' && SFX.swap) SFX.swap();
   updateGrabHint();
 }
@@ -8980,6 +8981,30 @@ function updatePhysics(dt){
     const t = b.translation(), r = b.rotation();
     obj.position.set(t.x, t.y, t.z);
     obj.quaternion.set(r.x, r.y, r.z, r.w);
+  }
+}
+// A recently thrown prop deals damage to the first thing it hits, scaled by impact speed * mass. Host/solo
+// author it; kills credit the thrower. One hit per throw; it disarms after a moment or once it slows down.
+function updateThrownDamage(dt){
+  if(NET.mode==='client' || !physWorld) return;
+  const now=performance.now();
+  for(const obj of dynamicProps){
+    const ud=obj.userData; if(!ud._thrownT || ud._thrownT<now) continue;
+    const b=ud.phys && ud.phys.body; if(!b){ ud._thrownT=0; continue; }
+    const lv=b.linvel(); const speed=Math.hypot(lv.x,lv.y,lv.z);
+    if(speed<THROW_DMG_MIN_SPEED){ if(speed<1.5) ud._thrownT=0; continue; }   // too slow to hurt
+    const t=b.translation(); const pr=((ud.physInfo&&ud.physInfo.radius)||0.5)+0.8;
+    const by=(ud._thrownBy!=null?ud._thrownBy:NET.myId);
+    const dmg=Math.min(THROW_DMG_MAX, speed*THROW_DMG_K*(ud.mass||1));
+    let hit=false;
+    if(!pvpMode()){
+      for(const en of enemies){ if(!en.mesh) continue; const c=en.mesh.position; const dx=c.x-t.x, dy=(c.y+0.9)-t.y, dz=c.z-t.z; if(dx*dx+dy*dy+dz*dz < pr*pr){ en.hp-=dmg; spark(c,0xffd166); if(en.hp<=0) killEnemy(en); hit=true; break; } }
+    } else {
+      for(const bt of bots){ if(bt.dead||sameTeam(by,bt.id)) continue; const dx=bt.pos.x-t.x, dy=1.0-t.y, dz=bt.pos.z-t.z; if(dx*dx+dy*dy+dz*dz < pr*pr){ bt.hp-=dmg; if(bt.hp<=0){ registerDuelKill(by,bt.id); botDie(bt); } hit=true; break; } }
+      if(!hit && by!==NET.myId && !duelDead && !sameTeam(by,NET.myId)){ const dx=player.pos.x-t.x, dy=(player.pos.y-EYE+1.0)-t.y, dz=player.pos.z-t.z; if(dx*dx+dy*dy+dz*dz < (pr+(player.radius||0.4)-0.8)*(pr+(player.radius||0.4)-0.8)){ applyPvpDamage(dmg,by); hit=true; } }
+      if(!hit){ for(const id in NET.players){ const rp=NET.players[id]; if(!rp||!rp.posEye) continue; if(+id===by||sameTeam(by,+id)) continue; if(rp.hp!=null&&rp.hp<=0) continue; const dx=rp.posEye.x-t.x, dy=rp.posEye.y-t.y, dz=rp.posEye.z-t.z; if(dx*dx+dy*dy+dz*dz < pr*pr){ sendToPlayer(+id,{t:'pvpHit',d:dmg,from:by}); hit=true; break; } } }
+    }
+    if(hit){ ud._thrownT=0; if(typeof SFX!=='undefined'&&SFX.hit) SFX.hit(); }
   }
 }
 // Restore dynamic props to their authored transforms and (re)build the world — called on each Deploy.
@@ -10115,7 +10140,7 @@ function loop(){
   }
 
   // physics: host/solo simulate dynamic props; clients receive their transforms via the snapshot.
-  { const _a=perfOn?_pnow():0; if(!editorOpen && NET.mode!=='client') updatePhysics(dt); if(perfOn)_prof.phys+=_pnow()-_a; }
+  { const _a=perfOn?_pnow():0; if(!editorOpen && NET.mode!=='client'){ updatePhysics(dt); updateThrownDamage(dt); } if(perfOn)_prof.phys+=_pnow()-_a; }
   if(typeof updateFragments==='function') updateFragments();   // advance/cleanup destruction debris
   updateLightBudget();
 
