@@ -6515,7 +6515,7 @@ const muzzle = new THREE.PointLight(0xffcf6b, 0, 8);
 muzzle.position.set(.35,-.32,-1.5); camera.add(muzzle);
 const flashMat = new THREE.MeshBasicMaterial({color:0xffe08a, transparent:true, opacity:0});
 const flash = new THREE.Mesh(new THREE.SphereGeometry(.25,8,8), flashMat);
-flash.position.set(0,0,0); vmMuzzle.add(flash);   // flash sits on the barrel and sways with the gun
+flash.position.set(0,0,0); flash.visible = false; vmMuzzle.add(flash);   // solid sphere hidden — the muzzle PointLight (+ muzzle.png) is the flash
 
 // ---------- Weapon system (data-driven) ----------
 const WEAPONS = {
@@ -8078,10 +8078,16 @@ const tracers = [];
 // Remote players' gunfire: each shot is broadcast so everyone sees a tracer + muzzle flash from the shooter
 // (and their avatar plays its attack clip). Host relays client shots to the other clients (star topology).
 const _muzFlashes = [];
+const _muzLightPool = []; let _muzLightN = 0;
+function flashLightAt(pos){   // brief point-light glow (no solid primitive), reusing a small pool
+  if(_muzLightPool.length < 4){ const L=new THREE.PointLight(0xffcf6b, 0, 7); scene.add(L); _muzLightPool.push(L); }
+  const L = _muzLightPool[_muzLightN++ % _muzLightPool.length];
+  L.position.copy(pos); L.intensity = 8;
+  _muzFlashes.push({ light:L, life:0.08 });
+}
 function muzzleFlashAt(pos){
   if(playFlipbook('muzzle', pos, 0.5)) return;   // flipbook muzzle flash if a sheet is hosted
-  const m = new THREE.Mesh(new THREE.SphereGeometry(0.22,6,6), new THREE.MeshBasicMaterial({color:0xffe08a, transparent:true, opacity:0.95, blending:THREE.AdditiveBlending, depthWrite:false}));
-  m.position.copy(pos); scene.add(m); _muzFlashes.push({mesh:m, life:0.07});
+  flashLightAt(pos);                              // otherwise just a light glow
 }
 function netFire(o, d){
   if(NET.mode==='off') return;
@@ -8191,7 +8197,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 124 · 2026-06-04';
+const BUILD_VERSION = 'build 126 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8661,6 +8667,7 @@ function shatterProp(obj, point, dir, power){
   obj.updateMatrixWorld(true);
   _shBox.setFromObject(obj, true); _shBox.getSize(_shSize); _shBox.getCenter(_shCtr);
   if(point){ _shCtr.lerp(point, 0.35); }   // bias the burst toward the impact
+  playFlipbook('smoke', _shCtr, Math.max(0.5, Math.max(_shSize.x,_shSize.y,_shSize.z)*0.35));   // dust/smoke puff
   const colorHex = propColorHex(obj);
   const style = (obj.userData.breakStyle === 'puff') ? 'puff' : 'shatter';
   let count = 0;
@@ -9090,11 +9097,11 @@ const _UP = new THREE.Vector3(0,1,0);
 // player/remote tracer = a glowing additive beam (shared unit cylinder along Y, open-ended)
 const _tracerGeo = new THREE.CylinderGeometry(1,1,1,6,1,true);
 // enemy projectile = a hot core + an additive halo, stretched along travel, leaving a streak trail
-const _boltCoreGeo = new THREE.SphereGeometry(0.1, 8, 8);
-const _boltCoreMat = new THREE.MeshBasicMaterial({ color:0xeafaff });
-const _boltGlowGeo = new THREE.SphereGeometry(0.26, 10, 10);
-const _boltGlowMat = new THREE.MeshBasicMaterial({ color:0x39c6ff, transparent:true, opacity:0.55, blending:THREE.AdditiveBlending, depthWrite:false });
-const _boltFlashMat = new THREE.MeshBasicMaterial({ color:0x9fe6ff, transparent:true, opacity:0.9, blending:THREE.AdditiveBlending, depthWrite:false });
+const _boltCoreGeo = new THREE.SphereGeometry(0.06, 8, 8);
+const _boltCoreMat = new THREE.MeshBasicMaterial({ color:0xfff0c8 });
+const _boltGlowGeo = new THREE.SphereGeometry(0.13, 10, 10);
+const _boltGlowMat = new THREE.MeshBasicMaterial({ color:0xff7a2a, transparent:true, opacity:0.6, blending:THREE.AdditiveBlending, depthWrite:false });
+const _boltFlashMat = new THREE.MeshBasicMaterial({ color:0xffb060, transparent:true, opacity:0.9, blending:THREE.AdditiveBlending, depthWrite:false });
 const boltTrails = [];   // fading additive puffs left behind bolts + impact flashes
 function makeEnemyBolt(){
   const g = new THREE.Group();
@@ -9130,8 +9137,9 @@ function fireEnemyShot(en, target){
   const mesh = makeEnemyBolt();
   mesh.position.copy(from);
   mesh.quaternion.setFromUnitVectors(_UP, dir.clone().normalize());   // align local +Y to travel
-  if(mesh.userData.glow) mesh.userData.glow.scale.set(1, 2.4, 1);     // stretch the halo into a bolt
+  if(mesh.userData.glow) mesh.userData.glow.scale.set(1, 4.5, 1);     // stretch the halo into a thin tracer streak
   scene.add(mesh);
+  if(!playFlipbook('muzzle', from, 0.7)) flashLightAt(from);          // muzzle flash at the enemy's gun
   enemyShots.push({ mesh, vel: dir.multiplyScalar(en.projSpeed), dmg: en.dmg, born: performance.now(), life: 3500 });
   if(SFX && SFX.shoot) SFX.shoot();
 }
@@ -9609,10 +9617,12 @@ function loop(){
     tr.line.material.opacity = Math.max(0,tr.life/0.06)*0.9;
     if(tr.life<=0){ scene.remove(tr.line); if(tr.line.material&&tr.line.material.dispose) tr.line.material.dispose(); tracers.splice(i,1); }
   }
-  // muzzle flashes (remote gunfire)
+  // muzzle flashes (remote gunfire) — light glow that fades; pooled lights stay (just dimmed)
   for(let i=_muzFlashes.length-1;i>=0;i--){
-    const f=_muzFlashes[i]; f.life-=dt; f.mesh.material.opacity=Math.max(0,f.life/0.07)*0.95;
-    if(f.life<=0){ scene.remove(f.mesh); _muzFlashes.splice(i,1); }
+    const f=_muzFlashes[i]; f.life-=dt;
+    if(f.light) f.light.intensity = Math.max(0, f.life/0.08*8);
+    if(f.mesh) f.mesh.material.opacity = Math.max(0, f.life/0.07*0.95);
+    if(f.life<=0){ if(f.light) f.light.intensity=0; if(f.mesh) scene.remove(f.mesh); _muzFlashes.splice(i,1); }
   }
   updateFlipbooks(dt);   // sprite-sheet explosions / smoke / fire
   // bolt streak trails + impact flashes (fade + expand, then dispose)
