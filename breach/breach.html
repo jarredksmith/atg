@@ -5122,6 +5122,7 @@ THREE.cloneSkinned = function(source){
 <script>
 window.GAME_START = function(){
 const THREE = window.THREE;
+const RAD = Math.PI/180, DEG = 180/Math.PI;   // declared first: used by wepView/applyWeaponMuzzle during init (TDZ-safe)
 
 // ---------- Audio (procedural, no files — works fully offline) ----------
 let actx = null;
@@ -8221,7 +8222,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 137 · 2026-06-04';
+const BUILD_VERSION = 'build 138 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9874,7 +9875,6 @@ loop();
 // ---------- In-game transform / level editor (press P) ----------
 // Live-adjusts the imported GLB models (gun, station, every prop) and the ADS aim pose,
 // then emits copy-paste-ready code so the chosen values can be baked into the source.
-const RAD = Math.PI/180, DEG = 180/Math.PI;
 const STEP_POS = 0.00001, STEP_ROT = 0.001, STEP_SCALE = 0.00001;   // hundred-thousandths
 const fmt = n => (+n).toFixed(5);
 function prsTransform(min,max){
