@@ -7689,14 +7689,14 @@ function loadVfxTexture(kind){
   if(_vfxTex[kind]) return;   // loaded, loading, or failed already
   _vfxTex[kind]='loading';
   new THREE.TextureLoader().load(cfg.url,
-    (t)=>{ t.minFilter=THREE.LinearFilter; t.magFilter=THREE.LinearFilter; t.wrapS=t.wrapT=THREE.ClampToEdgeWrapping; if('colorSpace' in t) t.colorSpace=THREE.SRGBColorSpace; _vfxTex[kind]={tex:t}; },
+    (t)=>{ t.minFilter=THREE.LinearFilter; t.magFilter=THREE.LinearFilter; t.wrapS=t.wrapT=THREE.ClampToEdgeWrapping; if('colorSpace' in t) t.colorSpace=THREE.SRGBColorSpace; _vfxTex[kind]={tex:t}; console.info('[VFX] loaded '+kind+' ✓ '+cfg.url); },
     undefined,
-    ()=>{ _vfxTex[kind]='fail'; });   // missing sheet -> procedural fallback, silently
+    ()=>{ _vfxTex[kind]='fail'; console.warn('[VFX] missing '+kind+' (using procedural fallback): '+cfg.url); });
 }
 function preloadVfx(){ for(const k in VFX) loadVfxTexture(k); }
 // Spawn a flipbook at a world position. Returns true if a sheet was available (so callers can skip their
 // procedural fallback), false if not (texture missing or still loading on the very first use).
-function playFlipbook(kind, pos, scale){
+function playFlipbook(kind, pos, scale, parent){
   const cfg = VFX[kind]; if(!cfg) return false;
   const entry = _vfxTex[kind];
   if(!entry || entry==='loading' || entry==='fail' || !entry.tex){ if(!entry) loadVfxTexture(kind); return false; }
@@ -7707,14 +7707,14 @@ function playFlipbook(kind, pos, scale){
   const sp = new THREE.Sprite(mat);
   const base = (cfg.size||1) * (scale||1);
   sp.scale.setScalar(base); sp.position.copy(pos); sp.renderOrder = 9000;
-  scene.add(sp);
+  (parent||scene).add(sp);   // parent => render in that space (e.g. the gun's viewmodel scene)
   _flipbooks.push({ sp, tex, cfg, t:0, base });
   return true;
 }
 function updateFlipbooks(dt){
   for(let i=_flipbooks.length-1;i>=0;i--){
     const f=_flipbooks[i]; f.t += dt; const cfg=f.cfg; const prog=f.t/cfg.dur;
-    if(prog>=1){ scene.remove(f.sp); f.tex.dispose(); f.sp.material.dispose(); _flipbooks.splice(i,1); continue; }
+    if(prog>=1){ f.sp.removeFromParent(); f.tex.dispose(); f.sp.material.dispose(); _flipbooks.splice(i,1); continue; }
     let frame = Math.floor(prog*cfg.frames); if(frame>=cfg.frames) frame=cfg.frames-1;
     const col = frame % cfg.cols, row = Math.floor(frame/cfg.cols);
     f.tex.offset.set(col/cfg.cols, 1 - (row+1)/cfg.rows);   // sheet origin is top-left
@@ -8185,7 +8185,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 120 · 2026-06-04';
+const BUILD_VERSION = 'build 121 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8826,6 +8826,7 @@ function shoot(){
   recoil = Math.min(recoil + (0.018*w.pellets*0.5 + 0.014) * (adsBlend>0.5?0.5:1), 0.10);
   player.pitch += (0.010 + Math.random()*0.006) * (adsBlend>0.5?0.5:1);
   muzzle.intensity = 6; flashMat.opacity = 1;
+  playFlipbook('muzzle', new THREE.Vector3(0,0,0.02), 0.4, vmMuzzle);   // muzzle.png on your own gun (viewmodel overlay)
 
   const dmgMul = (buffs.damage ? 2 : 1) * run.dmgMul;
   const clientMode = NET.mode==='client';
