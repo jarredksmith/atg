@@ -6999,6 +6999,7 @@ const NET = {
   duelScore:{},        // duel/ffa/tdm: playerId -> kills (host-authoritative)
   cpOwner:-1, cpCap:0, cpCapTeam:-1, cpContested:false, cpScore:{0:0,1:0},   // control-point (KOTH) state
   botCount:0,          // PvP: number of AI bots the host fills the match with
+  charById:{},         // playerId -> that player's character (model) config, so avatars can differ per player
   teams:{},            // tdm: playerId -> 0 (red) | 1 (blue)
   team:0,              // my team (tdm)
   joined:false,        // client: guards one-time startGame on welcome
@@ -7157,10 +7158,17 @@ function updateBots(dt){
     let dx=destX-b.pos.x, dz=destZ-b.pos.z; const dist=Math.hypot(dx,dz)||1; let mvx,mvz;
     if(tgt && dist<9 && !(koth && !cpOwnedBy(b.team))){ mvx=(-dz/dist)*b.strafe; mvz=(dx/dist)*b.strafe; if(Math.random()<0.012) b.strafe*=-1; }
     else { mvx=dx/dist; mvz=dz/dist; }
+    const ox=b.pos.x, oz=b.pos.z;
     let nx=Math.max(-lim,Math.min(lim, b.pos.x+mvx*spd*dt)), nz=Math.max(-lim,Math.min(lim, b.pos.z+mvz*spd*dt));
     if(typeof clearAt!=='function' || clearAt(nx,nz,0)){ b.pos.x=nx; b.pos.z=nz; } else { b.strafe*=-1; }
     b.yaw = tgt ? Math.atan2(tgt.pos.x-b.pos.x, tgt.pos.z-b.pos.z) : Math.atan2(mvx,mvz);
-    if(b.mesh){ b.mesh.position.set(b.pos.x,0,b.pos.z); b.mesh.rotation.y=b.yaw; }
+    if(b.mesh){ b.mesh.position.set(b.pos.x,0,b.pos.z); b.mesh.rotation.y=b.yaw;
+      if(b.mesh.userData.hasModel && b.mesh.userData.visual && b.mesh.userData.visual.userData.stateActions){
+        const md=Math.hypot(b.pos.x-ox, b.pos.z-oz);
+        let st = md>0.06 ? 'run' : (md>0.015 ? 'walk' : 'idle');
+        if(b._fireAnimT && performance.now()<b._fireAnimT) st='attack';
+        setEnemyAnimState(b.mesh, st);
+      } }
     b.fireCd-=dt;
     if(tgt && b.fireCd<=0){
       const ty=(tgt.pos.y!=null?Math.min(1.5,tgt.pos.y):1.4);
@@ -7170,7 +7178,7 @@ function updateBots(dt){
         const aim=_bv2.set(tgt.pos.x-b.pos.x, ty-1.4, tgt.pos.z-b.pos.z).normalize();
         aim.x+=(Math.random()*2-1)*0.04; aim.y+=(Math.random()*2-1)*0.03; aim.z+=(Math.random()*2-1)*0.04; aim.normalize();
         const o=[b.pos.x,1.4,b.pos.z], d=[aim.x,aim.y,aim.z];
-        remoteFire(b.id, o, d); for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'fire', from:b.id, o, d}); }catch(e){} }
+        remoteFire(b.id, o, d); b._fireAnimT=performance.now()+260; for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'fire', from:b.id, o, d}); }catch(e){} }
         if(Math.random()<0.6) _botDamage(b, tgt, 11+Math.random()*6);
       }
     }
@@ -7360,7 +7368,7 @@ function loadLevelFromNet(level){
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns) buildSpawnMarker(sp); } setSpawnMarkersVisible(editorOpen);
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }   // adopt the host's sky / ground / fog
-  if(level.player) applyPlayerLevel(level.player);   // adopt the host's player avatar
+  // per-player characters: the client keeps its own avatar; the host's character arrives via the welcome 'char' field
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; }
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; refreshPlayerSpawnMarker(); }
@@ -7388,11 +7396,11 @@ const remoteBodyGeo = new THREE.CapsuleGeometry(0.5, 1.2, 4, 8);
 const PLAYER_MODEL0 = { url:'', scale:1, face:0, rx:0, rz:0, yoff:0, xoff:0, zoff:0, clips:{ idle:'', walk:'', run:'', attack:'' } };   // face/rx/rz in radians
 let playerModelCfg = Object.assign({}, PLAYER_MODEL0, { clips:{ idle:'', walk:'', run:'', attack:'' } });
 let playerModelClips = [];   // animation clip names discovered when the avatar model loads
-function buildAvatarVisual(g){
+function buildAvatarVisual(g, cfg){
   if(g.userData.visual){ if(g.userData.mixer){ const mi=mixers.indexOf(g.userData.mixer); if(mi>=0) mixers.splice(mi,1); g.userData.mixer=null; } g.remove(g.userData.visual); g.userData.visual=null; }
   if(g.userData.hitProxy){ g.remove(g.userData.hitProxy); g.userData.hitProxy=null; }
   if(g.userData.headProxy){ g.remove(g.userData.headProxy); g.userData.headProxy=null; }
-  const mc = playerModelCfg;
+  const mc = cfg || playerModelCfg;
   const useCapsule = ()=>{
     const wrap=new THREE.Group();
     const body=new THREE.Mesh(remoteBodyGeo, new THREE.MeshStandardMaterial({ color:0x2f7fff, emissive:0x10316c, emissiveIntensity:.55, roughness:.6 }));
@@ -7425,18 +7433,23 @@ function buildAvatarVisual(g){
       model.userData.seat={ p:model.position.clone(), q:model.quaternion.clone(), s:model.scale.clone() };   // re-pinned each frame so root-motion can't fling the model
       const hb=h*0.82; const px=new THREE.Mesh(new THREE.CylinderGeometry(fr,fr,hb,10), _ENEMY_PROXY_MAT); px.position.y=hb/2; g.add(px); g.userData.hitProxy=px;
       const rs=Math.min(Math.max(fr*0.7,0.26),0.45); const hpx=_mkHeadProxy(h-rs, rs); g.add(hpx); g.userData.headProxy=hpx;
-      playerModelClips = (gltf.animations||[]).map(a=>a.name||'');   // expose clip names to the Player editor
-      if(typeof refreshPlayerClipOptions==='function') refreshPlayerClipOptions();
+      if(mc===playerModelCfg){ playerModelClips = (gltf.animations||[]).map(a=>a.name||''); if(typeof refreshPlayerClipOptions==='function') refreshPlayerClipOptions(); }   // clip names feed the editor for the local model only
       const mx=playEnemyStates(model, gltf, mc.clips);   // idle/walk/run, crossfaded by the avatar's movement
       if(mx) g.userData.mixer=mx;
     },
     (err)=>{ console.warn('Player model load failed, using capsule:', err && err.message); }
   );
 }
-function rebuildAvatars(){ for(const id in NET.players){ const rp=NET.players[id]; if(rp && rp.mesh) buildAvatarVisual(rp.mesh); } if(typeof previewAvatar!=='undefined' && previewAvatar) buildAvatarVisual(previewAvatar); }
-function makeRemotePlayer(name){
+function rebuildAvatars(){ for(const id in NET.players){ const rp=NET.players[id]; if(rp && rp.mesh) buildAvatarVisual(rp.mesh, rp.modelCfg); } if(typeof previewAvatar!=='undefined' && previewAvatar) buildAvatarVisual(previewAvatar); _scheduleCharBroadcast(); }
+// ---- per-player characters: each player owns + broadcasts their avatar config; others build from it ----
+function myCharCfg(){ const c=playerModelCfg; return { url:c.url||'', scale:c.scale||1, face:c.face||0, rx:c.rx||0, rz:c.rz||0, xoff:c.xoff||0, yoff:c.yoff||0, zoff:c.zoff||0, clips:Object.assign({}, c.clips||{}) }; }
+function applyRemoteChar(id, cfg){ if(cfg==null || +id===NET.myId) return; NET.charById[id]=cfg; const rp=NET.players[id]; if(rp){ rp.modelCfg=cfg; if(rp.mesh){ buildAvatarVisual(rp.mesh, cfg); if(teamMode() && NET.teams[id]!=null) tintAvatar(rp.mesh, NET.teams[id]); } } }
+function broadcastMyChar(){ const cfg=myCharCfg(); if(NET.mode==='host'){ NET.charById[0]=cfg; for(const id in NET.conns){ try{ NET.conns[id].send({t:'char', from:0, cfg}); }catch(e){} } } else if(NET.mode==='client' && NET.conn){ try{ NET.conn.send({t:'char', cfg}); }catch(e){} } }
+let _charBcT=null;
+function _scheduleCharBroadcast(){ if(NET.mode==='off') return; if(_charBcT) clearTimeout(_charBcT); _charBcT=setTimeout(()=>{ _charBcT=null; broadcastMyChar(); }, 400); }
+function makeRemotePlayer(name, cfg){
   const g=new THREE.Group();
-  buildAvatarVisual(g);
+  buildAvatarVisual(g, cfg);
   const label=makeNameSprite(name, teamMode()?NET.teams[/*set later*/-1]:undefined); label.position.y=2.5; g.add(label); g.userData.label=label;
   g.userData._name=name;
   scene.add(g);
@@ -7444,7 +7457,7 @@ function makeRemotePlayer(name){
 }
 function ensureRemotePlayer(id, name){
   let rp=NET.players[id];
-  if(!rp){ rp={ mesh:makeRemotePlayer(name||('P'+id)), posEye:new THREE.Vector3(), target:new THREE.Vector3(), yaw:0, hp:100, wep:0, name:name||('P'+id) }; NET.players[id]=rp; if(teamMode() && NET.teams[id]!=null) tintAvatar(rp.mesh, NET.teams[id]); }
+  if(!rp){ const cfg=(NET.charById&&NET.charById[id])||null; rp={ mesh:makeRemotePlayer(name||('P'+id), cfg), posEye:new THREE.Vector3(), target:new THREE.Vector3(), yaw:0, hp:100, wep:0, name:name||('P'+id), modelCfg:cfg }; NET.players[id]=rp; if(teamMode() && NET.teams[id]!=null) tintAvatar(rp.mesh, NET.teams[id]); }
   return rp;
 }
 function removeRemotePlayer(id){ const rp=NET.players[id]; if(rp){ scene.remove(rp.mesh); delete NET.players[id]; } }
@@ -7657,11 +7670,12 @@ function handleClientMsg(conn, msg){
   const id=conn._pid;
   if(msg.t==='st'){ setRemoteState(id, msg); }
   else if(msg.t==='hit'){ const en=enemies.find(e=>e.id===msg.e); if(en){ en.hp-=msg.d; spark(en.mesh.position, 0xff6b6b); if(en.hp<=0) killEnemy(en); } }
-  else if(msg.t==='name'){ const rp=ensureRemotePlayer(id, msg.n); rp.name=msg.n; rp.mesh.userData._name=msg.n; if(rp.mesh.userData.label){ rp.mesh.remove(rp.mesh.userData.label); const l=makeNameSprite(msg.n, teamMode()?NET.teams[id]:undefined); l.position.y=2.5; rp.mesh.add(l); rp.mesh.userData.label=l; } }
+  else if(msg.t==='name'){ const rp=ensureRemotePlayer(id, msg.n); rp.name=msg.n; rp.mesh.userData._name=msg.n; if(rp.mesh.userData.label){ rp.mesh.remove(rp.mesh.userData.label); const l=makeNameSprite(msg.n, teamMode()?NET.teams[id]:undefined); l.position.y=2.5; rp.mesh.add(l); rp.mesh.userData.label=l; } if(msg.char){ applyRemoteChar(id, msg.char); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'char', from:id, cfg:msg.char}); }catch(e){} } } } }
   else if(msg.t==='pvpHit'){ applyPvpDamage(msg.d, msg.from); }       // a client shot the host
   else if(msg.t==='fire'){ remoteFire(id, msg.o, msg.d); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'fire', from:id, o:msg.o, d:msg.d}); }catch(e){} } } }   // show + relay the shot
   else if(msg.t==='died'){ registerDuelKill(msg.by, id); }            // a client died; credit the killer
   else if(msg.t==='botHit'){ const b=botById(msg.id); if(b && !b.dead && !sameTeam(msg.from, msg.id)){ b.hp-=msg.d; if(b.hp<=0){ registerDuelKill(msg.from, msg.id); botDie(b); } } }   // a client shot a bot
+  else if(msg.t==='char'){ applyRemoteChar(id, msg.cfg); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'char', from:id, cfg:msg.cfg}); }catch(e){} } } }   // a client changed character
   else if(msg.t==='rocket'){ const o=new THREE.Vector3(msg.o[0],msg.o[1],msg.o[2]), d=new THREE.Vector3(msg.d[0],msg.d[1],msg.d[2]); fireRocket(o,d,id,true,msg.r||7,WEAPONS.launcher.dmg); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'rocket', o:msg.o, d:msg.d, r:msg.r, by:id}); }catch(e){} } } }   // a client fired a rocket: host simulates it + relays the visual
   else if(msg.t==='push'){ const o=propByNid(msg.nid); if(o) pushDynamic(o, new THREE.Vector3(msg.dir[0],msg.dir[1],msg.dir[2]), msg.s||6, msg.pt?{x:msg.pt[0],y:msg.pt[1],z:msg.pt[2]}:null); }   // a client shot a dynamic prop (legacy knockback-only)
   else if(msg.t==='propHit'){ const o=propByNid(msg.nid); if(o){ const dir=new THREE.Vector3(msg.dir[0],msg.dir[1],msg.dir[2]); const pt=msg.pt?{x:msg.pt[0],y:msg.pt[1],z:msg.pt[2]}:null; const broke=damageProp(o, msg.d||0, pt, dir, msg.s||6, id); if(!broke) pushDynamic(o, dir, msg.s||6, pt); } }   // a client shot a prop: damage (breaks/detonates) + knockback, credited to the client
@@ -7691,6 +7705,7 @@ function handleHostMsg(msg){
     if(msg.teams) NET.teams=msg.teams;
     if(msg.yourTeam!=null) NET.team=msg.yourTeam;
     if(msg.level) NET.pendingLevel=msg.level;
+    NET.charById = Object.assign({}, msg.chars||{}); if(msg.char) NET.charById[0]=msg.char;   // host + existing players' characters
     if(msg.sounds) NET.pendingSounds=msg.sounds;
     if(msg.music!=null) NET.pendingMusic=msg.music;
     netStatus('Connected — deploying'); showRoomBadge(NET.roomCode);
@@ -7705,6 +7720,7 @@ function handleHostMsg(msg){
   else if(msg.t==='fire'){ remoteFire(msg.from, msg.o, msg.d); }       // someone fired
   else if(msg.t==='rocket'){ fireRocket(new THREE.Vector3(msg.o[0],msg.o[1],msg.o[2]), new THREE.Vector3(msg.d[0],msg.d[1],msg.d[2]), msg.by, false, msg.r||7, 0); }   // show another player's rocket (visual)
   else if(msg.t==='boom'){ explodeAt(new THREE.Vector3(msg.p[0],msg.p[1],msg.p[2]), msg.r||7, 0, null); }   // show a blast (host applied the damage)
+  else if(msg.t==='char'){ applyRemoteChar(msg.from, msg.cfg); }   // another player's character
   else if(msg.t==='score'){ NET.duelScore=msg.s; duelHUD(); }
   else if(msg.t==='teams'){ NET.teams=msg.tm||{}; if(NET.teams[NET.myId]!=null) NET.team=NET.teams[NET.myId]; applyTeamColors(); renderScoreboard(); }
   else if(msg.t==='feed'){ addKillFeed(msg.k, msg.v); }
@@ -7742,7 +7758,7 @@ function hostStart(code, mode, killTarget){
       if(teamMode()) assignTeam(conn._pid);
       // hand the joiner the mode, the kill target, and the current level so their map matches
       let level=null; try{ level = serializeLevel(); }catch(e){}
-      conn.send({t:'welcome', id:conn._pid, mode:NET.gameMode, killTarget:NET.killTarget, level, sounds:audioSettings.sounds, music:audioSettings.musicUrl, teams:NET.teams, yourTeam:(teamMode()?NET.teams[conn._pid]:undefined)});
+      conn.send({t:'welcome', id:conn._pid, mode:NET.gameMode, killTarget:NET.killTarget, level, sounds:audioSettings.sounds, music:audioSettings.musicUrl, teams:NET.teams, yourTeam:(teamMode()?NET.teams[conn._pid]:undefined), char:myCharCfg(), chars:Object.assign({}, NET.charById)});
       netStatus('Player joined ('+Object.keys(NET.conns).length+' connected)');
       if(pvpMode()) broadcastDuelScore();
       if(teamMode()){ broadcastTeams(); applyTeamColors(); }
@@ -7760,7 +7776,7 @@ function clientStart(code){
     netStatus('Connecting to '+code+'…');
     const conn=NET.peer.connect('breachfps-'+code, { reliable:true });
     NET.conn=conn;
-    conn.on('open', ()=>{ conn.send({t:'name', n:NET.name}); netStatus('Connected — waiting for host…'); });
+    conn.on('open', ()=>{ conn.send({t:'name', n:NET.name, char:myCharCfg()}); netStatus('Connected — waiting for host…'); });
     conn.on('data', msg=>handleHostMsg(msg));   // 'welcome' triggers startGame once
     conn.on('close', ()=>{ netStatus('Disconnected from host'); });
     conn.on('error', ()=>{ netStatus('Connection error'); });
@@ -8479,7 +8495,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 153 · 2026-06-04';
+const BUILD_VERSION = 'build 154 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
