@@ -7649,7 +7649,8 @@ function handleClientMsg(conn, msg){
   else if(msg.t==='fire'){ remoteFire(id, msg.o, msg.d); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'fire', from:id, o:msg.o, d:msg.d}); }catch(e){} } } }   // show + relay the shot
   else if(msg.t==='died'){ registerDuelKill(msg.by, id); }            // a client died; credit the killer
   else if(msg.t==='botHit'){ const b=botById(msg.id); if(b && !b.dead && !sameTeam(msg.from, msg.id)){ b.hp-=msg.d; if(b.hp<=0){ registerDuelKill(msg.from, msg.id); botDie(b); } } }   // a client shot a bot
-  else if(msg.t==='push'){ const o=propByNid(msg.nid); if(o) pushDynamic(o, new THREE.Vector3(msg.dir[0],msg.dir[1],msg.dir[2]), msg.s||6, msg.pt?{x:msg.pt[0],y:msg.pt[1],z:msg.pt[2]}:null); }   // a client shot a dynamic prop
+  else if(msg.t==='push'){ const o=propByNid(msg.nid); if(o) pushDynamic(o, new THREE.Vector3(msg.dir[0],msg.dir[1],msg.dir[2]), msg.s||6, msg.pt?{x:msg.pt[0],y:msg.pt[1],z:msg.pt[2]}:null); }   // a client shot a dynamic prop (legacy knockback-only)
+  else if(msg.t==='propHit'){ const o=propByNid(msg.nid); if(o){ const dir=new THREE.Vector3(msg.dir[0],msg.dir[1],msg.dir[2]); const pt=msg.pt?{x:msg.pt[0],y:msg.pt[1],z:msg.pt[2]}:null; const broke=damageProp(o, msg.d||0, pt, dir, msg.s||6, id); if(!broke) pushDynamic(o, dir, msg.s||6, pt); } }   // a client shot a prop: damage (breaks/detonates) + knockback, credited to the client
   else if(msg.t==='grab'){ if(!_remoteHold[msg.nid]) _remoteHold[msg.nid]={by:id}; }   // a client grabbed a prop
   else if(msg.t==='hold'){ const h=_remoteHold[msg.nid]; if(!h) _remoteHold[msg.nid]={by:id, target:msg.p}; else if(h.by===id) h.target=msg.p; }   // ...and is carrying it
   else if(msg.t==='holdEnd'){ const h=_remoteHold[msg.nid]; if(h && h.by===id){ if(msg.v){ const o=dynamicById(msg.nid); const b=o && o.userData.phys && o.userData.phys.body; if(b){ b.setLinvel({x:msg.v[0],y:msg.v[1],z:msg.v[2]}, true); o.userData._thrownT=performance.now()+THROW_ARM_MS; o.userData._thrownBy=id; } } delete _remoteHold[msg.nid]; } }   // ...and dropped/threw it
@@ -8413,7 +8414,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 148 · 2026-06-04';
+const BUILD_VERSION = 'build 149 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9204,7 +9205,7 @@ function shoot(){
         const dir = raycaster.ray.direction.clone().normalize();
         const power = 6 + w.dmg*0.04;
         const hp = hit.point;
-        if(clientMode){ if(NET.conn) try{ NET.conn.send({t:'push', nid:dprop.userData.nid, dir:[dir.x,dir.y,dir.z], s:power, pt:[hp.x,hp.y,hp.z]}); }catch(e){} }
+        if(clientMode){ if(NET.conn) try{ NET.conn.send({t:'propHit', nid:dprop.userData.nid, d:w.dmg*dmgMul, dir:[dir.x,dir.y,dir.z], s:power, pt:[hp.x,hp.y,hp.z]}); }catch(e){} }
         else {
           // breakable props take damage; a lethal shot shatters them instead of just shoving
           const broke = damageProp(dprop, w.dmg*dmgMul, hp, dir, power, NET.myId);
