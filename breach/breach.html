@@ -7713,7 +7713,7 @@ function playFlipbook(kind, pos, scale, parent, durMul){
   tex.repeat.set(1/cfg.cols, 1/cfg.rows);
   const mat = new THREE.SpriteMaterial({ map:tex, transparent:true, depthWrite:false, opacity:1,
     blending: cfg.blend==='add' ? THREE.AdditiveBlending : THREE.NormalBlending, rotation: Math.random()*Math.PI*2 });
-  if(parent){ mat.depthTest=false; }   // viewmodel space: always draw over the gun
+  if(parent){ mat.depthTest=true; }   // viewmodel space: let the gun occlude the flash (sits behind the barrel, not pasted on top)
   const sp = new THREE.Sprite(mat);
   const base = (cfg.size||1) * (scale||1);
   sp.scale.setScalar(base); sp.position.copy(pos); sp.renderOrder = 9000;
@@ -8202,7 +8202,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 130 · 2026-06-04';
+const BUILD_VERSION = 'build 131 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
