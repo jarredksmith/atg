@@ -265,6 +265,13 @@
   .mpBtn:hover { background:rgba(56,245,181,0.22); }
   #mpStatus { color:#ffd166; font-size:12px; letter-spacing:1px; min-height:16px; }
   #roomBadge { display:none; position:fixed; top:12px; left:50%; transform:translateX(-50%); z-index:40; background:rgba(5,10,12,0.7); color:#38f5b5; border:1px solid rgba(56,245,181,0.4); border-radius:6px; padding:4px 12px; font:600 13px ui-monospace,monospace; letter-spacing:3px; pointer-events:none; }
+  #scoreboard { display:none; position:fixed; top:42px; right:10px; z-index:41; background:rgba(5,10,12,0.72); border:1px solid rgba(56,245,181,0.28); border-radius:8px; padding:6px 8px; min-width:150px; max-width:220px; pointer-events:none; font:600 12px ui-monospace,monospace; }
+  #scoreboard .sbTitle { color:#7fdcc4; font-size:9px; letter-spacing:2px; opacity:.85; margin:0 2px 5px; text-transform:uppercase; }
+  #scoreboard .sbRow { display:flex; justify-content:space-between; gap:10px; padding:2px 4px; border-radius:4px; color:#cfeee2; }
+  #scoreboard .sbRow.me { background:rgba(56,245,181,0.16); color:#eafff7; }
+  #scoreboard .sbName { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #scoreboard .sbK { color:#ffd166; }
+  body.touch #scoreboard { top:38px; min-width:118px; font-size:11px; padding:4px 6px; }
   #padDebug { display:none; position:fixed; top:12px; left:12px; z-index:60; background:rgba(5,10,12,0.85); color:#9fe6cf; border:1px solid rgba(56,245,181,0.4); border-radius:6px; padding:8px 12px; font:11px/1.5 ui-monospace,monospace; white-space:pre; pointer-events:none; max-width:340px; }
   #controls b { color:#a8d6c8; }
   .hidden { display:none !important; }
@@ -521,6 +528,16 @@
       <div class="mpDesc">Head-to-head arena fight — first to the kill target wins.</div>
       <div class="mpActions"><button id="mpDuel" class="mpBtn duel">Host duel</button><span class="mpHint">first to</span><input id="mpKills" type="number" min="1" max="99" value="5"><span class="mpHint">kills</span></div>
     </div>
+    <div class="mpSection duel">
+      <div class="mpTitle">🎯 FREE-FOR-ALL</div>
+      <div class="mpDesc">Everyone vs everyone (3+ players). Most kills to the target wins. Share your code with the whole group.</div>
+      <div class="mpActions"><button id="mpFFA" class="mpBtn duel">Host FFA</button><span class="mpHint">first to</span><input id="mpFFAKills" type="number" min="1" max="99" value="15"><span class="mpHint">kills</span></div>
+    </div>
+    <div class="mpSection duel">
+      <div class="mpTitle">🟥🟦 TEAM DEATHMATCH</div>
+      <div class="mpDesc">Auto-balanced Red vs Blue, no friendly fire. First team to the kill target wins. Players are assigned as they join.</div>
+      <div class="mpActions"><button id="mpTDM" class="mpBtn duel">Host TDM</button><span class="mpHint">first to</span><input id="mpTDMKills" type="number" min="1" max="199" value="30"><span class="mpHint">kills</span></div>
+    </div>
     <div class="mpSection join">
       <div class="mpTitle">→ JOIN A ROOM</div>
       <div class="mpDesc">Got a code from the host? Drop in to their co-op or duel.</div>
@@ -531,6 +548,7 @@
 </div>
 <div id="perfHud" class="hidden"></div>
 <div id="roomBadge"></div>
+<div id="scoreboard"></div>
 <button id="pauseBtn" title="Pause (Esc)" style="display:none">❚❚</button>
 <div id="pauseMenu" class="hidden">
   <div class="pauseCard">
@@ -5127,6 +5145,9 @@ function noise({dur=0.15, vol=0.3, filterFreq=1200, type='lowpass'}={}){
 }
 const SFX = {
   shoot(){ if(playSample((curSounds().shoot||{})[curWep])) return; tone({freq:320, type:'square', dur:0.08, vol:0.12, slideTo:120}); noise({dur:0.07, vol:0.18, filterFreq:2200, type:'highpass'}); },
+  shootAt(pos){ if(!actx||!sfxBus) return; let g=1; try{ const dx=pos.x-player.pos.x, dy=pos.y-player.pos.y, dz=pos.z-player.pos.z; g=Math.max(0, 1-Math.sqrt(dx*dx+dy*dy+dz*dz)/45); g*=g; }catch(e){} if(g<=0.02) return; const t=actx.currentTime; const gain=actx.createGain(); gain.gain.value=g; gain.connect(sfxBus);
+    const o=actx.createOscillator(); o.type='square'; o.frequency.setValueAtTime(300,t); o.frequency.exponentialRampToValueAtTime(110,t+0.08); const og=actx.createGain(); og.gain.setValueAtTime(0.0001,t); og.gain.linearRampToValueAtTime(0.12,t+0.004); og.gain.exponentialRampToValueAtTime(0.0001,t+0.09); o.connect(og).connect(gain); o.start(t); o.stop(t+0.11);
+    const n=Math.floor(actx.sampleRate*0.07); const buf=actx.createBuffer(1,n,actx.sampleRate); const dd=buf.getChannelData(0); for(let i=0;i<n;i++) dd[i]=(Math.random()*2-1)*(1-i/n); const src=actx.createBufferSource(); src.buffer=buf; const filt=actx.createBiquadFilter(); filt.type='highpass'; filt.frequency.value=2000; const ng=actx.createGain(); ng.gain.value=0.18; src.connect(filt).connect(ng).connect(gain); src.start(t); },
   reload(){ if(playSample(curSounds().reload)) return; tone({freq:200, type:'square', dur:0.06, vol:0.1}); setTimeout(()=>tone({freq:300, type:'square', dur:0.08, vol:0.1}),550); },
   hit(){ if(playSample(curSounds().hit)) return; tone({freq:600, type:'sine', dur:0.05, vol:0.12, slideTo:900}); },
   shatter(){ noise({dur:0.22, vol:0.22, filterFreq:3000, type:'highpass'}); tone({freq:220, type:'square', dur:0.12, vol:0.13, slideTo:70}); setTimeout(()=>noise({dur:0.12, vol:0.12, filterFreq:1600}),40); },
@@ -5199,8 +5220,9 @@ function startMusic(){
   const murl=curMusicUrl();
   if(murl){
     _musicOn=true;
-    loadSound(murl, ()=>{
+    loadSound(murl, (st)=>{
       if(!_musicOn || _musicSrc || _musicDrone) return;   // stopped, already playing, or already fell back
+      if(st==='loading') return;                          // wait for the real result (loadSound fires 'loading' first)
       const buf=_soundBuffers[murl];
       if(buf && buf.duration!==undefined){ try{ const s=actx.createBufferSource(); s.buffer=buf; s.loop=true; s.connect(musicBus); s.start(); _musicSrc=s; }catch(e){ _startProcMusic(); } }
       else { _startProcMusic(); }   // couldn't load (CORS / unsupported format) -> the generated score
@@ -6848,7 +6870,9 @@ const NET = {
   mode:'off',          // 'off' | 'host' | 'client'
   gameMode:'coop',     // 'coop' (waves vs AI) | 'duel' (1v1 PvP, no enemies)
   killTarget:5,        // duel: first to this many kills wins
-  duelScore:{},        // duel: playerId -> kills (host-authoritative)
+  duelScore:{},        // duel/ffa/tdm: playerId -> kills (host-authoritative)
+  teams:{},            // tdm: playerId -> 0 (red) | 1 (blue)
+  team:0,              // my team (tdm)
   joined:false,        // client: guards one-time startGame on welcome
   peer:null,
   conns:{},            // host: clientId -> DataConnection
@@ -6915,16 +6939,70 @@ function applyEnemyDamageToSelf(dmg){
   if(player.hp<=0) endGame();
 }
 
-// ---- 1v1 duel (PvP) ----
+// ---- PvP deathmatch (1v1 duel + free-for-all share one engine) ----
+function pvpMode(){ return NET.gameMode==='duel' || NET.gameMode==='ffa' || NET.gameMode==='tdm'; }
+function teamMode(){ return NET.gameMode==='tdm'; }
+function pvpLabel(){ return NET.gameMode==='ffa' ? 'FREE-FOR-ALL' : (NET.gameMode==='tdm' ? 'TEAM DEATHMATCH' : 'DUEL'); }
+const TEAM_NAME=['RED','BLUE']; const TEAM_COLOR=[0xff4d5e, 0x3a9bff]; const TEAM_EMIS=[0x6c1018, 0x10316c];
+function teamOf(id){ return NET.teams[id]; }
+function sameTeam(a,b){ return teamMode() && NET.teams[a]!=null && NET.teams[a]===NET.teams[b]; }
+function teamTotal(tm){ let s=0; for(const id in NET.duelScore){ if(NET.teams[id]===tm) s+=NET.duelScore[id]; } return s; }
+// host: assign a joiner to the smaller team (ties -> red)
+function assignTeam(id){ let r=0,b=0; for(const k in NET.teams){ if(+k===id) continue; if(NET.teams[k]===1) b++; else r++; } NET.teams[id]=(b<r)?1:0; return NET.teams[id]; }
+function broadcastTeams(){ const m={t:'teams', tm:NET.teams}; for(const id in NET.conns){ try{ NET.conns[id].send(m); }catch(e){} } }
+// tint remote avatars + nameplates by team (capsule avatars recolor fully; GLB avatars get a tinted nameplate)
+function applyTeamColors(){
+  if(!teamMode()) return;
+  for(const id in NET.players){ const rp=NET.players[id]; const tm=NET.teams[id]; if(rp&&rp.mesh) tintAvatar(rp.mesh, tm); }
+}
+function tintAvatar(mesh, tm){
+  if(tm==null) return; const col=TEAM_COLOR[tm], emis=TEAM_EMIS[tm];
+  const vis=mesh.userData.visual;
+  if(vis && !mesh.userData.hasModel){ vis.traverse(o=>{ if(o.isMesh && o.material && o.material.color){ o.material.color.setHex(col); if(o.material.emissive) o.material.emissive.setHex(emis); } }); }
+  if(mesh.userData.label){ mesh.remove(mesh.userData.label); const l=makeNameSprite(mesh.userData._name||'', tm); l.position.y=2.5; mesh.add(l); mesh.userData.label=l; }
+}
 function duelHUD(){
   const wn=document.getElementById('waveNum'); if(!wn) return;
   const me=NET.duelScore[NET.myId]||0;
   let opp=0; for(const id in NET.duelScore){ if(+id!==NET.myId) opp=Math.max(opp,NET.duelScore[id]); }
-  wn.textContent='DUEL  '+me+' — '+opp+'  /'+NET.killTarget;
-  const ec=document.getElementById('enemyCount'); if(ec) ec.textContent = duelDead ? 'RESPAWNING…' : 'FIRST TO '+NET.killTarget;
+  if(teamMode()){ wn.textContent='TDM  '+TEAM_NAME[0]+' '+teamTotal(0)+' — '+TEAM_NAME[1]+' '+teamTotal(1)+'  /'+NET.killTarget; }
+  else if(NET.gameMode==='ffa'){ wn.textContent='FFA  '+me+'  /'+NET.killTarget; }
+  else { wn.textContent='DUEL  '+me+' — '+opp+'  /'+NET.killTarget; }
+  const ec=document.getElementById('enemyCount'); if(ec) ec.textContent = duelDead ? 'RESPAWNING…' : ('FIRST TO '+NET.killTarget);
+  renderScoreboard();
 }
+// Live standings (top-right). Works for any number of players; names come from snapshots + the welcome.
+function renderScoreboard(){
+  const el=document.getElementById('scoreboard'); if(!el) return;
+  if(!pvpMode() || !gameOn){ if(el.style.display!=='none'){ el.style.display='none'; _sbSig=''; } return; }
+  const rows=[]; const seen={};
+  const add=(id)=>{ if(seen[id]) return; seen[id]=1; const k=NET.duelScore[id]||0;
+    const nm = (+id===NET.myId) ? ((NET.name||'You')+' (you)') : ((NET.players[id]&&NET.players[id].name)||('P'+id));
+    rows.push({id:+id, k, nm}); };
+  for(const id in NET.duelScore) add(id);
+  add(NET.myId); for(const id in NET.players) add(id);
+  rows.sort((a,b)=> b.k-a.k || a.id-b.id);
+  const tdm=teamMode();
+  const sig=pvpLabel()+'|'+NET.killTarget+'|'+(tdm?(teamTotal(0)+'-'+teamTotal(1)+'|'):'')+rows.map(r=>r.id+':'+r.k+':'+r.nm+':'+(tdm?NET.teams[r.id]:'')).join(',');
+  if(sig===_sbSig){ if(el.style.display!=='block') el.style.display='block'; return; }   // unchanged -> skip the rebuild
+  _sbSig=sig;
+  let html='';
+  if(tdm){
+    for(let tm=0; tm<2; tm++){
+      html+='<div class="sbTitle" style="color:'+(tm===0?'#ff8a93':'#9fd0ff')+'">'+TEAM_NAME[tm]+' · '+teamTotal(tm)+' / '+NET.killTarget+'</div>';
+      for(const r of rows){ if(NET.teams[r.id]!==tm) continue; const meCls=(r.id===NET.myId)?' me':''; html+='<div class="sbRow'+meCls+'"><span class="sbName">'+_esc(r.nm)+'</span><span class="sbK">'+r.k+'</span></div>'; }
+    }
+  } else {
+    html='<div class="sbTitle">'+pvpLabel()+' · first to '+NET.killTarget+'</div>';
+    for(const r of rows){ const meCls=(r.id===NET.myId)?' me':''; html+='<div class="sbRow'+meCls+'"><span class="sbName">'+_esc(r.nm)+'</span><span class="sbK">'+r.k+'</span></div>'; }
+  }
+  el.innerHTML=html; el.style.display='block';
+}
+let _sbSig='';
+function _esc(t){ return String(t).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function applyPvpDamage(dmg, from){
   if(duelDead || duelInvuln>0) return;
+  if(sameTeam(from, NET.myId)) return;   // no friendly fire in team modes
   if(buffs.shield>0){ const a=Math.min(buffs.shield,dmg); buffs.shield-=a; dmg-=a; }
   player.hp -= dmg; lastDamagedBy = (from!=null?from:lastDamagedBy); flashDamage(); SFX.hurt(); updateHUD();
   if(player.hp<=0) duelDie();
@@ -6955,16 +7033,18 @@ function registerDuelKill(killerId, victimId){   // host only
   if(killerId===NET.myId){ credits += DUEL_KILL_CREDITS; SFX.coin(); updateHUD(); }
   else sendToPlayer(killerId, { t:'credit', v:DUEL_KILL_CREDITS });
   broadcastDuelScore();
-  if(NET.duelScore[killerId] >= NET.killTarget) broadcastDuelOver(killerId);
+  if(teamMode()){ const tm=NET.teams[killerId]; if(tm!=null && teamTotal(tm) >= NET.killTarget) broadcastDuelOver(killerId); }
+  else if(NET.duelScore[killerId] >= NET.killTarget) broadcastDuelOver(killerId);
 }
 function broadcastDuelScore(){ const m={t:'score', s:NET.duelScore}; for(const id in NET.conns){ try{ NET.conns[id].send(m); }catch(e){} } }
-function broadcastDuelOver(winnerId){ const m={t:'duelOver', w:winnerId}; for(const id in NET.conns){ try{ NET.conns[id].send(m); }catch(e){} } showDuelResult(winnerId); }
-function showDuelResult(winnerId){
+function broadcastDuelOver(winnerId){ const wt=teamMode()?NET.teams[winnerId]:null; const m={t:'duelOver', w:winnerId, wt}; for(const id in NET.conns){ try{ NET.conns[id].send(m); }catch(e){} } showDuelResult(winnerId, wt); }
+function showDuelResult(winnerId, winnerTeam){
   gameOn=false; gameOver=true; safeExitPointerLock();
-  const win = winnerId===NET.myId;
+  { const sb=document.getElementById('scoreboard'); if(sb) sb.style.display='none'; }
+  const win = teamMode() ? (NET.team===winnerTeam) : (winnerId===NET.myId);
   const ov=document.getElementById('overlay'); ov.classList.remove('hidden');
   ov.innerHTML = `<h1 style="color:${win?'#38f5b5':'#ff2d55'};text-shadow:0 0 30px ${win?'rgba(56,245,181,.5)':'rgba(255,45,85,.5)'}">${win?'VICTORY':'DEFEAT'}</h1>
-    <div class="sub">DUEL TO ${NET.killTarget} KILLS</div>
+    <div class="sub">${teamMode() ? (TEAM_NAME[winnerTeam]+' TEAM WINS') : (pvpLabel()+' TO '+NET.killTarget+' KILLS')}</div>
     <button id="startBtn">Back to menu</button>`;
   document.getElementById('hud').classList.add('hidden');
   document.getElementById('startBtn').onclick = ()=>{ NET.mode='off'; NET.gameMode='coop'; location.reload(); };
@@ -7001,12 +7081,12 @@ function loadLevelFromNet(level){
 }
 
 // ---- remote avatars ----
-function makeNameSprite(text){
+function makeNameSprite(text, team){
   const c=document.createElement('canvas'); c.width=256; c.height=64;
   const x=c.getContext('2d');
   x.font='bold 30px sans-serif'; x.textAlign='center'; x.textBaseline='middle';
   x.fillStyle='rgba(0,0,0,0.45)'; x.fillRect(0,0,256,64);
-  x.fillStyle='#9fd8ff'; x.fillText(String(text).slice(0,14),128,34);
+  x.fillStyle = team===0 ? '#ff8a93' : (team===1 ? '#9fd0ff' : '#9fd8ff'); x.fillText(String(text).slice(0,14),128,34);
   const spr=new THREE.Sprite(new THREE.SpriteMaterial({ map:new THREE.CanvasTexture(c), depthTest:false, transparent:true }));
   spr.scale.set(2.4,0.6,1);
   return spr;
@@ -7062,13 +7142,14 @@ function rebuildAvatars(){ for(const id in NET.players){ const rp=NET.players[id
 function makeRemotePlayer(name){
   const g=new THREE.Group();
   buildAvatarVisual(g);
-  const label=makeNameSprite(name); label.position.y=2.5; g.add(label); g.userData.label=label;
+  const label=makeNameSprite(name, teamMode()?NET.teams[/*set later*/-1]:undefined); label.position.y=2.5; g.add(label); g.userData.label=label;
+  g.userData._name=name;
   scene.add(g);
   return g;
 }
 function ensureRemotePlayer(id, name){
   let rp=NET.players[id];
-  if(!rp){ rp={ mesh:makeRemotePlayer(name||('P'+id)), posEye:new THREE.Vector3(), target:new THREE.Vector3(), yaw:0, hp:100, wep:0, name:name||('P'+id) }; NET.players[id]=rp; }
+  if(!rp){ rp={ mesh:makeRemotePlayer(name||('P'+id)), posEye:new THREE.Vector3(), target:new THREE.Vector3(), yaw:0, hp:100, wep:0, name:name||('P'+id) }; NET.players[id]=rp; if(teamMode() && NET.teams[id]!=null) tintAvatar(rp.mesh, NET.teams[id]); }
   return rp;
 }
 function removeRemotePlayer(id){ const rp=NET.players[id]; if(rp){ scene.remove(rp.mesh); delete NET.players[id]; } }
@@ -7236,7 +7317,9 @@ function netInterpolate(dt){
     rp.mesh.rotation.y += dy*k;
     if(rp.mesh.userData.hasModel && rp.mesh.userData.visual && rp.mesh.userData.visual.userData.stateActions){
       const md=Math.hypot(rp.mesh.position.x-_px, rp.mesh.position.z-_pz);   // per-frame travel -> run / walk / idle
-      setEnemyAnimState(rp.mesh, md>0.10 ? 'run' : (md>0.02 ? 'walk' : 'idle'));
+      let _st = md>0.10 ? 'run' : (md>0.02 ? 'walk' : 'idle');
+      if(rp._fireT && performance.now() < rp._fireT) _st='attack';   // brief attack pose after a networked shot
+      setEnemyAnimState(rp.mesh, _st);
     } }
   if(NET.mode==='client'){
     for(const id in NET.enemyMeshes){ const em=NET.enemyMeshes[id]; em.mesh.position.lerp(em.target, k); em.mesh.lookAt(player.pos.x, em.mesh.position.y, player.pos.z); if(em.mesh.userData.hasModel) em.mesh.rotateY(em.mesh.userData.faceOff||0); }
@@ -7268,8 +7351,9 @@ function handleClientMsg(conn, msg){
   const id=conn._pid;
   if(msg.t==='st'){ setRemoteState(id, msg); }
   else if(msg.t==='hit'){ const en=enemies.find(e=>e.id===msg.e); if(en){ en.hp-=msg.d; spark(en.mesh.position, 0xff6b6b); if(en.hp<=0) killEnemy(en); } }
-  else if(msg.t==='name'){ const rp=ensureRemotePlayer(id, msg.n); rp.name=msg.n; if(rp.mesh.userData.label){ rp.mesh.remove(rp.mesh.userData.label); const l=makeNameSprite(msg.n); l.position.y=2.5; rp.mesh.add(l); rp.mesh.userData.label=l; } }
+  else if(msg.t==='name'){ const rp=ensureRemotePlayer(id, msg.n); rp.name=msg.n; rp.mesh.userData._name=msg.n; if(rp.mesh.userData.label){ rp.mesh.remove(rp.mesh.userData.label); const l=makeNameSprite(msg.n, teamMode()?NET.teams[id]:undefined); l.position.y=2.5; rp.mesh.add(l); rp.mesh.userData.label=l; } }
   else if(msg.t==='pvpHit'){ applyPvpDamage(msg.d, msg.from); }       // a client shot the host
+  else if(msg.t==='fire'){ remoteFire(id, msg.o, msg.d); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'fire', from:id, o:msg.o, d:msg.d}); }catch(e){} } } }   // show + relay the shot
   else if(msg.t==='died'){ registerDuelKill(msg.by, id); }            // a client died; credit the killer
   else if(msg.t==='push'){ const o=propByNid(msg.nid); if(o) pushDynamic(o, new THREE.Vector3(msg.dir[0],msg.dir[1],msg.dir[2]), msg.s||6, msg.pt?{x:msg.pt[0],y:msg.pt[1],z:msg.pt[2]}:null); }   // a client shot a dynamic prop
   else if(msg.t==='break'){   // host shattered a prop — show the debris locally (pDel removes the prop itself)
@@ -7291,6 +7375,8 @@ function handleHostMsg(msg){
     netIdPrefix='c'+msg.id;   // props this client adds get unique 'c<id>-' ids
     if(msg.mode) NET.gameMode=msg.mode;
     if(msg.killTarget!=null) NET.killTarget=msg.killTarget;
+    if(msg.teams) NET.teams=msg.teams;
+    if(msg.yourTeam!=null) NET.team=msg.yourTeam;
     if(msg.level) NET.pendingLevel=msg.level;
     if(msg.sounds) NET.pendingSounds=msg.sounds;
     if(msg.music!=null) NET.pendingMusic=msg.music;
@@ -7301,8 +7387,10 @@ function handleHostMsg(msg){
   else if(msg.t==='hurt'){ applyEnemyDamageToSelf(msg.d); }
   else if(msg.t==='credit'){ credits+=msg.v; SFX.coin(); updateHUD(); }
   else if(msg.t==='pvpHit'){ applyPvpDamage(msg.d, msg.from); }        // the host shot this client
+  else if(msg.t==='fire'){ remoteFire(msg.from, msg.o, msg.d); }       // someone fired
   else if(msg.t==='score'){ NET.duelScore=msg.s; duelHUD(); }
-  else if(msg.t==='duelOver'){ showDuelResult(msg.w); }
+  else if(msg.t==='teams'){ NET.teams=msg.tm||{}; if(NET.teams[NET.myId]!=null) NET.team=NET.teams[NET.myId]; applyTeamColors(); renderScoreboard(); }
+  else if(msg.t==='duelOver'){ showDuelResult(msg.w, msg.wt); }
   else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o); }   // a trigger animation fired somewhere
   else if(msg.t==='pAdd'){ netApplyAddProp(msg.d); }    // host/other player added a prop
   else if(msg.t==='pDel'){ netApplyDelProp(msg.nid); }  // a prop was deleted
@@ -7324,18 +7412,21 @@ function hostStart(code, mode, killTarget){
   NET.gameMode = mode || 'coop';
   if(killTarget!=null) NET.killTarget = killTarget;
   NET.duelScore = {0:0};
+  NET.teams = {0:0}; NET.team = 0;   // host starts on RED in team modes
   NET.peer=new Peer('breachfps-'+code);
-  NET.peer.on('open', ()=>{ netStatus((NET.gameMode==='duel'?'Hosting duel · ':'Hosting · ')+'room code: '+code+' · share it with friends'); showRoomBadge(code); startGame(); });
+  NET.peer.on('open', ()=>{ netStatus((pvpMode()?('Hosting '+pvpLabel().toLowerCase()+' · '):'Hosting · ')+'room code: '+code+' · share it with friends'); showRoomBadge(code); startGame(); });
   NET.peer.on('connection', conn=>{
     conn._pid = NET.nextId++;
     conn.on('open', ()=>{
       NET.conns[conn._pid]=conn;
-      if(NET.gameMode==='duel') NET.duelScore[conn._pid] = NET.duelScore[conn._pid]||0;
+      if(pvpMode()) NET.duelScore[conn._pid] = NET.duelScore[conn._pid]||0;
+      if(teamMode()) assignTeam(conn._pid);
       // hand the joiner the mode, the kill target, and the current level so their map matches
       let level=null; try{ level = serializeLevel(); }catch(e){}
-      conn.send({t:'welcome', id:conn._pid, mode:NET.gameMode, killTarget:NET.killTarget, level, sounds:audioSettings.sounds, music:audioSettings.musicUrl});
+      conn.send({t:'welcome', id:conn._pid, mode:NET.gameMode, killTarget:NET.killTarget, level, sounds:audioSettings.sounds, music:audioSettings.musicUrl, teams:NET.teams, yourTeam:(teamMode()?NET.teams[conn._pid]:undefined)});
       netStatus('Player joined ('+Object.keys(NET.conns).length+' connected)');
-      if(NET.gameMode==='duel') broadcastDuelScore();
+      if(pvpMode()) broadcastDuelScore();
+      if(teamMode()){ broadcastTeams(); applyTeamColors(); }
     });
     conn.on('data', msg=>handleClientMsg(conn, msg));
     conn.on('close', ()=>{ removeRemotePlayer(conn._pid); delete NET.conns[conn._pid]; });
@@ -7357,7 +7448,7 @@ function clientStart(code){
   });
   NET.peer.on('error', e=>{ const ty=e&&e.type; netStatus(ty==='peer-unavailable' ? 'No game found for that code' : ('Error: '+ty)); });
 }
-function showRoomBadge(code){ const b=document.getElementById('roomBadge'); if(b){ b.textContent=(NET.gameMode==='duel'?'DUEL ':'ROOM ')+code; b.style.display='block'; } }
+function showRoomBadge(code){ const b=document.getElementById('roomBadge'); if(b){ b.textContent=(NET.gameMode==='ffa'?'FFA ':(NET.gameMode==='duel'?'DUEL ':'ROOM '))+code; b.style.display='block'; } }
 
 
 const buffs = { damage:0, speed:0, shield:0 }; // values are remaining seconds (shield is hit points)
@@ -7810,6 +7901,29 @@ function closeShop(){
 
 // ---------- Bullets / tracers ----------
 const tracers = [];
+// Remote players' gunfire: each shot is broadcast so everyone sees a tracer + muzzle flash from the shooter
+// (and their avatar plays its attack clip). Host relays client shots to the other clients (star topology).
+const _muzFlashes = [];
+function muzzleFlashAt(pos){
+  const m = new THREE.Mesh(new THREE.SphereGeometry(0.22,6,6), new THREE.MeshBasicMaterial({color:0xffe08a, transparent:true, opacity:0.95, blending:THREE.AdditiveBlending, depthWrite:false}));
+  m.position.copy(pos); scene.add(m); _muzFlashes.push({mesh:m, life:0.07});
+}
+function netFire(o, d){
+  if(NET.mode==='off') return;
+  const dir=d.clone(); if(dir.lengthSq()<1e-6) return; dir.normalize();
+  const m={ t:'fire', from:NET.myId, o:[+o.x.toFixed(2),+o.y.toFixed(2),+o.z.toFixed(2)], d:[+dir.x.toFixed(3),+dir.y.toFixed(3),+dir.z.toFixed(3)] };
+  if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send(m); }catch(e){} }
+  else if(NET.mode==='host'){ for(const id in NET.conns){ try{ NET.conns[id].send(m); }catch(e){} } }
+}
+function remoteFire(pid, o, d){
+  const from=new THREE.Vector3(o[0],o[1],o[2]);
+  const dir=new THREE.Vector3(d[0],d[1],d[2]); if(dir.lengthSq()<1e-6) return; dir.normalize();
+  tracer(from, from.clone().addScaledVector(dir, 60));
+  muzzleFlashAt(from);
+  const rp=NET.players[pid];
+  if(rp){ rp._fireT = performance.now()+220; if(rp.mesh) setEnemyAnimState(rp.mesh,'attack'); }   // brief attack pose (held in netInterpolate)
+  if(typeof SFX!=='undefined' && SFX.shootAt){ SFX.shootAt(from); }   // distance-attenuated shot (falls back to nothing if unsupported)
+}
 function tracer(from, to){
   const g = new THREE.BufferGeometry().setFromPoints([from, to]);
   const m = new THREE.LineBasicMaterial({color:0xffe08a, transparent:true, opacity:.9});
@@ -7898,7 +8012,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 108 · 2026-06-04';
+const BUILD_VERSION = 'build 112 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8534,6 +8648,7 @@ function shoot(){
   firingLatch = true;
   lastShot = now; w.mag--; updateHUD();
   SFX.shoot();
+  if(NET.mode!=='off'){ const _fd=new THREE.Vector3(); camera.getWorldDirection(_fd); netFire(player.pos, _fd); }   // let other players see + hear this shot
 
   recoil = Math.min(recoil + (0.018*w.pellets*0.5 + 0.014) * (adsBlend>0.5?0.5:1), 0.10);
   player.pitch += (0.010 + Math.random()*0.006) * (adsBlend>0.5?0.5:1);
@@ -8541,7 +8656,7 @@ function shoot(){
 
   const dmgMul = (buffs.damage ? 2 : 1) * run.dmgMul;
   const clientMode = NET.mode==='client';
-  const duelMode = NET.gameMode==='duel';
+  const duelMode = pvpMode();
   if(duelMode && duelDead) return;   // no shooting while waiting to respawn
   let rayTargets, enemyMeshes;
   if(duelMode){
@@ -8591,7 +8706,8 @@ function shoot(){
         // walk up to the remote player's group, then tell that player they were hit
         let node=hit.object, pid=null;
         while(node && pid==null){ for(const id in NET.players){ if(NET.players[id].mesh===node){ pid=+id; break; } } node=node.parent; }
-        if(pid!=null){
+        if(pid!=null && sameTeam(NET.myId, pid)){ spark(hit.point, 0x7fdcc4); }   // teammate — no friendly fire
+        else if(pid!=null){
           sendToPlayer(pid, {t:'pvpHit', d:w.dmg*dmgMul, from:NET.myId});
           spark(hit.point, 0xff6b6b); if(p===0){ showHitmarker(); SFX.hit(); }
         } else { spark(hit.point, 0x9fd8ff); }
@@ -9139,7 +9255,7 @@ function loop(){
     if(keys['KeyD']) wish.add(right);
     if(keys['KeyA']) wish.sub(right);
   }
-  if(NET.gameMode==='duel' && duelDead){ wish.set(0,0,0); moveScale=0; }   // frozen until respawn
+  if(pvpMode() && duelDead){ wish.set(0,0,0); moveScale=0; }   // frozen until respawn
   wish.normalize();
   crouching = gameOn && !shopOpen && !editorOpen && (keys['ControlLeft']||keys['ControlRight']||keys['KeyC']||padCrouch);
   crouchT += ((crouching?1:0) - crouchT) * Math.min(1, dt*12);
@@ -9262,6 +9378,11 @@ function loop(){
     tr.line.material.opacity = Math.max(0,tr.life/0.06)*0.9;
     if(tr.life<=0){ scene.remove(tr.line); tracers.splice(i,1); }
   }
+  // muzzle flashes (remote gunfire)
+  for(let i=_muzFlashes.length-1;i>=0;i--){
+    const f=_muzFlashes[i]; f.life-=dt; f.mesh.material.opacity=Math.max(0,f.life/0.07)*0.95;
+    if(f.life<=0){ scene.remove(f.mesh); _muzFlashes.splice(i,1); }
+  }
   // sparks
   for(let i=sparks.length-1;i>=0;i--){
     const s=sparks[i]; s.life-=dt; s.vel.y-=20*dt;
@@ -9279,7 +9400,7 @@ function loop(){
   }
 
   const isClient = NET.mode==='client';   // clients don't simulate the shared world; the host owns it
-  const duelMode = NET.gameMode==='duel';
+  const duelMode = pvpMode();
 
   // duel: tick respawn + invulnerability timers, drive the duel HUD
   if(duelMode){
@@ -11591,7 +11712,7 @@ function setSceneWireframe(on){
 }
 
 function toggleEditor(){
-  if(!editorOpen && NET.gameMode==='duel'){ if(typeof flashToast==='function') flashToast('Editor is disabled in 1v1'); return; }   // no mid-match settings changes / cheating
+  if(!editorOpen && pvpMode()){ if(typeof flashToast==='function') flashToast('Editor is disabled in this mode'); return; }   // no mid-match settings changes / cheating
   editorOpen = !editorOpen; _editorOpenFlag = editorOpen;
   if(editorOpen){
     if(!editorEl) buildEditorPanel();
@@ -11643,7 +11764,7 @@ function startGame(){
   WEAPONS.shotgun.mag=6; WEAPONS.shotgun.reserve=24;
   reloading=false; score=0; wave=1; credits=0; grenadeCount=0; runKills=0;
   if(typeof startObjective==='function') startObjective();   // reset survival timer for this run
-  if(NET.gameMode==='duel') credits = 150;   // starting stipend so the economy is usable from the first life in 1v1
+  if(pvpMode()) credits = 150;   // starting stipend so the economy is usable from the first life
   buffs.damage=0; buffs.speed=0; buffs.shield=0;
   // reset aim/shake state
   firing=false; ads=false; adsBlend=0; shake=0;
@@ -11667,8 +11788,8 @@ function startGame(){
   $('overlay').classList.add('hidden');
   $('hud').classList.remove('hidden');
 
-  if(NET.gameMode==='duel'){
-    // 1v1: no waves, all weapons, spawn in an assigned corner; score is tracked over the wire
+  if(pvpMode()){
+    // PvP (duel / free-for-all): no waves, all weapons, spawn spread out; score is tracked over the wire
     duelDead=false; duelRespawnTimer=0; duelInvuln=1.2; lastDamagedBy=null;
     giveDuelLoadout();
     const sp = randomSpawn();
@@ -11786,6 +11907,18 @@ function startDuel(){
   netStatus('Loading network…');
   ensurePeerJS(ok=>{ if(!ok){ netStatus('Could not load networking (are you offline?)'); return; } hostStart(genRoomCode(), 'duel', n); });
 }
+function startFFA(){
+  const nm=document.getElementById('mpName'); NET.name=(nm&&nm.value.trim())||'Host';
+  const kt=document.getElementById('mpFFAKills'); let n=parseInt(kt&&kt.value,10); if(!(n>=1)) n=15; n=Math.min(99,n);
+  netStatus('Loading network…');
+  ensurePeerJS(ok=>{ if(!ok){ netStatus('Could not load networking (are you offline?)'); return; } hostStart(genRoomCode(), 'ffa', n); });
+}
+function startTDM(){
+  const nm=document.getElementById('mpName'); NET.name=(nm&&nm.value.trim())||'Host';
+  const kt=document.getElementById('mpTDMKills'); let n=parseInt(kt&&kt.value,10); if(!(n>=1)) n=30; n=Math.min(199,n);
+  netStatus('Loading network…');
+  ensurePeerJS(ok=>{ if(!ok){ netStatus('Could not load networking (are you offline?)'); return; } hostStart(genRoomCode(), 'tdm', n); });
+}
 function startJoin(){
   const nm=document.getElementById('mpName'); NET.name=(nm&&nm.value.trim())||('Player'+Math.floor(Math.random()*90+10));
   const cd=document.getElementById('mpCode'); const code=(cd&&cd.value.trim().toLowerCase())||'';
@@ -11858,6 +11991,8 @@ function bindMenu(){
   if(fs){ if(!fsSupported()){ fs.style.display='none'; } else { fs.style.display=''; fs.onclick=toggleFullscreen; syncFsBtn(); } }   // desktop only
   const ib=document.getElementById('instrBtn'); if(ib) ib.onclick=()=>openModal('instrModal');
   const mo=document.getElementById('mpOpenBtn'); if(mo) mo.onclick=()=>openModal('mpModal');
+  { const fb=document.getElementById('mpFFA'); if(fb) fb.onclick=startFFA; }
+  { const tb=document.getElementById('mpTDM'); if(tb) tb.onclick=startTDM; }
 }
 // Restore the full start page (Deploy / Build / multiplayer) — used by the editor's "Main menu" button.
 function showMainMenu(){
