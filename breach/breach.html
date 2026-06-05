@@ -7657,6 +7657,7 @@ function handleClientMsg(conn, msg){
     const ctr=new THREE.Vector3(msg.ctr[0],msg.ctr[1],msg.ctr[2]); const sz=new THREE.Vector3(msg.sz[0],msg.sz[1],msg.sz[2]);
     if(msg.st==='puff'){ spark(ctr, msg.c||0xcfeee6); if(typeof SFX!=='undefined' && SFX.puff) SFX.puff(); }
     else { if(typeof spawnFragmentsVisual==='function') spawnFragmentsVisual(ctr, sz, msg.c, msg.n||8, msg.sf, msg.sh); spark(ctr, msg.c||0xffd166); if(typeof SFX!=='undefined' && SFX.shatter) SFX.shatter(); }
+    if(msg.exp){ explodeAt(ctr.clone(), msg.br||7, 0, null); }   // explosive prop: blast visual (host already applied damage)
   }
   else if(msg.t==='buyChest'){ const ci=chests.findIndex(c=>c.id===msg.id); if(ci>=0){ scene.remove(chests[ci].mesh); chests.splice(ci,1); } }   // a client bought a crate -> remove it for everyone
   else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'anim', i:msg.i}); }catch(e){} } } }   // play + relay to other clients
@@ -7948,6 +7949,32 @@ function explodeGrenade(g){
   scene.remove(g.mesh);
 }
 const explosions = [];
+// A grenade-style blast at a point: explosion+smoke flipbook (or fallback sphere), light, sparks, shake,
+// then AoE damage with linear falloff to enemies (co-op) or bots+players (PvP), crediting byId. Nearby
+// breakable props are damaged too, so a shot propane can chain-detonate a cluster. Clients call it for
+// visuals only (NET.mode==='client' skips the damage; the host stays authoritative).
+function explodeAt(pos, R, dmg, byId){
+  if(typeof SFX!=='undefined' && SFX.explode) SFX.explode();
+  addShake(Math.max(0, 1 - player.pos.distanceTo(pos)/22) * 0.9);
+  const bl=new THREE.PointLight(0xffaa44, 30, Math.max(12, R*2.5)); bl.position.copy(pos); scene.add(bl);
+  const usedSheet=playFlipbook('explosion', pos, Math.max(0.4, R*0.18));
+  let blast=null;
+  if(usedSheet){ playFlipbook('smoke', pos, Math.max(0.4, R*0.16)); }
+  else { blast=new THREE.Mesh(new THREE.SphereGeometry(1,16,16), new THREE.MeshBasicMaterial({color:0xffaa44, transparent:true, opacity:0.8})); blast.position.copy(pos); scene.add(blast); }
+  explosions.push({ mesh:blast, light:bl, life:0.35, maxR:R });
+  for(let i=0;i<(usedSheet?6:14);i++) spark(pos, 0xffaa44);
+  if(NET.mode==='client') return;   // host/solo author the damage
+  if(!pvpMode()){
+    for(const en of enemies.slice()){ const d=en.mesh.position.distanceTo(pos); if(d<R){ en.hp-=dmg*(1-d/R); if(en.hp<=0) killEnemy(en); } }
+  } else {
+    for(const bt of bots.slice()){ if(bt.dead||sameTeam(byId,bt.id)) continue; const d=Math.hypot(bt.pos.x-pos.x, 1.0-pos.y, bt.pos.z-pos.z); if(d<R){ bt.hp-=dmg*(1-d/R); if(bt.hp<=0){ registerDuelKill(byId,bt.id); botDie(bt); } } }
+    for(const id in NET.players){ const rp=NET.players[id]; if(!rp||!rp.posEye) continue; if(sameTeam(byId,+id)) continue; if(rp.hp!=null&&rp.hp<=0) continue; const d=rp.posEye.distanceTo(pos); if(d<R) sendToPlayer(+id, {t:'pvpHit', d:dmg*(1-d/R), from:byId}); }
+  }
+  // the local (host) player — environmental hazard hits you too
+  { const d=player.pos.distanceTo(pos); if(d<R){ const pd=dmg*(1-d/R); if(!pvpMode()) applyEnemyDamageToSelf(pd, pos.x, pos.z); else if(!duelDead) applyPvpDamage(pd, byId); } }
+  // chain reaction: damage nearby breakable props (explosive ones detonate; the _shattered guard stops loops)
+  for(const o of dynamicProps.slice()){ if(!o.userData || o.userData._shattered || o.userData.breakable===false || !o.userData.phys) continue; const d=o.position.distanceTo(pos); if(d>0.01 && d<R) damageProp(o, dmg*(1-d/R), null, null, 6, byId); }
+}
 // ---------- Camera shake ----------
 let shake = 0;                 // current trauma 0..1, decays each frame
 function addShake(amt){ shake = Math.min(1, shake + amt); }
@@ -8386,7 +8413,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 147 · 2026-06-04';
+const BUILD_VERSION = 'build 148 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8702,6 +8729,7 @@ function applyPropDynState(obj, p){
     if(p.fc!=null) obj.userData.fragCount = p.fc;
     if(p.fz!=null) obj.userData.fragSize = p.fz;
     obj.userData.debrisShape = (p.dsh==='cubes') ? 'cubes' : 'shards';
+    if(p.exp){ obj.userData.explosive=true; if(p.br!=null) obj.userData.blastRadius=p.br; if(p.bd!=null) obj.userData.blastDmg=p.bd; }
   }
 }
 function removeDynamicProp(obj){
@@ -8922,7 +8950,7 @@ function updateFragments(){
   }
 }
 // Shatter a breakable prop: spawn debris, remove the prop, fx + (in co-op) tell peers. dir/point optional.
-function shatterProp(obj, point, dir, power){
+function shatterProp(obj, point, dir, power, byId){
   if(!obj || obj.userData._shattered) return;
   obj.userData._shattered = true;
   obj.updateMatrixWorld(true);
@@ -8947,9 +8975,10 @@ function shatterProp(obj, point, dir, power){
     spark(_shCtr, colorHex); spark(_shCtr, 0xcfeee6);
     if(typeof SFX!=='undefined' && SFX.puff) SFX.puff();
   }
+  if(obj.userData.explosive){ explodeAt(_shCtr.clone(), obj.userData.blastRadius||7, obj.userData.blastDmg||70, byId); }   // propane/gas-can blast
   // network it so co-op peers see the same break (host authoritative)
   if(typeof NET!=='undefined' && NET.mode==='host' && obj.userData.nid){
-    try{ const fx=obj.userData._breakFx||{}; netSendProp({ t:'break', nid:obj.userData.nid, c:colorHex, ctr:[_shCtr.x,_shCtr.y,_shCtr.z], sz:[_shSize.x,_shSize.y,_shSize.z], n:count, st:style, sf:fx.sf, sh:fx.sh }); }catch(e){}
+    try{ const fx=obj.userData._breakFx||{}; netSendProp({ t:'break', nid:obj.userData.nid, c:colorHex, ctr:[_shCtr.x,_shCtr.y,_shCtr.z], sz:[_shSize.x,_shSize.y,_shSize.z], n:count, st:style, sf:fx.sf, sh:fx.sh, exp:obj.userData.explosive?1:0, br:obj.userData.blastRadius||7 }); }catch(e){}
     try{ netSendProp({ t:'pDel', nid:obj.userData.nid }); }catch(e){}
   }
   if(typeof removeProp==='function'){ const idx = propModels.indexOf(obj); if(idx>=0){ removeProp(idx); return; } }
@@ -8958,14 +8987,14 @@ function shatterProp(obj, point, dir, power){
   scene.remove(obj);
 }
 // Damage a breakable prop; returns true if it shattered.
-function damageProp(obj, dmg, point, dir, power){
+function damageProp(obj, dmg, point, dir, power, byId){
   if(!obj.userData.phys || obj.userData.breakable===false) return false;
   if(obj.userData.hp==null) obj.userData.hp = defaultHpFor(obj);
   obj.userData.hp -= dmg;
   // brief impact flash on the prop
   obj.traverse(o=>{ if(o.isMesh && o.material && o.material.emissive){ o.material.emissive.setHex(0x661a00); o.material.emissiveIntensity = Math.max(o.material.emissiveIntensity||0, 0.8); } });
   obj.userData._flash = performance.now();
-  if(obj.userData.hp <= 0){ shatterProp(obj, point, dir, power); return true; }
+  if(obj.userData.hp <= 0){ shatterProp(obj, point, dir, power, byId); return true; }
   return false;
 }
 // Step the simulation (fixed timestep) and sync dynamic meshes from their bodies. Host/solo only.
@@ -9178,7 +9207,7 @@ function shoot(){
         if(clientMode){ if(NET.conn) try{ NET.conn.send({t:'push', nid:dprop.userData.nid, dir:[dir.x,dir.y,dir.z], s:power, pt:[hp.x,hp.y,hp.z]}); }catch(e){} }
         else {
           // breakable props take damage; a lethal shot shatters them instead of just shoving
-          const broke = damageProp(dprop, w.dmg*dmgMul, hp, dir, power);
+          const broke = damageProp(dprop, w.dmg*dmgMul, hp, dir, power, NET.myId);
           if(!broke) pushDynamic(dprop, dir, power, hp);
         }
         spark(hit.point, 0xffd166); if(p===0){ showHitmarker(); SFX.hit(); }
@@ -10578,6 +10607,7 @@ function propEntry(o){
       if(o.userData.fragCount!=null) e.fc=o.userData.fragCount;
       if(o.userData.fragSize!=null && Math.abs(o.userData.fragSize-DEBRIS_SIZE_FRAC)>1e-6) e.fz=o.userData.fragSize;
       if(o.userData.debrisShape==='cubes') e.dsh='cubes';   // shards is the default; only store cubes
+      if(o.userData.explosive){ e.exp=1; if(o.userData.blastRadius!=null) e.br=o.userData.blastRadius; if(o.userData.blastDmg!=null) e.bd=o.userData.blastDmg; }
     }
   }
   const m=propMaterialDesc(o); if(m) e.mat=m;
@@ -11542,6 +11572,26 @@ function renderEditorFields(){
           const brksp=document.createElement('span'); brksp.innerHTML='<b>Breakable</b> — shatters when shot';
           brk.appendChild(brkcb); brk.appendChild(brksp); animHost.appendChild(brk);
           if(sel.userData.breakable!==false){
+            // ---- Explosive: detonate (blast fx + grenade-style AoE) when destroyed (propane / gas cans) ----
+            const ex=document.createElement('label'); ex.style.cssText='display:flex;align-items:center;gap:7px;color:#ffb38a;font-size:12px;margin-top:8px;cursor:pointer;';
+            const excb=document.createElement('input'); excb.type='checkbox'; excb.checked=!!sel.userData.explosive; excb.style.accentColor='#ff6b3a';
+            excb.onchange=()=>{ pushUndoSnapshot(); sel.userData.explosive=excb.checked; if(excb.checked){ if(sel.userData.blastRadius==null) sel.userData.blastRadius=7; if(sel.userData.blastDmg==null) sel.userData.blastDmg=70; } renderEditorFields(); };
+            const exsp=document.createElement('span'); exsp.innerHTML='<b>\ud83d\udca5 Explosive</b> \u2014 detonates when destroyed';
+            ex.appendChild(excb); ex.appendChild(exsp); animHost.appendChild(ex);
+            if(sel.userData.explosive){
+              const mkSlider=(label,min,max,step,val,fmt,set)=>{
+                const l=document.createElement('label'); l.style.cssText='display:flex;align-items:center;gap:7px;color:#ffb38a;font-size:12px;margin-top:6px;';
+                const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='44px';
+                const r=document.createElement('input'); r.type='range'; r.min=min; r.max=max; r.step=step; r.value=val; r.style.cssText='flex:1;accent-color:#ff6b3a;';
+                const v=document.createElement('span'); v.textContent=fmt(val); v.style.cssText='min-width:42px;text-align:right;color:#cfeee2;font-size:12px;';
+                r.addEventListener('mousedown',()=>pushUndoSnapshot()); r.oninput=()=>{ const m=parseFloat(r.value); v.textContent=fmt(m); set(m); };
+                l.appendChild(sp); l.appendChild(r); l.appendChild(v); animHost.appendChild(l);
+              };
+              mkSlider('Radius',2,20,0.5,(sel.userData.blastRadius!=null?sel.userData.blastRadius:7),(m)=>m+'m',(m)=>sel.userData.blastRadius=m);
+              mkSlider('Damage',10,200,5,(sel.userData.blastDmg!=null?sel.userData.blastDmg:70),(m)=>String(Math.round(m)),(m)=>sel.userData.blastDmg=m);
+              const exn=document.createElement('div'); exn.className='hint'; exn.style.marginTop='3px'; exn.textContent='Shoot it to blow it: flipbook blast + falloff damage to everyone in range (you too). Chain-reacts nearby explosives.';
+              animHost.appendChild(exn);
+            }
             const hlab=document.createElement('label'); hlab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin-top:6px;';
             const hsp=document.createElement('span'); hsp.textContent='Health'; hsp.style.minWidth='44px';
             const hr=document.createElement('input'); hr.type='range'; hr.min='5'; hr.max='300'; hr.step='1'; hr.value=sel.userData.maxHp; hr.style.cssText='flex:1;accent-color:#ff8a5b;';
