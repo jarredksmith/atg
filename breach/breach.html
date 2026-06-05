@@ -272,6 +272,11 @@
   #scoreboard .sbName { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #scoreboard .sbK { color:#ffd166; }
   body.touch #scoreboard { top:38px; min-width:118px; font-size:11px; padding:4px 6px; }
+  #killFeed { position:fixed; top:210px; left:18px; z-index:41; display:flex; flex-direction:column; gap:3px; pointer-events:none; font:600 12px ui-monospace,monospace; }
+  #killFeed .kfRow { background:rgba(5,10,12,0.62); border:1px solid rgba(56,245,181,0.18); border-radius:5px; padding:2px 7px; opacity:1; transition:opacity .8s; display:flex; align-items:center; gap:6px; white-space:nowrap; }
+  #killFeed .kfRow.kfFade { opacity:0; }
+  #killFeed .kfArrow { color:#ff6b6b; }
+  body.touch #killFeed { top:82px; left:8px; font-size:10px; gap:2px; }
   #padDebug { display:none; position:fixed; top:12px; left:12px; z-index:60; background:rgba(5,10,12,0.85); color:#9fe6cf; border:1px solid rgba(56,245,181,0.4); border-radius:6px; padding:8px 12px; font:11px/1.5 ui-monospace,monospace; white-space:pre; pointer-events:none; max-width:340px; }
   #controls b { color:#a8d6c8; }
   .hidden { display:none !important; }
@@ -549,6 +554,7 @@
 <div id="perfHud" class="hidden"></div>
 <div id="roomBadge"></div>
 <div id="scoreboard"></div>
+<div id="killFeed"></div>
 <button id="pauseBtn" title="Pause (Esc)" style="display:none">❚❚</button>
 <div id="pauseMenu" class="hidden">
   <div class="pauseCard">
@@ -7000,6 +7006,21 @@ function renderScoreboard(){
 }
 let _sbSig='';
 function _esc(t){ return String(t).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+// ---- kill feed (PvP): a transient "killer > victim" ticker, top-left under the minimap ----
+function killName(id){ return (+id===NET.myId) ? (NET.name||'You') : ((NET.players[id]&&NET.players[id].name)||('P'+id)); }
+function killColor(id){ if(!teamMode()) return (+id===NET.myId?'#eafff7':'#cfeee2'); const tm=NET.teams[id]; return tm===0?'#ff8a93':(tm===1?'#9fd0ff':'#cfeee2'); }
+function addKillFeed(killerId, victimId){
+  if(killerId==null) return;
+  const fe=document.getElementById('killFeed'); if(!fe) return;
+  const row=document.createElement('div'); row.className='kfRow';
+  row.innerHTML='<span class="kfName" style="color:'+killColor(killerId)+'">'+_esc(killName(killerId))+'</span><span class="kfArrow">&#9656;</span><span class="kfName" style="color:'+killColor(victimId)+'">'+_esc(killName(victimId))+'</span>';
+  fe.appendChild(row);
+  while(fe.childElementCount>5) fe.removeChild(fe.firstChild);   // keep the last 5
+  setTimeout(()=>{ row.classList.add('kfFade'); }, 4000);
+  setTimeout(()=>{ if(row.parentNode) row.parentNode.removeChild(row); }, 4900);
+}
+function broadcastFeed(k,v){ const m={t:'feed', k, v}; for(const id in NET.conns){ try{ NET.conns[id].send(m); }catch(e){} } }
+function clearKillFeed(){ const fe=document.getElementById('killFeed'); if(fe) fe.innerHTML=''; }
 function applyPvpDamage(dmg, from){
   if(duelDead || duelInvuln>0) return;
   if(sameTeam(from, NET.myId)) return;   // no friendly fire in team modes
@@ -7033,6 +7054,7 @@ function registerDuelKill(killerId, victimId){   // host only
   if(killerId===NET.myId){ credits += DUEL_KILL_CREDITS; SFX.coin(); updateHUD(); }
   else sendToPlayer(killerId, { t:'credit', v:DUEL_KILL_CREDITS });
   broadcastDuelScore();
+  addKillFeed(killerId, victimId); broadcastFeed(killerId, victimId);
   if(teamMode()){ const tm=NET.teams[killerId]; if(tm!=null && teamTotal(tm) >= NET.killTarget) broadcastDuelOver(killerId); }
   else if(NET.duelScore[killerId] >= NET.killTarget) broadcastDuelOver(killerId);
 }
@@ -7041,6 +7063,7 @@ function broadcastDuelOver(winnerId){ const wt=teamMode()?NET.teams[winnerId]:nu
 function showDuelResult(winnerId, winnerTeam){
   gameOn=false; gameOver=true; safeExitPointerLock();
   { const sb=document.getElementById('scoreboard'); if(sb) sb.style.display='none'; }
+  clearKillFeed();
   const win = teamMode() ? (NET.team===winnerTeam) : (winnerId===NET.myId);
   const ov=document.getElementById('overlay'); ov.classList.remove('hidden');
   ov.innerHTML = `<h1 style="color:${win?'#38f5b5':'#ff2d55'};text-shadow:0 0 30px ${win?'rgba(56,245,181,.5)':'rgba(255,45,85,.5)'}">${win?'VICTORY':'DEFEAT'}</h1>
@@ -7390,6 +7413,7 @@ function handleHostMsg(msg){
   else if(msg.t==='fire'){ remoteFire(msg.from, msg.o, msg.d); }       // someone fired
   else if(msg.t==='score'){ NET.duelScore=msg.s; duelHUD(); }
   else if(msg.t==='teams'){ NET.teams=msg.tm||{}; if(NET.teams[NET.myId]!=null) NET.team=NET.teams[NET.myId]; applyTeamColors(); renderScoreboard(); }
+  else if(msg.t==='feed'){ addKillFeed(msg.k, msg.v); }
   else if(msg.t==='duelOver'){ showDuelResult(msg.w, msg.wt); }
   else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o); }   // a trigger animation fired somewhere
   else if(msg.t==='pAdd'){ netApplyAddProp(msg.d); }    // host/other player added a prop
@@ -8012,7 +8036,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 112 · 2026-06-04';
+const BUILD_VERSION = 'build 113 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
