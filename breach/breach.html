@@ -5171,6 +5171,15 @@ const SFX = {
   explode(){ if(playSample(curSounds().explode)) return; tone({freq:90, type:'sawtooth', dur:0.5, vol:0.25, slideTo:35}); noise({dur:0.45, vol:0.3, filterFreq:600}); },
   power(){ tone({freq:440, type:'triangle', dur:0.1, vol:0.16, slideTo:660}); setTimeout(()=>tone({freq:660, type:'triangle', dur:0.1, vol:0.16, slideTo:880}),90); setTimeout(()=>tone({freq:880, type:'triangle', dur:0.14, vol:0.16, slideTo:1320}),180); },
   swap(){ tone({freq:300, type:'square', dur:0.05, vol:0.08, slideTo:500}); },
+  slide(){ if(!actx||!sfxBus) return; const t=actx.currentTime, dur=0.45;
+    const nn=Math.floor(actx.sampleRate*dur); const buf=actx.createBuffer(1,nn,actx.sampleRate); const d=buf.getChannelData(0);
+    for(let i=0;i<nn;i++){ const e=i/nn; d[i]=(Math.random()*2-1)*Math.pow(1-e,1.5); }
+    const src=actx.createBufferSource(); src.buffer=buf;
+    const filt=actx.createBiquadFilter(); filt.type='bandpass'; filt.Q.value=0.9;
+    filt.frequency.setValueAtTime(1900,t); filt.frequency.exponentialRampToValueAtTime(320,t+dur);   // sweep down = whoosh
+    const g=actx.createGain(); g.gain.setValueAtTime(0.0001,t); g.gain.linearRampToValueAtTime(0.2,t+0.05); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    src.connect(filt).connect(g).connect(sfxBus); src.start(t); },
+  step(){ noise({dur:0.06, vol:0.07, filterFreq:520, type:'lowpass'}); },
 };
 
 // ---------- Custom sound samples (optional): load mp3/wav/ogg from a URL and play it instead of the synth ----------
@@ -6235,6 +6244,7 @@ applyWorldCfg();
 // crouch (hold Ctrl or C): lowers the view and slows movement
 let crouching = false, crouchT = 0;
 let sliding=false, slideT=0, slideCD=0, _prevCrouchHeld=false; const slideDir=new THREE.Vector3(); const SLIDE_DUR=0.55;
+let _stepT=0;   // footstep cadence timer
 const CROUCH_DIP = 0.8;     // how far the camera lowers when fully crouched
 const keys = {};
 // ---- Touch / mobile input ----
@@ -8202,7 +8212,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 131 · 2026-06-04';
+const BUILD_VERSION = 'build 133 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9502,7 +9512,7 @@ function loop(){
   if(slideCD>0) slideCD -= dt;
   const _slideEdge = _crouchHeld && !_prevCrouchHeld; _prevCrouchHeld = _crouchHeld;
   if(!sliding && slideCD<=0 && _slideEdge && _sprinting && player.onGround && wish.lengthSq()>0.01 && !shopOpen && !editorOpen){
-    sliding = true; slideT = SLIDE_DUR; slideDir.copy(wish).normalize();
+    sliding = true; slideT = SLIDE_DUR; slideDir.copy(wish).normalize(); SFX.slide();
   }
   if(sliding){
     slideT -= dt;
@@ -9546,6 +9556,14 @@ function loop(){
   } else {
     player.onGround = false;
   }
+  // footsteps: paced by horizontal speed, only while grounded and actually moving (not sliding/airborne)
+  if(gameOn && player.onGround && !sliding){
+    const hspd = Math.hypot(player.vel.x, player.vel.z);
+    if(hspd > 0.5){
+      _stepT -= dt;
+      if(_stepT <= 0){ SFX.step(); _stepT = Math.max(0.26, 3.2 / Math.max(1, hspd)); }   // faster steps when sprinting
+    } else { _stepT = 0; }
+  } else if(!player.onGround){ _stepT = 0.12; }
   if(editorOpen && editorTopView){
     // locked orthographic straight-down view; pan with drag, zoom with wheel
     scene.fog = null;   // fog would wash out the whole overhead view
