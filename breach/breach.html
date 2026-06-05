@@ -7677,7 +7677,7 @@ function throwGrenade(){
 // Frame order is left-to-right, top-to-bottom. Adjust cols/rows/frames to match whatever sheet you drop in.
 const VFX_BASE = 'vfx/';   // relative to breach.html on your host
 const VFX = {
-  explosion: { url:VFX_BASE+'explosion.png', cols:8, rows:8, frames:64, dur:0.75, size:6,  blend:'add',    grow:1.15, fade:false },
+  explosion: { url:VFX_BASE+'explosion.png', cols:5, rows:5, frames:25, dur:0.75, size:6,  blend:'add',    grow:1.15, fade:false },
   smoke:     { url:VFX_BASE+'smoke.png',     cols:8, rows:8, frames:64, dur:1.8,  size:5,  blend:'normal', grow:2.4,  fade:true  },
   fire:      { url:VFX_BASE+'fire.png',      cols:6, rows:6, frames:36, dur:0.9,  size:3,  blend:'add',    grow:1.1,  fade:true  },
   muzzle:    { url:VFX_BASE+'muzzle.png',    cols:4, rows:4, frames:16, dur:0.10, size:1.1,blend:'add',    grow:1.0,  fade:false },
@@ -8185,7 +8185,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 119 · 2026-06-04';
+const BUILD_VERSION = 'build 120 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
