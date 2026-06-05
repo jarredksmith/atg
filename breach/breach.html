@@ -148,6 +148,8 @@
     box-shadow: inset 0 0 200px rgba(255,40,70,0); transition: box-shadow .12s; }
   #lowhp { position: fixed; inset: 0; z-index: 8; pointer-events: none; opacity: 0;
     box-shadow: inset 0 0 170px 35px rgba(220,0,30,.6); }
+  #hurtDir { position: fixed; inset: 0; z-index: 7; pointer-events: none; display:flex; align-items:center; justify-content:center; opacity:0; transition:opacity .1s; }
+  #hurtDir svg { width:33vmin; height:33vmin; filter: drop-shadow(0 0 6px rgba(255,45,85,.7)); }
 
   /* challenge link UI */
   .chalLine { color:#9fd8ff; font-size:13px; letter-spacing:1px; margin-top:8px; }
@@ -492,6 +494,7 @@
 
 <div id="damage"></div>
 <div id="lowhp"></div>
+<div id="hurtDir"><svg viewBox="-50 -50 100 100"><path d="M -19 -42 A 46 46 0 0 1 19 -42" fill="none" stroke="#ff2d55" stroke-width="6" stroke-linecap="round"/></svg></div>
 
 <div id="overlay">
   <h1>BREACH</h1>
@@ -7022,7 +7025,7 @@ function netStatus(msg){ const el=document.getElementById('mpStatus'); if(el) el
 function allPlayers(){
   const list = [{ id:NET.myId, pos:player.pos, local:true,
     credit:v=>{ credits+=v; SFX.coin(); updateHUD(); },
-    hurt:d=>applyEnemyDamageToSelf(d) }];
+    hurt:(d,sx,sz)=>applyEnemyDamageToSelf(d,sx,sz) }];
   if(NET.mode==='host'){
     for(const id in NET.players){
       const rp = NET.players[id], conn = NET.conns[id];
@@ -7033,9 +7036,9 @@ function allPlayers(){
   }
   return list;
 }
-function applyEnemyDamageToSelf(dmg){
+function applyEnemyDamageToSelf(dmg, sx, sz){
   if(buffs.shield>0){ const a=Math.min(buffs.shield,dmg); buffs.shield-=a; dmg-=a; }
-  player.hp -= dmg; flashDamage(); SFX.hurt(); addShake(Math.min(0.5, dmg/55)); updateHUD();
+  player.hp -= dmg; flashDamage(); SFX.hurt(); addShake(Math.min(0.5, dmg/55)); if(sx!=null) hurtDir(sx,sz); updateHUD();
   if(player.hp<=0) endGame();
 }
 
@@ -7119,7 +7122,7 @@ function applyPvpDamage(dmg, from){
   if(duelDead || duelInvuln>0) return;
   if(sameTeam(from, NET.myId)) return;   // no friendly fire in team modes
   if(buffs.shield>0){ const a=Math.min(buffs.shield,dmg); buffs.shield-=a; dmg-=a; }
-  player.hp -= dmg; lastDamagedBy = (from!=null?from:lastDamagedBy); flashDamage(); SFX.hurt(); addShake(Math.min(0.5, dmg/55)); updateHUD();
+  player.hp -= dmg; lastDamagedBy = (from!=null?from:lastDamagedBy); flashDamage(); SFX.hurt(); addShake(Math.min(0.5, dmg/55)); { const rp=(from!=null)?NET.players[from]:null; if(rp&&rp.posEye) hurtDir(rp.posEye.x, rp.posEye.z); } updateHUD();
   if(player.hp<=0) duelDie();
 }
 function updateRespawnOverlay(){
@@ -8222,7 +8225,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 139 · 2026-06-04';
+const BUILD_VERSION = 'build 141 · 2026-06-04';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9167,12 +9170,12 @@ function fireEnemyShot(en, target){
   if(mesh.userData.glow) mesh.userData.glow.scale.set(1, 4.5, 1);     // stretch the halo into a thin tracer streak
   scene.add(mesh);
   if(!playFlipbook('muzzle', from, 0.7)) flashLightAt(from);          // muzzle flash at the enemy's gun
-  enemyShots.push({ mesh, vel: dir.multiplyScalar(en.projSpeed), dmg: en.dmg, born: performance.now(), life: 3500 });
+  enemyShots.push({ mesh, vel: dir.multiplyScalar(en.projSpeed), dmg: en.dmg, born: performance.now(), life: 3500, from: from.clone() });
   if(SFX && SFX.enemyShot) SFX.enemyShot();
 }
 function updateEnemyShots(dt){
   if(!enemyShots.length) return;
-  const ps = (typeof allPlayers==='function') ? allPlayers() : [{ pos:player.pos, hurt:d=>applyEnemyDamageToSelf(d) }];
+  const ps = (typeof allPlayers==='function') ? allPlayers() : [{ pos:player.pos, hurt:(d,sx,sz)=>applyEnemyDamageToSelf(d,sx,sz) }];
   const now = performance.now();
   for(let i=enemyShots.length-1;i>=0;i--){
     const s = enemyShots[i];
@@ -9180,7 +9183,7 @@ function updateEnemyShots(dt){
     const p = s.mesh.position;
     emitBoltTrail(p);
     let dead = (now - s.born) > s.life || p.y < 0.1;
-    if(!dead){ for(const pl of ps){ const dx=pl.pos.x-p.x, dy=((pl.pos.y!=null?pl.pos.y:1.4))-p.y, dz=pl.pos.z-p.z; if(dx*dx+dy*dy+dz*dz < 1.1*1.1){ if(pl.hurt) pl.hurt(s.dmg); dead=true; break; } } }
+    if(!dead){ for(const pl of ps){ const dx=pl.pos.x-p.x, dy=((pl.pos.y!=null?pl.pos.y:1.4))-p.y, dz=pl.pos.z-p.z; if(dx*dx+dy*dy+dz*dz < 1.1*1.1){ if(pl.hurt) pl.hurt(s.dmg, s.from?s.from.x:null, s.from?s.from.z:null); dead=true; break; } } }
     if(!dead){ for(const c of colliders){ const b=c.userData.box; if(!b) continue; if(p.x>=b.min.x&&p.x<=b.max.x&&p.y>=b.min.y&&p.y<=b.max.y&&p.z>=b.min.z&&p.z<=b.max.z){ dead=true; break; } } }
     if(dead){ boltImpact(p, 0x6fe0ff); scene.remove(s.mesh); enemyShots.splice(i,1); }
   }
@@ -9194,6 +9197,20 @@ function updateLowHp(dt){
     el.style.opacity = (k * (0.55 + 0.45*Math.sin(performance.now()*0.009))).toFixed(3);
     _hbT -= dt; if(_hbT<=0){ SFX.heartbeat(); _hbT = 0.45 + frac*1.6; }   // beats quicken as hp drops
   } else { el.style.opacity='0'; _hbT=0; }
+}
+let _hurtDirT=0, _hurtFrom=null; const _HURT_FWD=new THREE.Vector3();
+function hurtDir(sx,sz){ if(sx==null||sz==null) return; _hurtFrom={x:sx,z:sz}; _hurtDirT=1.3; }
+function updateHurtDir(dt){
+  const el=$('hurtDir'); if(!el) return;
+  if(_hurtDirT>0 && _hurtFrom && gameOn && !duelDead){
+    _hurtDirT-=dt;
+    camera.getWorldDirection(_HURT_FWD);
+    let rel=Math.atan2(_hurtFrom.x-player.pos.x, _hurtFrom.z-player.pos.z) - Math.atan2(_HURT_FWD.x, _HURT_FWD.z);
+    rel=Math.atan2(Math.sin(rel), Math.cos(rel));   // -PI..PI; 0 = source dead ahead
+    const svg=el.firstElementChild; if(svg) svg.style.transform='rotate('+(rel*180/Math.PI).toFixed(1)+'deg)';
+    el.style.opacity=Math.max(0, Math.min(0.95, _hurtDirT*1.3)).toFixed(2);
+    if(_hurtDirT<=0){ el.style.opacity='0'; _hurtFrom=null; }
+  } else if(el.style.opacity!=='0'){ el.style.opacity='0'; }
 }
 function flashDamage(){
   const d = $('damage');
@@ -9688,6 +9705,7 @@ function loop(){
   }
   updateFlipbooks(dt);   // sprite-sheet explosions / smoke / fire
   updateLowHp(dt);       // low-health vignette + heartbeat
+  updateHurtDir(dt);     // directional hit indicator
   // bolt streak trails + impact flashes (fade + expand, then dispose)
   for(let i=boltTrails.length-1;i>=0;i--){
     const t=boltTrails[i]; t.life-=dt; const k=Math.max(0,t.life/t.max);
@@ -9840,7 +9858,7 @@ function loop(){
         }
       } else if(en._chase && en._dist < (en._reach || 2.4) && en.cooldown<=0 && !editorOpen){   // aware/chasing melee enemy in reach attacks
         en.cooldown = 0.8; en._attackT = nowMs + 550;   // brief attack-animation window
-        near.hurt(en.dmg || 9);   // routes to the local player or, in co-op, the remote one
+        near.hurt(en.dmg || 9, en.mesh.position.x, en.mesh.position.z);   // routes to the local player or, in co-op, the remote one
       }
       // drive the animation state machine: attack window > running (chasing) > walking (patrol) > idle
       if(en.mesh.userData.hasModel && en.mesh.userData.visual && en.mesh.userData.visual.userData.stateActions){
@@ -12333,11 +12351,9 @@ function renderFreesoundBrowser(host, refresh){
   const B='background:rgba(56,245,181,.16);border:1px solid #38f5b5;color:#eafff7;border-radius:4px;cursor:pointer;padding:3px 8px;font-size:11px;';
   const wrap=document.createElement('div'); wrap.style.cssText='margin-top:14px;border-top:1px solid #233;padding-top:10px;';
   const head=document.createElement('div'); head.className='hint'; head.style.margin='2px 0 6px';
-  head.innerHTML='<b>Freesound</b> \u2014 search free CC sound effects, preview, and assign to any event. A shared API token is built in; paste your own below to use your own quota.';
+  head.innerHTML='<b>Freesound</b> \u2014 search free CC sound effects, preview, and assign to any event.';
   wrap.appendChild(head);
-  const tokRow=document.createElement('div'); tokRow.style.cssText='display:flex;gap:5px;margin-bottom:6px;';
-  const tok=document.createElement('input'); tok.type='text'; tok.spellcheck=false; tok.placeholder='Freesound API token'; tok.value=fsGetKey(); tok.style.cssText='flex:1;min-width:0;'+I; tok.onchange=()=>fsSetKey(tok.value.trim());
-  tokRow.appendChild(tok); wrap.appendChild(tokRow);
+  // token field hidden — a key is baked in (fsGetKey). Override via localStorage 'fs_api_key' if ever needed.
   const sRow=document.createElement('div'); sRow.style.cssText='display:flex;gap:5px;margin-bottom:6px;';
   const q=document.createElement('input'); q.type='text'; q.placeholder='Search (e.g. shotgun, footstep, reload)'; q.value=fsLastQuery; q.style.cssText='flex:1;min-width:0;'+I;
   const go=document.createElement('button'); go.textContent='Search'; go.style.cssText='flex:0 0 auto;'+B;
