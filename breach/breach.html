@@ -295,6 +295,10 @@
   .lobbyRow{ display:flex; align-items:center; gap:10px; padding:8px 11px; border-radius:9px; background:rgba(255,255,255,.05); font-size:14px; }
   .lobbyDot{ width:14px; height:14px; border-radius:50%; flex:none; box-shadow:inset 0 0 4px rgba(0,0,0,.5); }
   .lobbyHostTag{ margin-left:auto; font-size:10px; opacity:.55; letter-spacing:.12em; }
+  #mpGames{ display:flex; flex-direction:column; gap:5px; max-height:170px; overflow:auto; }
+  .gameRow{ display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:8px; background:rgba(255,255,255,.05); font-size:13px; }
+  .gameRow .gmode{ font-size:10px; letter-spacing:.09em; opacity:.6; }
+  .gameRow .gjoin{ margin-left:auto; }
   #mpCode { width:90px; text-transform:lowercase; }
   #mpKills { width:54px; text-align:center; }
   .mpBtn { background:rgba(56,245,181,0.12); color:#38f5b5; border:1px solid rgba(56,245,181,0.5); border-radius:6px; padding:8px 16px; font:600 13px ui-monospace,monospace; letter-spacing:2px; cursor:pointer; }
@@ -591,6 +595,7 @@
       <div class="mpTitle">→ JOIN A ROOM</div>
       <div class="mpDesc">Got a code from the host? Drop in to their co-op or duel.</div>
       <div class="mpActions"><input id="mpCode" type="text" maxlength="5" placeholder="room code" autocomplete="off"><button id="mpJoin" class="mpBtn">Join</button></div>
+      <div id="mpGamesRow" style="display:none;flex-direction:column;align-items:stretch;gap:6px;margin-top:8px"><div style="display:flex;align-items:center;justify-content:space-between"><span class="mpHint">Open games</span><button id="mpRefresh" class="mpBtn" style="padding:3px 10px;font-size:12px">Refresh</button></div><div id="mpGames"></div></div>
     </div>
     <div id="mpStatus"></div>
   </div>
@@ -5726,6 +5731,42 @@ function broadcastAnim(i){
   if(NET.mode==='host'){ for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'anim', i}); }catch(e){} } }
   else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send({t:'anim', i}); }catch(e){} }
 }
+// ---------- Transform-animated mechanisms: move/rotate any object (platforms, doors). userData.xa holds the
+// authored offset + playback/trigger; base transform is captured at deploy so the editor position is point A. ----------
+const _XA_D2R = Math.PI/180;
+function xaApply(o, sx){ o.userData.xa = { on:true, mode:sx.mode||'loop', trig:sx.trig||'auto', mx:sx.mx||0, my:sx.my||0, mz:sx.mz||0, rx:sx.rx||0, ry:sx.ry||0, rz:sx.rz||0, dur:sx.dur||2 }; }
+function _xaEach(fn){ for(const o of propModels){ const a=o&&o.userData&&o.userData.xa; if(a&&a.on) fn(o,a); } }
+function xaCapture(){ _xaEach((o,a)=>{ a.bpx=undefined; a.ph=0; a.dir=1; a.dest=0; }); }   // deploy: recapture point A on the next frame
+function xaSnapToBase(){ _xaEach((o,a)=>{ a.ph=0; a.dir=1; a.dest=0; if(a.bpx!==undefined){ o.position.set(a.bpx,a.bpy,a.bpz); o.rotation.set(a.brx,a.bry,a.brz); o.updateMatrixWorld(true); if(colliders.indexOf(o)>=0||o.userData.box) refreshPropCollider(o); } }); }   // editor: show point A
+function xaToggle(o){ const a=o&&o.userData&&o.userData.xa; if(!a||!a.on) return; if(a.mode==='once' && a.dest){ return; }   // Once locks open
+  a.dest = a.dest?0:1; if(SFX&&SFX.swap) SFX.swap(); }
+function broadcastXAnim(i){ const o=propModels[i]; const dest=(o&&o.userData.xa)?(o.userData.xa.dest?1:0):0;
+  if(NET.mode==='host'){ for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'xa', i, dest}); }catch(e){} } }
+  else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send({t:'xa', i, dest}); }catch(e){} } }
+function _xaCarry(o,dx,dy,dz){   // ride a moving platform: if grounded on its top, move with it
+  const b=o.userData.box; if(!b) return; const R=player.radius||0.4, feet=player.pos.y-EYE;
+  if(player.pos.x<b.min.x-R||player.pos.x>b.max.x+R||player.pos.z<b.min.z-R||player.pos.z>b.max.z+R) return;
+  if(feet < b.max.y-0.3 || feet > b.max.y+0.6) return;
+  player.pos.x+=dx; player.pos.z+=dz; if(dy>0) player.pos.y+=dy;
+}
+function updateXAnim(dt){
+  if(!gameOn || editorOpen || paused) return;
+  for(const o of propModels){
+    const a=o&&o.userData&&o.userData.xa; if(!a||!a.on) continue;
+    if(a.bpx===undefined){ a.bpx=o.position.x; a.bpy=o.position.y; a.bpz=o.position.z; a.brx=o.rotation.x; a.bry=o.rotation.y; a.brz=o.rotation.z; if(a.ph==null)a.ph=0; if(a.dir==null)a.dir=1; if(a.dest==null)a.dest=0; }
+    const dur=Math.max(0.05, a.dur||2), step=dt/dur; let lin=false;
+    if(a.trig==='interact'){ const tgt=a.dest?1:0; if(a.ph<tgt) a.ph=Math.min(tgt,a.ph+step); else if(a.ph>tgt) a.ph=Math.max(tgt,a.ph-step); }
+    else if(a.mode==='once'){ if(a.ph<1) a.ph=Math.min(1,a.ph+step); }
+    else if(a.mode==='pingpong'){ a.ph+=a.dir*step; if(a.ph>=1){a.ph=1;a.dir=-1;} else if(a.ph<=0){a.ph=0;a.dir=1;} }
+    else { a.ph+=step; if(a.ph>=1) a.ph-=1; lin=true; }   // loop = continuous (best for spins / conveyors)
+    const e = lin ? a.ph : (a.ph*a.ph*(3-2*a.ph));
+    const ox=o.position.x, oy=o.position.y, oz=o.position.z;
+    o.position.set(a.bpx+(a.mx||0)*e, a.bpy+(a.my||0)*e, a.bpz+(a.mz||0)*e);
+    o.rotation.set(a.brx+(a.rx||0)*_XA_D2R*e, a.bry+(a.ry||0)*_XA_D2R*e, a.brz+(a.rz||0)*_XA_D2R*e);
+    const dx=o.position.x-ox, dy=o.position.y-oy, dz=o.position.z-oz;
+    if(dx||dy||dz){ o.updateMatrixWorld(true); if(colliders.indexOf(o)>=0||o.userData.box) refreshPropCollider(o); if(player.onGround) _xaCarry(o,dx,dy,dz); }
+  }
+}
 const _pcV = new THREE.Vector3();
 function refreshPropCollider(obj){
   obj.updateMatrixWorld(true);
@@ -5952,7 +5993,7 @@ function removeProp(idx){
 function loadHostedProps(){
   const list = (savedLevel && Array.isArray(savedLevel.props)) ? savedLevel.props : SCENE_PROPS;
   propModels.length = list.length;   // reserve slots so async GLB loads can't clobber later push-spawned props
-  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p); if(p.att) obj.userData.attribution=p.att; }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));   // slot=i preserves order
+  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p); if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));   // slot=i preserves order
 }
 loadHostedProps();
 
@@ -7400,7 +7441,7 @@ function loadLevelFromNet(level){
   // rebuild from the host's data
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p);  if(p.att) obj.userData.attribution=p.att; if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));
+    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p);  if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));
   }
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
@@ -7748,6 +7789,7 @@ function handleClientMsg(conn, msg){
   }
   else if(msg.t==='buyChest'){ const ci=chests.findIndex(c=>c.id===msg.id); if(ci>=0){ scene.remove(chests[ci].mesh); chests.splice(ci,1); } }   // a client bought a crate -> remove it for everyone
   else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'anim', i:msg.i}); }catch(e){} } } }   // play + relay to other clients
+  else if(msg.t==='xa'){ const o=propModels[msg.i]; if(o&&o.userData.xa) o.userData.xa.dest=msg.dest?1:0; for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'xa', i:msg.i, dest:msg.dest}); }catch(e){} } } }   // mechanism toggle + relay
   else if(msg.t==='pAdd'){ if(netApplyAddProp(msg.d)) relayProp({t:'pAdd', d:msg.d}, id); }       // a client added a prop -> mirror + relay
   else if(msg.t==='pDel'){ if(netApplyDelProp(msg.nid)) relayProp({t:'pDel', nid:msg.nid}, id); } // a client deleted a prop
   else if(msg.t==='pMov'){ if(netApplyMovProp(msg.nid, msg.x)) relayProp({t:'pMov', nid:msg.nid, x:msg.x}, id); } // a client moved a prop
@@ -7786,6 +7828,7 @@ function handleHostMsg(msg){
   else if(msg.t==='feed'){ addKillFeed(msg.k, msg.v); }
   else if(msg.t==='duelOver'){ showDuelResult(msg.w, msg.wt); }
   else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o); }   // a trigger animation fired somewhere
+  else if(msg.t==='xa'){ const o=propModels[msg.i]; if(o&&o.userData.xa) o.userData.xa.dest=msg.dest?1:0; }   // a mechanism toggled somewhere
   else if(msg.t==='pAdd'){ netApplyAddProp(msg.d); }    // host/other player added a prop
   else if(msg.t==='pDel'){ netApplyDelProp(msg.nid); }  // a prop was deleted
   else if(msg.t==='pMov'){ netApplyMovProp(msg.nid, msg.x); }   // a prop was moved/rotated/scaled
@@ -7875,7 +7918,7 @@ function enterLobby(){   // host
   const sb=document.getElementById('lobbyStart'); if(sb) sb.classList.remove('hidden');
   const bw=document.getElementById('lobbyBots'), bn=document.getElementById('lobbyBotN');
   if(bw && bn){ if(pvpMode() && NET.gameMode==='duel'){ bw.classList.add('hidden'); } else { bw.classList.remove('hidden'); bn.value=NET.botCount||0; } }
-  openModal('lobby'); refreshLobby();
+  openModal('lobby'); refreshLobby(); announceRoom();
 }
 function refreshLobby(){ if(NET.mode!=='host') return; renderLobby(lobbyRoster()); broadcastLobby(); }
 function broadcastLobby(){ if(NET.mode!=='host') return; const roster=lobbyRoster(); for(const id in NET.conns){ try{ NET.conns[id].send({t:'lobby', mode:NET.gameMode, players:roster}); }catch(e){} } }
@@ -7893,10 +7936,62 @@ function startMatch(){   // host presses START
   if(NET.mode!=='host') return;
   const bn=document.getElementById('lobbyBotN');
   if(bn && !(pvpMode() && NET.gameMode==='duel')){ let v=parseInt(bn.value,10); if(v>=0 && v<=7) NET.botCount=v; }
-  NET.phase='playing';
+  NET.phase='playing'; unannounceRoom();
   for(const id in NET.conns){ try{ NET.conns[id].send({t:'begin'}); }catch(e){} }
   closeModal('lobby'); startGame();
 }
+// ---------- Optional public games list: browse open lobbies instead of typing a code ----------
+// PeerJS has no room discovery, so open lobbies are published to a shared registry. Paste a free Firebase
+// Realtime Database base URL below to enable the list; leave '' for code-only joining (nothing breaks).
+const LOBBY_DB = '';                  // e.g. 'https://yourproject-default-rtdb.firebaseio.com'
+const LOBBY_PATH = 'breach_rooms';
+const LOBBY_TTL = 15000;              // a lobby not refreshed within this window is treated as closed
+function lobbyEnabled(){ return typeof LOBBY_DB==='string' && /^https:\/\//.test(LOBBY_DB); }
+function _lobbyUrl(code){ return LOBBY_DB.replace(/\/+$/,'')+'/'+LOBBY_PATH+'/'+(code||'')+'.json'; }
+let _lobbyHbT=null, _lobbyCode=null;
+function announceRoom(){   // host: publish + heartbeat this open lobby
+  if(!lobbyEnabled() || NET.mode!=='host') return;
+  _lobbyCode=NET.roomCode;
+  const ping=()=>{ if(!lobbyEnabled() || NET.mode!=='host' || NET.phase!=='lobby') return;
+    const body={ code:NET.roomCode, name:(NET.name||'Host'), mode:NET.gameMode||'coop', players:1+Object.keys(NET.conns).length, ts:Date.now() };
+    try{ fetch(_lobbyUrl(NET.roomCode), { method:'PUT', body:JSON.stringify(body) }).catch(()=>{}); }catch(e){}
+  };
+  ping(); if(_lobbyHbT) clearInterval(_lobbyHbT); _lobbyHbT=setInterval(ping, 5000);
+}
+function unannounceRoom(){   // remove the lobby from the public list (match started / left)
+  if(_lobbyHbT){ clearInterval(_lobbyHbT); _lobbyHbT=null; }
+  if(lobbyEnabled() && _lobbyCode){ try{ fetch(_lobbyUrl(_lobbyCode), { method:'DELETE' }).catch(()=>{}); }catch(e){} }
+  _lobbyCode=null;
+}
+function fetchRooms(cb){
+  if(!lobbyEnabled()){ cb(null); return; }
+  try{ fetch(_lobbyUrl(''), { method:'GET' }).then(r=>r.json()).then(d=>{
+    const now=Date.now(), out=[];
+    for(const k in (d||{})){ const r=d[k]; if(r && r.code && (now-(r.ts||0))<LOBBY_TTL) out.push(r); }
+    out.sort((a,b)=>(b.ts||0)-(a.ts||0)); cb(out);
+  }).catch(()=>cb(null)); }catch(e){ cb(null); }
+}
+function joinByCode(code){
+  const nm=document.getElementById('mpName'); NET.name=(nm&&nm.value.trim())||('Player'+Math.floor(Math.random()*90+10));
+  const mc=document.getElementById('mpCode'); if(mc) mc.value=code;
+  netStatus('Loading network\u2026');
+  ensurePeerJS(ok=>{ if(!ok){ netStatus('Could not load networking (are you offline?)'); return; } clientStart(code); });
+}
+function renderGamesList(rooms){
+  const wrap=document.getElementById('mpGames'), row=document.getElementById('mpGamesRow'); if(!wrap||!row) return;
+  if(!lobbyEnabled()){ row.style.display='none'; return; }
+  row.style.display='flex'; wrap.innerHTML='';
+  if(!rooms || !rooms.length){ const e=document.createElement('div'); e.className='mpHint'; e.textContent='No open games right now \u2014 host one, or join with a code.'; wrap.appendChild(e); return; }
+  rooms.forEach(r=>{
+    const d=document.createElement('div'); d.className='gameRow';
+    const nm=document.createElement('span'); nm.textContent=r.name||'Host';
+    const md=document.createElement('span'); md.className='gmode'; md.textContent=((r.mode||'coop')+'').toUpperCase()+' \u00b7 '+(r.players||1)+'p';
+    const j=document.createElement('button'); j.className='mpBtn gjoin'; j.style.cssText='padding:3px 12px;font-size:12px'; j.textContent='Join';
+    j.onclick=()=>joinByCode(r.code);
+    d.appendChild(nm); d.appendChild(md); d.appendChild(j); wrap.appendChild(d);
+  });
+}
+function refreshGamesList(){ fetchRooms(rooms=>renderGamesList(rooms)); }
 
 
 const buffs = { damage:0, speed:0, shield:0 }; // values are remaining seconds (shield is hit points)
@@ -8399,12 +8494,21 @@ function checkProximity(){
     }
     if(best) nearTarget = { type:'anim', obj:best };
   }
+  if(!nearTarget){
+    let best=null, bd=2.6;
+    for(const o of propModels){ const a=o&&o.userData&&o.userData.xa; if(!a||!a.on||a.trig!=='interact') continue;
+      const b=o.userData.box; let d;
+      if(b){ const cx=Math.max(b.min.x,Math.min(player.pos.x,b.max.x)), cz=Math.max(b.min.z,Math.min(player.pos.z,b.max.z)); d=Math.hypot(player.pos.x-cx, player.pos.z-cz); }
+      else d=Math.hypot(player.pos.x-o.position.x, player.pos.z-o.position.z);
+      if(d<bd){ bd=d; best=o; } }
+    if(best) nearTarget = { type:'xanim', obj:best };
+  }
   const prompt = $('prompt');
   if(nearTarget){
     if(nearTarget.type==='station'){
       const w=W();
       prompt.innerHTML = `AMMO STATION — <b>E</b> Buy ${w.refillAmt} ${w.name} rounds &nbsp;·&nbsp; ◆${w.refillCost}`;
-    } else if(nearTarget.type==='anim'){
+    } else if(nearTarget.type==='anim' || nearTarget.type==='xanim'){
       prompt.innerHTML = `<b>E</b> Activate`;
     } else {
       prompt.innerHTML = `SUPPLY CACHE — <b>E</b> Open`;
@@ -8431,6 +8535,9 @@ function interact(){
     const o = nearTarget.obj;
     playPropAnimationOnce(o);
     const i = propModels.indexOf(o); if(i>=0) broadcastAnim(i);   // mirror it on every other player
+  } else if(nearTarget.type==='xanim'){
+    const o = nearTarget.obj; xaToggle(o);
+    const i = propModels.indexOf(o); if(i>=0) broadcastXAnim(i);   // open/close it for everyone
   } else {
     openShop(nearTarget.chest);
   }
@@ -8610,7 +8717,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 158 · 2026-06-05';
+const BUILD_VERSION = 'build 160 · 2026-06-05';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10254,6 +10361,7 @@ function loop(){
   updateLowHp(dt);       // low-health vignette + heartbeat
   updateHurtDir(dt);     // directional hit indicator
   updateBots(dt);                        // AI opponents (host)
+  updateXAnim(dt);                       // moving platforms / doors (all peers)
   tickGrabHint(dt);                      // "[E] Grab" / carry prompt
   updateControlPoint(dt); cpRender();   // KOTH zone capture/score + HUD
   // bolt streak trails + impact flashes (fade + expand, then dispose)
@@ -10857,6 +10965,7 @@ function propMaterialDesc(o){
 function propEntry(o){
   const e={ src:o.userData.src||PROP_MODEL_URL, t:[ (o.userData.physHome?o.userData.physHome.x:o.position.x), (o.userData.physHome?o.userData.physHome.y:o.position.y), (o.userData.physHome?o.userData.physHome.z:o.position.z), o.rotation.x,o.rotation.y,o.rotation.z,o.scale.x,o.scale.y,o.scale.z] };
   if(o.userData.animMode==='trigger') e.anim='trigger';
+  if(o.userData.xa && o.userData.xa.on){ const a=o.userData.xa; e.xa={ mode:a.mode||'loop', trig:a.trig||'auto', mx:a.mx||0, my:a.my||0, mz:a.mz||0, rx:a.rx||0, ry:a.ry||0, rz:a.rz||0, dur:a.dur||2 }; }
   if(o.userData.phys){ e.dyn=true; if(o.userData.mass!=null) e.mass=o.userData.mass;
     if(o.userData.noGrab) e.ng=true;
     if(o.userData.breakable===false) e.brk=false;   // breakable defaults true; only store when off
@@ -11794,6 +11903,29 @@ function renderEditorFields(){
           ()=>{ setPropAnimMode(sel,'loop'); renderEditorFields(); },
           ()=>{ setPropAnimMode(sel,'trigger'); renderEditorFields(); });
       }
+      // ---- Mechanism: move/rotate this object into a platform, door, elevator, etc. ----
+      if(sel){
+        if(!sel.userData.xa) sel.userData.xa = { on:false, mode:'loop', trig:'auto', mx:0,my:0,mz:0, rx:0,ry:0,rz:0, dur:2 };
+        const xa=sel.userData.xa;
+        const xhead=document.createElement('div'); xhead.className='hint'; xhead.style.margin='10px 0 3px'; xhead.innerHTML='<b>Mechanism</b> \u2014 move / rotate this object (platforms, doors, elevators)';
+        animHost.appendChild(xhead);
+        const xon=document.createElement('label'); xon.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;cursor:pointer;';
+        const xcb=document.createElement('input'); xcb.type='checkbox'; xcb.checked=!!xa.on; xcb.style.accentColor='#7ad7ff';
+        xcb.onchange=()=>{ pushUndoSnapshot(); xa.on=xcb.checked; renderEditorFields(); };
+        const xsp=document.createElement('span'); xsp.innerHTML='<b>Animated mechanism</b>';
+        xon.appendChild(xcb); xon.appendChild(xsp); animHost.appendChild(xon);
+        if(xa.on){
+          const num=(label,key,min,max,step)=>{ const l=document.createElement('label'); l.style.cssText='display:flex;align-items:center;gap:7px;color:#bfe6ff;font-size:12px;margin-top:5px;'; const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='90px'; const ni=document.createElement('input'); ni.type='number'; ni.min=min; ni.max=max; ni.step=step; ni.value=xa[key]||0; ni.style.cssText='width:74px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;'; ni.addEventListener('focus',()=>pushUndoSnapshot()); ni.onchange=()=>{ xa[key]=parseFloat(ni.value)||0; }; l.appendChild(sp); l.appendChild(ni); animHost.appendChild(l); };
+          num('Move X (m)','mx',-200,200,0.1); num('Move Y (m)','my',-200,200,0.1); num('Move Z (m)','mz',-200,200,0.1);
+          num('Rotate X (\u00b0)','rx',-3600,3600,5); num('Rotate Y (\u00b0)','ry',-3600,3600,5); num('Rotate Z (\u00b0)','rz',-3600,3600,5);
+          num('Duration (s)','dur',0.1,60,0.1);
+          const seg=(label,key,opts)=>{ const h=document.createElement('div'); h.className='hint'; h.style.margin='6px 0 2px'; h.textContent=label; animHost.appendChild(h); const row=document.createElement('div'); row.className='row2'; opts.forEach(o=>{ const b=document.createElement('button'); b.textContent=o[1]; if((xa[key]||opts[0][0])===o[0]){ b.style.background='rgba(122,215,255,0.28)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); xa[key]=o[0]; renderEditorFields(); }; row.appendChild(b); }); animHost.appendChild(row); };
+          seg('Playback','mode',[['loop','\u27f3 Loop'],['pingpong','\u21c4 Ping-pong'],['once','\u2192 Once']]);
+          seg('Trigger','trig',[['auto','Auto'],['interact','E Activate']]);
+          const xn=document.createElement('div'); xn.className='hint'; xn.style.marginTop='4px'; xn.textContent='Travels from its current spot by the offset above. Players ride moving platforms and are blocked by closed doors. Deploy to test; E-activate toggles open/close (Once locks open).';
+          animHost.appendChild(xn);
+        }
+      }
       // physics toggle (selected prop)
       if(sel){
         const phead=document.createElement('div'); phead.className='hint'; phead.style.margin='8px 0 3px'; phead.innerHTML='<b>Physics</b> — dynamic objects fall, tumble, stack & react to shots';
@@ -12658,6 +12790,7 @@ function toggleEditor(){
     if(typeof syncSelToIdx==='function') syncSelToIdx();   // start each editor session with a clean (single) selection
     destroyPhysWorld();     // edit plain meshes; snap dynamic props back to their authored transform
     for(const o of dynamicProps){ if(o.userData.physHome) o.position.copy(o.userData.physHome); if(o.userData.physHomeQ) o.quaternion.copy(o.userData.physHomeQ); }
+    if(typeof xaSnapToBase==='function') xaSnapToBase();
     for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible = true; }
     if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(true);
     const mm=$('minimap'); if(mm) mm.style.display='none';        // declutter combat HUD while editing
@@ -12719,6 +12852,7 @@ function startGame(){
   for(const rk of rockets) scene.remove(rk.mesh); rockets.length=0;
   // client: adopt the host's level (props + lights) so everyone shares the same map
   if(NET.pendingLevel){ loadLevelFromNet(NET.pendingLevel); NET.pendingLevel=null; }
+  if(typeof xaCapture==='function') xaCapture();
   if(NET.pendingSounds){ NET.sounds=_sanitizeSounds(NET.pendingSounds); NET.pendingSounds=null; if(typeof preloadCustomSounds==='function') preloadCustomSounds(); }   // play the host's SFX this session
   if(NET.pendingMusic!=null){ NET.musicUrl=(typeof NET.pendingMusic==='string'?NET.pendingMusic:''); NET.pendingMusic=null; }   // and the host's music
   chestTimer = 20;
@@ -13006,7 +13140,8 @@ function populateSoundEditor(host){
 
 function bindMenu(){
   { const cb=document.getElementById('charBtn'); if(cb) cb.onclick=openCharPicker; updateCharBtnLabel(); }
-  { const sb=document.getElementById('lobbyStart'); if(sb) sb.onclick=startMatch; const lv=document.getElementById('lobbyLeave'); if(lv) lv.onclick=()=>location.reload(); }
+  { const sb=document.getElementById('lobbyStart'); if(sb) sb.onclick=startMatch; const lv=document.getElementById('lobbyLeave'); if(lv) lv.onclick=()=>{ unannounceRoom(); location.reload(); }; }
+  { const rf=document.getElementById('mpRefresh'); if(rf) rf.onclick=refreshGamesList; refreshGamesList(); setInterval(()=>{ const m=document.getElementById('mpModal'); if(m && !m.classList.contains('hidden') && lobbyEnabled()) refreshGamesList(); }, 4000); window.addEventListener('beforeunload', ()=>{ try{ unannounceRoom(); }catch(e){} }); }
   if(MENU_HTML===null){ const ov0=document.getElementById('overlay'); if(ov0) MENU_HTML = ov0.innerHTML; }   // capture the full start menu once, before any death/win screen overwrites it
   const sb=document.getElementById('startBtn'); if(sb) sb.onclick=startGame;
   const eb=document.getElementById('editBtn'); if(eb) eb.onclick=enterEditor;
