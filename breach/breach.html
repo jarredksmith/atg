@@ -7017,6 +7017,7 @@ const POWERUP_KINDS = {
   smg:    { c:0xa8e6ff, label:'SMG' },
   shotgun:{ c:0xffb86b, label:'SHOTGUN' },
   launcher:{ c:0xff7a3a, label:'ROCKET LAUNCHER' },
+  grenade:{ c:0x9be15a, label:'+GRENADE' },
 };
 const POWERUP_COOLDOWN = 15;   // seconds before a used pad returns
 let powerups = [];
@@ -7025,19 +7026,43 @@ let _puId = 1;
 // level has none, spawnPowerups() falls back to the auto buff layout. Markers are an editor-only preview.
 let pickupSpots = (savedLevel && Array.isArray(savedLevel.pickups)) ? savedLevel.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : [];
 let newPickupKind = 'health';
+let pickupModels = (savedLevel && savedLevel.pickupModels && typeof savedLevel.pickupModels==='object') ? JSON.parse(JSON.stringify(savedLevel.pickupModels)) : {};   // kind -> {url, scale}: custom model in place of the floating icon
 let pickupMarkers = [];
 function refreshPickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m); } pickupMarkers.length=0;
   for(const sp of pickupSpots){ const g=buildPowerupMesh(sp.kind); g.position.set(sp.x,0,sp.z); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.pickupMarker=true; scene.add(g); pickupMarkers.push(g); } }
 function setPickupMarkersVisible(v){ for(const m of pickupMarkers) m.visible=v; }
+function disposePickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m); } pickupMarkers.length=0; }
 function addPickupSpot(kind){ pushUndoSnapshot(); const fwd=new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw)); pickupSpots.push({ x:+(player.pos.x+fwd.x*6).toFixed(2), z:+(player.pos.z+fwd.z*6).toFixed(2), kind:kind||'health' }); refreshPickupMarkers(); renderEditorFields(); }
 function removePickupSpot(i){ pushUndoSnapshot(); pickupSpots.splice(i,1); refreshPickupMarkers(); renderEditorFields(); }
+const WEAPON_PICKUP_KINDS = { rifle:1, smg:1, shotgun:1, launcher:1 };
 function buildPowerupMesh(kind){
   const k = POWERUP_KINDS[kind] || POWERUP_KINDS.health;
   const g = new THREE.Group();
   const pad = new THREE.Mesh(new THREE.CylinderGeometry(1.15,1.15,0.12,20), new THREE.MeshStandardMaterial({ color:k.c, emissive:k.c, emissiveIntensity:0.6, transparent:true, opacity:0.55, roughness:0.4 }));
   pad.position.y=0.06; g.add(pad);
-  const icon = new THREE.Mesh(new THREE.OctahedronGeometry(0.42), new THREE.MeshStandardMaterial({ color:0xffffff, emissive:k.c, emissiveIntensity:0.9, roughness:0.3 }));
-  icon.position.y=1.25; g.add(icon); g.userData.icon=icon;
+  const pm = pickupModels[kind];
+  if(pm && pm.url){
+    // a scaled custom GLB instead of the default icon (bobs/spins via g.userData.icon)
+    const holder=new THREE.Group(); holder.position.y=1.1; g.add(holder); g.userData.icon=holder;
+    if(typeof loadGLTFCached==='function') loadGLTFCached(pm.url, (gltf)=>{ try{ const m=(THREE.cloneSkinned?THREE.cloneSkinned(gltf.scene):gltf.scene.clone(true)); m.scale.setScalar(pm.scale||1); m.traverse(o=>{ if(o.isMesh) o.castShadow=true; o.raycast=()=>{}; }); holder.clear(); holder.add(m); if(typeof playModelAnimations==='function') playModelAnimations(m, gltf); }catch(e){} }, ()=>{});
+  } else if(WEAPON_PICKUP_KINDS[kind]){
+    // a small floating model of the actual weapon (loads async; a silhouette stands in until it arrives)
+    const holder = new THREE.Group(); holder.position.y=1.15; g.add(holder); g.userData.icon=holder;
+    const ph = new THREE.Mesh(new THREE.BoxGeometry(0.9,0.16,0.18), new THREE.MeshStandardMaterial({ color:0x2a2f36, emissive:k.c, emissiveIntensity:0.3, roughness:0.5, metalness:0.4 }));
+    holder.add(ph);
+    const url = (typeof wepModelUrl==='function') ? wepModelUrl(kind) : '';
+    if(url && typeof loadGLTFCached==='function'){ loadGLTFCached(url, (gltf)=>{ try{
+        const m = (THREE.cloneSkinned ? THREE.cloneSkinned(gltf.scene) : gltf.scene.clone(true));
+        const box=new THREE.Box3().setFromObject(m), sz=new THREE.Vector3(); box.getSize(sz);
+        const sc=0.95/Math.max(0.001, Math.max(sz.x,sz.y,sz.z)); m.scale.setScalar(sc);
+        const c=new THREE.Vector3(); box.getCenter(c); m.position.sub(c.multiplyScalar(sc));
+        m.traverse(o=>{ o.raycast=()=>{}; });
+        holder.clear(); holder.add(m);
+      }catch(e){} }, ()=>{}); }
+  } else {
+    const icon = new THREE.Mesh(new THREE.OctahedronGeometry(0.42), new THREE.MeshStandardMaterial({ color:0xffffff, emissive:k.c, emissiveIntensity:0.9, roughness:0.3 }));
+    icon.position.y=1.25; g.add(icon); g.userData.icon=icon;
+  }
   return g;
 }
 function _animatePickup(g, dt){ const ic=g.userData.icon; if(ic){ ic.rotation.y += dt*1.8; ic.position.y = 1.25 + Math.sin(performance.now()*0.003)*0.12; } }
@@ -7062,6 +7087,7 @@ function applyPowerupLocal(kind){
   else if(kind==='speed') applySpeed();
   else if(kind==='shield') applyShield();
   else if(kind==='ammo'){ for(const key of owned){ const w=WEAPONS[key]; if(w) w.reserve=w.reserveMax; } updateHUD(); if(SFX.pickup) SFX.pickup(); }
+  else if(kind==='grenade'){ grenadeCount += 1; updateHUD(); if(SFX.pickup) SFX.pickup(); }
   else if(WEAPONS[kind]){ giveWeapon(kind); updateHUD(); if(SFX.pickup) SFX.pickup(); }
   const k = POWERUP_KINDS[kind]; if(k) flashToast(k.label);
 }
@@ -7077,7 +7103,7 @@ function updatePowerups(dt){
     if(p.mesh){ p.mesh.visible=true; _animatePickup(p.mesh, dt); }
     let near=null, nd=1e9;
     for(const pl of players){ const d=Math.hypot(pl.pos.x-p.x, pl.pos.z-p.z); if(d<nd){ nd=d; near=pl; } }
-    if(near && nd < 1.7){ grantPowerup(near, p.kind); p.ready=false; p.cd=POWERUP_COOLDOWN; if(p.mesh) p.mesh.visible=false; }
+    if(near && nd < 2.0){ grantPowerup(near, p.kind); p.ready=false; p.cd=POWERUP_COOLDOWN; if(p.mesh) p.mesh.visible=false; }
   }
 }
 
@@ -7464,7 +7490,7 @@ function loadLevelFromNet(level){
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns) buildSpawnMarker(sp); } setSpawnMarkersVisible(editorOpen);
-  pickupSpots = Array.isArray(level.pickups) ? level.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : []; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
+  pickupSpots = Array.isArray(level.pickups) ? level.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : []; pickupModels = (level.pickupModels && typeof level.pickupModels==='object') ? JSON.parse(JSON.stringify(level.pickupModels)) : {}; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }   // adopt the host's sky / ground / fog
   // per-player characters: the client keeps its own avatar; the host's character arrives via the welcome 'char' field
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; }
@@ -8710,6 +8736,7 @@ let padIndex = null;
 let padForceIndex = null;          // manual override (cycle with ']') when auto-pick guesses wrong
 let padPrev = [];                  // previous pressed-states (edge detection)
 let padFiringPrev = false;
+let padRadialPrev = false;
 let padFiring=false, padAds=false, padSprint=false, padJump=false, padCrouch=false, padMoveX=0, padMoveZ=0;
 const PAD_DEADZONE = 0.18;
 const PAD_LOOK_YAW = 2.8, PAD_LOOK_PITCH = 2.1;   // rad/sec at full right-stick deflection
@@ -8736,7 +8763,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 163 · 2026-06-05';
+const BUILD_VERSION = 'build 164 · 2026-06-05';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8780,6 +8807,13 @@ function pollGamepad(dt){
 
   // Sticks
   const lx=padDead(ax[0]), ly=padDead(ax[1]), rx=padDead(ax[2]), ry=padDead(ax[3]);
+  // Radial deploy menu: hold View/Back (button 8); the right stick points to an item; release to deploy.
+  { const radNow = down(8);
+    if(radNow && !padRadialPrev) openRadial();
+    padRadialPrev = radNow;
+    if(radialOpen){ radialStick(rx, ry); if(!radNow) closeRadial(true);
+      padMoveX=0; padMoveZ=0; padFiring=false; padAds=false; padSprint=false; padJump=false; padCrouch=false;
+      if(padFiringPrev) firingLatch=false; padFiringPrev=false; padPrev=snapshot(); return; } }
   padMoveX = lx; padMoveZ = ly;
   // Look with a squared response curve for fine aim near center
   player.yaw   -= (rx*Math.abs(rx)) * PAD_LOOK_YAW   * dt;
@@ -9193,6 +9227,15 @@ function updateRadialSel(){
   const cur=document.getElementById('radialCursor'); if(cur){ cur.style.left='calc(50% + '+radialCx+'px)'; cur.style.top='calc(50% + '+radialCy+'px)'; }
   const host=document.getElementById('radialRing'); if(host){ for(const el of host.children) el.classList.toggle('hot', +el.dataset.i===radialSel); }
   const lab=document.getElementById('radialLabel'); if(lab) lab.textContent = radialSel>=0 ? RADIAL_ITEMS[radialSel].label : 'Deploy';
+}
+// Gamepad: set the radial selection directly from a stick's position (vs the mouse's accumulated delta).
+function radialStick(x,y){
+  radialCx=Math.max(-RADIAL_R*1.3, Math.min(RADIAL_R*1.3, x*RADIAL_R*1.25));
+  radialCy=Math.max(-RADIAL_R*1.3, Math.min(RADIAL_R*1.3, y*RADIAL_R*1.25));
+  if(Math.hypot(radialCx,radialCy)<RADIAL_DEAD) radialSel=-1;
+  else { const ang=Math.atan2(radialCy,radialCx), N=RADIAL_ITEMS.length; let best=-1,bd=1e9;
+    for(let i=0;i<N;i++){ const a=(-90+i*(360/N))*Math.PI/180; let dd=Math.abs(((ang-a+Math.PI*3)%(Math.PI*2))-Math.PI); if(dd<bd){ bd=dd; best=i; } } radialSel=best; }
+  updateRadialSel();
 }
 function deployProp(src, exp){
   if(!gameOn || editorOpen || shopOpen || paused || duelDead || _deployCD>0) return; _deployCD=0.5;
@@ -11023,6 +11066,7 @@ function serializeLevel(){
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
     pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind })),
+    pickupModels: Object.keys(pickupModels).reduce((a,k)=>{ const m=pickupModels[k]; if(m&&m.url){ a[k]={ url:m.url, scale:m.scale||1 }; } return a; }, {}),
     game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave },
     dmgNum:  { on: dmgNumCfg.on !== false, size: dmgNumCfg.size, hit: dmgNumCfg.hitColor, kill: dmgNumCfg.killColor },
     pstart:  { x: playerSpawn.x, z: playerSpawn.z, yaw: playerSpawn.yaw },
@@ -11657,12 +11701,21 @@ function renderEditorFields(){
     // ===== Pickups: weapons / ammo / health / buffs placed on the map =====
     hint(gHost, '<b>Pickups</b> \u2014 items players grab on the map', '12px 0 4px');
     { const krow=document.createElement('div'); krow.className='row2'; krow.style.flexWrap='wrap';
-      const KINDS=[['health','+Health'],['ammo','+Ammo'],['rifle','Rifle'],['smg','SMG'],['shotgun','Shotgun'],['launcher','Rocket'],['damage','2x Dmg'],['speed','Speed'],['shield','Shield']];
+      const KINDS=[['health','+Health'],['ammo','+Ammo'],['rifle','Rifle'],['smg','SMG'],['shotgun','Shotgun'],['launcher','Rocket'],['grenade','Grenade'],['damage','2x Dmg'],['speed','Speed'],['shield','Shield']];
       const ksel=document.createElement('select'); ksel.style.cssText='flex:1;min-width:90px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
       KINDS.forEach(k=>{ const o=document.createElement('option'); o.value=k[0]; o.textContent=k[1]; if(k[0]===newPickupKind) o.selected=true; ksel.appendChild(o); });
-      ksel.onchange=()=>{ newPickupKind=ksel.value; };
+      ksel.onchange=()=>{ newPickupKind=ksel.value; renderEditorFields(); };
       const addB=document.createElement('button'); addB.textContent='+ Place ahead'; addB.onclick=()=>addPickupSpot(newPickupKind);
       krow.appendChild(ksel); krow.appendChild(addB); gHost.appendChild(krow); }
+    { const pm = pickupModels[newPickupKind] || (pickupModels[newPickupKind]={ url:'', scale:1 });
+      const mrow=document.createElement('div'); mrow.style.cssText='display:flex;gap:6px;margin-top:6px;align-items:center;';
+      const url=document.createElement('input'); url.type='text'; url.placeholder=newPickupKind+' model .glb URL (optional)'; url.value=pm.url||''; url.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+      url.onchange=()=>{ pushUndoSnapshot(); pm.url=url.value.trim(); if(typeof refreshPickupMarkers==='function') refreshPickupMarkers(); };
+      const sc=document.createElement('input'); sc.type='number'; sc.min='0.05'; sc.max='20'; sc.step='0.1'; sc.value=pm.scale||1; sc.title='scale'; sc.style.cssText='width:58px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 4px;font-size:12px;';
+      sc.onchange=()=>{ pushUndoSnapshot(); pm.scale=parseFloat(sc.value)||1; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers(); };
+      mrow.appendChild(url); mrow.appendChild(sc); gHost.appendChild(mrow);
+      hint(gHost,'','2px 0 0').textContent='Custom model for the "'+newPickupKind+'" pickup (replaces the floating icon). Blank = default; weapons default to their gun model.';
+    }
     if(pickupSpots.length){
       hint(gHost,'','3px 0 2px').textContent = pickupSpots.length+' placed:';
       pickupSpots.forEach((sp,i)=>{ const row=document.createElement('div'); row.style.cssText='display:flex;align-items:center;gap:8px;font-size:12px;color:#cfeee2;margin:2px 0;';
@@ -12904,7 +12957,7 @@ function startGame(){
   WEAPONS.shotgun.mag=6; WEAPONS.shotgun.reserve=24;
   reloading=false; score=0; wave=1; credits=0; grenadeCount=0; runKills=0;
   if(typeof startObjective==='function') startObjective();   // reset survival timer for this run
-  if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false);
+  if(typeof disposePickupMarkers==='function') disposePickupMarkers();   // remove editor previews; the live (grabbable) pads are spawned next
   if(typeof spawnPowerups==='function') spawnPowerups();   // lay out map powerups for this run
   if(typeof preloadVfx==='function') preloadVfx();   // warm the flipbook VFX textures (no-op if already loaded)
   if(pvpMode()) credits = 150;   // starting stipend so the economy is usable from the first life
