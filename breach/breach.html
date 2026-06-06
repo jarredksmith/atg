@@ -288,6 +288,13 @@
   .charSwatch{ width:44px; height:44px; border-radius:50%; margin:0 auto 8px; box-shadow:inset 0 2px 8px rgba(0,0,0,.45), 0 0 14px rgba(0,0,0,.3); }
   .charName{ font-size:13px; letter-spacing:.04em; opacity:.92; }
   @media(max-width:560px){ #charGrid{ grid-template-columns:repeat(2,1fr); } }
+  #lobby .modalCard{ max-width:440px; }
+  .lobbyCode{ font-size:26px; letter-spacing:.22em; font-weight:700; color:#38f5b5; text-align:center; margin:2px 0; }
+  .lobbyCode:empty{ display:none; }
+  #lobbyPlayers{ display:flex; flex-direction:column; gap:6px; margin-top:10px; }
+  .lobbyRow{ display:flex; align-items:center; gap:10px; padding:8px 11px; border-radius:9px; background:rgba(255,255,255,.05); font-size:14px; }
+  .lobbyDot{ width:14px; height:14px; border-radius:50%; flex:none; box-shadow:inset 0 0 4px rgba(0,0,0,.5); }
+  .lobbyHostTag{ margin-left:auto; font-size:10px; opacity:.55; letter-spacing:.12em; }
   #mpCode { width:90px; text-transform:lowercase; }
   #mpKills { width:54px; text-align:center; }
   .mpBtn { background:rgba(56,245,181,0.12); color:#38f5b5; border:1px solid rgba(56,245,181,0.5); border-radius:6px; padding:8px 16px; font:600 13px ui-monospace,monospace; letter-spacing:2px; cursor:pointer; }
@@ -594,6 +601,20 @@
     <h2>CHOOSE A CHARACTER</h2>
     <div class="mpDesc">Pick your color — other players see it in co-op and PvP.</div>
     <div id="charGrid"></div>
+  </div>
+</div>
+<div id="lobby" class="modalBack hidden">
+  <div class="modalCard">
+    <h2 id="lobbyTitle">LOBBY</h2>
+    <div id="lobbyCode" class="lobbyCode"></div>
+    <div class="mpDesc" id="lobbyHint">Waiting for players…</div>
+    <div id="lobbyPlayers"></div>
+    <div id="lobbyCount" class="mpHint" style="text-align:center;margin-top:6px"></div>
+    <div id="lobbyBots" class="mpRow hidden" style="margin-top:10px;align-items:center;gap:8px;justify-content:center"><span class="mpHint">Fill with bots</span><input id="lobbyBotN" type="number" min="0" max="7" value="0" style="width:56px"></div>
+    <div class="mpActions" style="margin-top:14px;justify-content:center;gap:10px">
+      <button id="lobbyStart" class="mpBtn coop hidden">START MATCH</button>
+      <button id="lobbyLeave" class="mpBtn">Leave</button>
+    </div>
   </div>
 </div>
 <div id="perfHud" class="hidden"></div>
@@ -7707,7 +7728,7 @@ function handleClientMsg(conn, msg){
   const id=conn._pid;
   if(msg.t==='st'){ setRemoteState(id, msg); }
   else if(msg.t==='hit'){ const en=enemies.find(e=>e.id===msg.e); if(en){ en.hp-=msg.d; spark(en.mesh.position, 0xff6b6b); if(en.hp<=0) killEnemy(en); } }
-  else if(msg.t==='name'){ const rp=ensureRemotePlayer(id, msg.n); rp.name=msg.n; rp.mesh.userData._name=msg.n; if(rp.mesh.userData.label){ rp.mesh.remove(rp.mesh.userData.label); const l=makeNameSprite(msg.n, teamMode()?NET.teams[id]:undefined); l.position.y=2.5; rp.mesh.add(l); rp.mesh.userData.label=l; } if(msg.char){ applyRemoteChar(id, msg.char); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'char', from:id, cfg:msg.char}); }catch(e){} } } } }
+  else if(msg.t==='name'){ const rp=ensureRemotePlayer(id, msg.n); rp.name=msg.n; rp.mesh.userData._name=msg.n; if(rp.mesh.userData.label){ rp.mesh.remove(rp.mesh.userData.label); const l=makeNameSprite(msg.n, teamMode()?NET.teams[id]:undefined); l.position.y=2.5; rp.mesh.add(l); rp.mesh.userData.label=l; } if(msg.char){ applyRemoteChar(id, msg.char); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'char', from:id, cfg:msg.char}); }catch(e){} } } } if(NET.phase==='lobby') refreshLobby(); }
   else if(msg.t==='pvpHit'){ applyPvpDamage(msg.d, msg.from); }       // a client shot the host
   else if(msg.t==='fire'){ remoteFire(id, msg.o, msg.d); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'fire', from:id, o:msg.o, d:msg.d}); }catch(e){} } } }   // show + relay the shot
   else if(msg.t==='died'){ registerDuelKill(msg.by, id); }            // a client died; credit the killer
@@ -7745,9 +7766,11 @@ function handleHostMsg(msg){
     NET.charById = Object.assign({}, msg.chars||{}); if(msg.char) NET.charById[0]=msg.char;   // host + existing players' characters
     if(msg.sounds) NET.pendingSounds=msg.sounds;
     if(msg.music!=null) NET.pendingMusic=msg.music;
-    netStatus('Connected — deploying'); showRoomBadge(NET.roomCode);
-    startGame();
+    netStatus('Connected'); showRoomBadge(NET.roomCode);
+    if(msg.phase==='lobby'){ showClientLobby(); } else { startGame(); }
   }
+  else if(msg.t==='begin'){ NET.phase='playing'; closeModal('lobby'); startGame(); }
+  else if(msg.t==='lobby'){ NET.lobbyRoster=msg.players||[]; if(NET.phase==='lobby') renderLobby(NET.lobbyRoster); }
   else if(msg.t==='world'){ applyWorld(msg); }
   else if(msg.t==='hurt'){ applyEnemyDamageToSelf(msg.d); }
   else if(msg.t==='credit'){ credits+=msg.v; SFX.coin(); updateHUD(); }
@@ -7786,7 +7809,7 @@ function hostStart(code, mode, killTarget){
   NET.duelScore = {0:0};
   NET.teams = {0:0}; NET.team = 0;   // host starts on RED in team modes
   NET.peer=new Peer('breachfps-'+code);
-  NET.peer.on('open', ()=>{ netStatus((pvpMode()?('Hosting '+pvpLabel().toLowerCase()+' · '):'Hosting · ')+'room code: '+code+' · share it with friends'); showRoomBadge(code); startGame(); });
+  NET.peer.on('open', ()=>{ netStatus((pvpMode()?('Hosting '+pvpLabel().toLowerCase()+' · '):'Hosting · ')+'room code: '+code+' · share it with friends'); showRoomBadge(code); enterLobby(); });
   NET.peer.on('connection', conn=>{
     conn._pid = NET.nextId++;
     conn.on('open', ()=>{
@@ -7795,13 +7818,14 @@ function hostStart(code, mode, killTarget){
       if(teamMode()) assignTeam(conn._pid);
       // hand the joiner the mode, the kill target, and the current level so their map matches
       let level=null; try{ level = serializeLevel(); }catch(e){}
-      conn.send({t:'welcome', id:conn._pid, mode:NET.gameMode, killTarget:NET.killTarget, level, sounds:audioSettings.sounds, music:audioSettings.musicUrl, teams:NET.teams, yourTeam:(teamMode()?NET.teams[conn._pid]:undefined), char:myCharCfg(), chars:Object.assign({}, NET.charById)});
+      conn.send({t:'welcome', id:conn._pid, mode:NET.gameMode, killTarget:NET.killTarget, level, sounds:audioSettings.sounds, music:audioSettings.musicUrl, teams:NET.teams, yourTeam:(teamMode()?NET.teams[conn._pid]:undefined), char:myCharCfg(), chars:Object.assign({}, NET.charById), phase:NET.phase});
       netStatus('Player joined ('+Object.keys(NET.conns).length+' connected)');
       if(pvpMode()) broadcastDuelScore();
       if(teamMode()){ broadcastTeams(); applyTeamColors(); }
+      if(NET.phase==='lobby') refreshLobby();
     });
     conn.on('data', msg=>handleClientMsg(conn, msg));
-    conn.on('close', ()=>{ removeRemotePlayer(conn._pid); delete NET.conns[conn._pid]; });
+    conn.on('close', ()=>{ removeRemotePlayer(conn._pid); delete NET.conns[conn._pid]; if(NET.phase==='lobby') refreshLobby(); });
     conn.on('error', ()=>{});
   });
   NET.peer.on('error', e=>{ netStatus('Host error: '+(e&&e.type||e)); });
@@ -7821,6 +7845,58 @@ function clientStart(code){
   NET.peer.on('error', e=>{ const ty=e&&e.type; netStatus(ty==='peer-unavailable' ? 'No game found for that code' : ('Error: '+ty)); });
 }
 function showRoomBadge(code){ const b=document.getElementById('roomBadge'); if(b){ b.textContent=(NET.gameMode==='ffa'?'FFA ':(NET.gameMode==='duel'?'DUEL ':'ROOM '))+code; b.style.display='block'; } }
+// ---------- Pre-game lobby: everyone gathers, then the host starts the match so all players begin together ----------
+function lobbyRoster(){
+  const selfTint = (CHARACTERS[myCharIdx]?CHARACTERS[myCharIdx].color:null);
+  const list=[{ id:NET.myId, name:(NET.name||'Host'), team:(teamMode()?(NET.teams[NET.myId]||0):null), tint:selfTint, host:true }];
+  for(const id in NET.players){ const rp=NET.players[id]; const ch=NET.charById[id]; list.push({ id:+id, name:(rp&&rp.name)||('P'+id), team:(teamMode()?(NET.teams[id]||0):null), tint:(ch&&ch.tint!=null?ch.tint:null), host:false }); }
+  return list;
+}
+function renderLobby(roster){
+  const wrap=document.getElementById('lobbyPlayers'); if(!wrap) return; wrap.innerHTML='';
+  (roster||[]).forEach(pl=>{
+    const row=document.createElement('div'); row.className='lobbyRow';
+    const dot=document.createElement('div'); dot.className='lobbyDot';
+    const c = (pl.tint!=null) ? pl.tint : (pl.team!=null ? TEAM_COLOR[pl.team] : 0x9fe6cf);
+    dot.style.background='#'+(((c>>>0)&0xffffff).toString(16).padStart(6,'0'));
+    const nm=document.createElement('span'); nm.textContent=(pl.name||'Player')+(pl.id===NET.myId?' (you)':'');
+    row.appendChild(dot); row.appendChild(nm);
+    if(pl.host){ const t=document.createElement('span'); t.className='lobbyHostTag'; t.textContent='HOST'; row.appendChild(t); }
+    wrap.appendChild(row);
+  });
+  const cnt=document.getElementById('lobbyCount'); if(cnt) cnt.textContent=((roster?roster.length:0))+' in lobby';
+}
+function _lobbyTitle(){ return (pvpMode()?pvpLabel():'CO-OP')+' LOBBY'; }
+function enterLobby(){   // host
+  NET.phase='lobby'; closeModal('mpModal');
+  const t=document.getElementById('lobbyTitle'); if(t) t.textContent=_lobbyTitle();
+  const cd=document.getElementById('lobbyCode'); if(cd) cd.textContent=NET.roomCode||'';
+  const hint=document.getElementById('lobbyHint'); if(hint) hint.textContent='Share the room code. Start when everyone is in.';
+  const sb=document.getElementById('lobbyStart'); if(sb) sb.classList.remove('hidden');
+  const bw=document.getElementById('lobbyBots'), bn=document.getElementById('lobbyBotN');
+  if(bw && bn){ if(pvpMode() && NET.gameMode==='duel'){ bw.classList.add('hidden'); } else { bw.classList.remove('hidden'); bn.value=NET.botCount||0; } }
+  openModal('lobby'); refreshLobby();
+}
+function refreshLobby(){ if(NET.mode!=='host') return; renderLobby(lobbyRoster()); broadcastLobby(); }
+function broadcastLobby(){ if(NET.mode!=='host') return; const roster=lobbyRoster(); for(const id in NET.conns){ try{ NET.conns[id].send({t:'lobby', mode:NET.gameMode, players:roster}); }catch(e){} } }
+function showClientLobby(){
+  NET.phase='lobby'; closeModal('mpModal');
+  const t=document.getElementById('lobbyTitle'); if(t) t.textContent=_lobbyTitle();
+  const cd=document.getElementById('lobbyCode'); if(cd) cd.textContent=NET.roomCode||'';
+  const hint=document.getElementById('lobbyHint'); if(hint) hint.textContent='Waiting for the host to start\u2026';
+  const sb=document.getElementById('lobbyStart'); if(sb) sb.classList.add('hidden');
+  const bw=document.getElementById('lobbyBots'); if(bw) bw.classList.add('hidden');
+  openModal('lobby');
+  if(NET.lobbyRoster) renderLobby(NET.lobbyRoster);
+}
+function startMatch(){   // host presses START
+  if(NET.mode!=='host') return;
+  const bn=document.getElementById('lobbyBotN');
+  if(bn && !(pvpMode() && NET.gameMode==='duel')){ let v=parseInt(bn.value,10); if(v>=0 && v<=7) NET.botCount=v; }
+  NET.phase='playing';
+  for(const id in NET.conns){ try{ NET.conns[id].send({t:'begin'}); }catch(e){} }
+  closeModal('lobby'); startGame();
+}
 
 
 const buffs = { damage:0, speed:0, shield:0 }; // values are remaining seconds (shield is hit points)
@@ -8534,7 +8610,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 157 · 2026-06-05';
+const BUILD_VERSION = 'build 158 · 2026-06-05';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12930,6 +13006,7 @@ function populateSoundEditor(host){
 
 function bindMenu(){
   { const cb=document.getElementById('charBtn'); if(cb) cb.onclick=openCharPicker; updateCharBtnLabel(); }
+  { const sb=document.getElementById('lobbyStart'); if(sb) sb.onclick=startMatch; const lv=document.getElementById('lobbyLeave'); if(lv) lv.onclick=()=>location.reload(); }
   if(MENU_HTML===null){ const ov0=document.getElementById('overlay'); if(ov0) MENU_HTML = ov0.innerHTML; }   // capture the full start menu once, before any death/win screen overwrites it
   const sb=document.getElementById('startBtn'); if(sb) sb.onclick=startGame;
   const eb=document.getElementById('editBtn'); if(eb) eb.onclick=enterEditor;
