@@ -7952,7 +7952,7 @@ function loadVfxTexture(kind){
   if(_vfxTex[kind]) return;   // loaded, loading, or failed already
   _vfxTex[kind]='loading';
   new THREE.TextureLoader().load(cfg.url,
-    (t)=>{ t.minFilter=THREE.LinearFilter; t.magFilter=THREE.LinearFilter; t.wrapS=t.wrapT=THREE.ClampToEdgeWrapping; if('colorSpace' in t) t.colorSpace=THREE.SRGBColorSpace; _vfxTex[kind]={tex:t}; console.info('[VFX] loaded '+kind+' ✓ '+cfg.url); },
+    (t)=>{ t.minFilter=THREE.LinearFilter; t.magFilter=THREE.LinearFilter; t.wrapS=t.wrapT=THREE.ClampToEdgeWrapping; if('colorSpace' in t) t.colorSpace=THREE.SRGBColorSpace; t.generateMipmaps=false; t.repeat.set(1/cfg.cols, 1/cfg.rows); try{ if(typeof renderer!=='undefined' && renderer && renderer.initTexture) renderer.initTexture(t); }catch(e){} _vfxTex[kind]={tex:t}; console.info('[VFX] loaded '+kind+' ✓ '+cfg.url); },
     undefined,
     ()=>{ _vfxTex[kind]='fail'; console.warn('[VFX] missing '+kind+' (using procedural fallback): '+cfg.url); });
 }
@@ -7963,25 +7963,27 @@ function playFlipbook(kind, pos, scale, parent, durMul){
   const cfg = VFX[kind]; if(!cfg) return false;
   const entry = _vfxTex[kind];
   if(!entry || entry==='loading' || entry==='fail' || !entry.tex){ if(!entry) loadVfxTexture(kind); return false; }
-  const tex = entry.tex.clone(); tex.needsUpdate=true;
-  tex.repeat.set(1/cfg.cols, 1/cfg.rows);
+  const tex = entry.tex;   // ONE shared, already-uploaded texture per kind — no per-call clone or GPU re-upload (that was the hitch)
   const mat = new THREE.SpriteMaterial({ map:tex, transparent:true, depthWrite:false, opacity:1,
     blending: cfg.blend==='add' ? THREE.AdditiveBlending : THREE.NormalBlending, rotation: Math.random()*Math.PI*2 });
   if(parent){ mat.depthTest=true; }   // viewmodel space: let the gun occlude the flash (sits behind the barrel, not pasted on top)
   const sp = new THREE.Sprite(mat);
   const base = (cfg.size||1) * (scale||1);
   sp.scale.setScalar(base); sp.position.copy(pos); sp.renderOrder = 9000;
+  const fb = { sp, tex, cfg, t:0, base, dur: cfg.dur * (durMul||1), ox:0, oy:1 - 1/cfg.rows };
+  // Several flipbooks share one texture, so each sets ITS frame offset right before its own draw call.
+  sp.onBeforeRender = ()=>{ tex.offset.set(fb.ox, fb.oy); tex.updateMatrix(); };
   (parent||scene).add(sp);   // parent => render in that space (e.g. the gun's viewmodel scene)
-  _flipbooks.push({ sp, tex, cfg, t:0, base, dur: cfg.dur * (durMul||1) });
+  _flipbooks.push(fb);
   return true;
 }
 function updateFlipbooks(dt){
   for(let i=_flipbooks.length-1;i>=0;i--){
     const f=_flipbooks[i]; f.t += dt; const cfg=f.cfg; const prog=f.t/f.dur;
-    if(prog>=1){ f.sp.removeFromParent(); f.tex.dispose(); f.sp.material.dispose(); _flipbooks.splice(i,1); continue; }
+    if(prog>=1){ f.sp.removeFromParent(); f.sp.material.dispose(); _flipbooks.splice(i,1); continue; }   // shared tex is reused by later flipbooks — don't dispose it
     let frame = Math.floor(prog*cfg.frames); if(frame>=cfg.frames) frame=cfg.frames-1;
     const col = frame % cfg.cols, row = Math.floor(frame/cfg.cols);
-    f.tex.offset.set(col/cfg.cols, 1 - (row+1)/cfg.rows);   // sheet origin is top-left
+    f.ox = col/cfg.cols; f.oy = 1 - (row+1)/cfg.rows;   // sheet origin top-left; applied per-draw in onBeforeRender
     if(cfg.grow && cfg.grow!==1) f.sp.scale.setScalar(f.base*(1 + (cfg.grow-1)*prog));
     if(cfg.fade) f.sp.material.opacity = 1 - prog*prog;
   }
@@ -8532,7 +8534,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 156 · 2026-06-05';
+const BUILD_VERSION = 'build 157 · 2026-06-05';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
