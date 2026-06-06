@@ -7012,10 +7012,25 @@ const POWERUP_KINDS = {
   damage: { c:0xff6b6b, label:'DOUBLE DAMAGE' },
   speed:  { c:0xa8e6ff, label:'SPEED BOOST' },
   shield: { c:0xffd166, label:'SHIELD' },
+  ammo:   { c:0xffd166, label:'+AMMO' },
+  rifle:  { c:0xffe08a, label:'RIFLE' },
+  smg:    { c:0xa8e6ff, label:'SMG' },
+  shotgun:{ c:0xffb86b, label:'SHOTGUN' },
+  launcher:{ c:0xff7a3a, label:'ROCKET LAUNCHER' },
 };
 const POWERUP_COOLDOWN = 15;   // seconds before a used pad returns
 let powerups = [];
 let _puId = 1;
+// Editor-placed pickups (weapons/ammo/health/buffs). The live pads are built from these at deploy; if a
+// level has none, spawnPowerups() falls back to the auto buff layout. Markers are an editor-only preview.
+let pickupSpots = (savedLevel && Array.isArray(savedLevel.pickups)) ? savedLevel.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : [];
+let newPickupKind = 'health';
+let pickupMarkers = [];
+function refreshPickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m); } pickupMarkers.length=0;
+  for(const sp of pickupSpots){ const g=buildPowerupMesh(sp.kind); g.position.set(sp.x,0,sp.z); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.pickupMarker=true; scene.add(g); pickupMarkers.push(g); } }
+function setPickupMarkersVisible(v){ for(const m of pickupMarkers) m.visible=v; }
+function addPickupSpot(kind){ pushUndoSnapshot(); const fwd=new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw)); pickupSpots.push({ x:+(player.pos.x+fwd.x*6).toFixed(2), z:+(player.pos.z+fwd.z*6).toFixed(2), kind:kind||'health' }); refreshPickupMarkers(); renderEditorFields(); }
+function removePickupSpot(i){ pushUndoSnapshot(); pickupSpots.splice(i,1); refreshPickupMarkers(); renderEditorFields(); }
 function buildPowerupMesh(kind){
   const k = POWERUP_KINDS[kind] || POWERUP_KINDS.health;
   const g = new THREE.Group();
@@ -7035,7 +7050,8 @@ function clearPowerups(){ for(const p of powerups){ if(p.mesh) scene.remove(p.me
 function spawnPowerups(){
   clearPowerups();
   if(NET.mode==='client') return;   // clients receive pads via the world snapshot
-  for(const spot of powerupLayout()){
+  const spots = (pickupSpots && pickupSpots.length) ? pickupSpots : powerupLayout();
+  for(const spot of spots){
     const mesh = buildPowerupMesh(spot.kind); mesh.position.set(spot.x, 0, spot.z); scene.add(mesh);
     powerups.push({ id:_puId++, x:spot.x, z:spot.z, kind:spot.kind, ready:true, cd:0, mesh });
   }
@@ -7045,6 +7061,8 @@ function applyPowerupLocal(kind){
   else if(kind==='damage') applyDamage();
   else if(kind==='speed') applySpeed();
   else if(kind==='shield') applyShield();
+  else if(kind==='ammo'){ for(const key of owned){ const w=WEAPONS[key]; if(w) w.reserve=w.reserveMax; } updateHUD(); if(SFX.pickup) SFX.pickup(); }
+  else if(WEAPONS[kind]){ giveWeapon(kind); updateHUD(); if(SFX.pickup) SFX.pickup(); }
   const k = POWERUP_KINDS[kind]; if(k) flashToast(k.label);
 }
 function grantPowerup(playerEntry, kind){
@@ -7446,6 +7464,7 @@ function loadLevelFromNet(level){
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns) buildSpawnMarker(sp); } setSpawnMarkersVisible(editorOpen);
+  pickupSpots = Array.isArray(level.pickups) ? level.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : []; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }   // adopt the host's sky / ground / fog
   // per-player characters: the client keeps its own avatar; the host's character arrives via the welcome 'char' field
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; }
@@ -8717,7 +8736,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 160 · 2026-06-05';
+const BUILD_VERSION = 'build 163 · 2026-06-05';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9473,7 +9492,7 @@ let instanceMeshes = [];   // active InstancedMesh objects
 let instancedProps = [];   // individual prop meshes currently hidden behind instances
 let instancingActive = false;
 function instanceEligible(o){
-  return o && isShapePrimitive(o.userData.src) && !o.userData.tex && !o.userData.emit && !o.userData.phys;
+  return o && isShapePrimitive(o.userData.src) && !o.userData.tex && !o.userData.emit && !o.userData.phys && !(o.userData.xa && o.userData.xa.on);   // animated mechanisms must stay individual movable meshes (instancing bakes a static matrix)
 }
 function buildInstancing(){
   if(instancingActive || editorOpen) return;
@@ -11003,6 +11022,7 @@ function serializeLevel(){
     props:   propModels.filter(Boolean).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
+    pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind })),
     game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave },
     dmgNum:  { on: dmgNumCfg.on !== false, size: dmgNumCfg.size, hit: dmgNumCfg.hitColor, kill: dmgNumCfg.killColor },
     pstart:  { x: playerSpawn.x, z: playerSpawn.z, yaw: playerSpawn.yaw },
@@ -11012,6 +11032,39 @@ function serializeLevel(){
 }
 function saveLevel(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(serializeLevel())); return true; } catch(e){ return false; } }
 function clearSave(){ try { localStorage.removeItem(SAVE_KEY); return true; } catch(e){ return false; } }
+// ---------- Single-player campaign: an ordered list of levels; each level's win condition loads the next ----------
+const CAMPAIGN_KEY='breach_campaign_v1';
+function loadCampaign(){ try{ const j=JSON.parse(localStorage.getItem(CAMPAIGN_KEY)); if(j && Array.isArray(j.levels)) return j; }catch(e){} return { levels:[] }; }
+let campaign = loadCampaign();
+function saveCampaign(){ try{ localStorage.setItem(CAMPAIGN_KEY, JSON.stringify(campaign)); return true; }catch(e){ return false; } }
+let campaignActive=false, campaignIdx=0, _campaignComplete=false;
+function _campaignLoad(i){ const lv=campaign.levels[i]; if(!lv) return; loadLevelFromNet(lv); startGame(); }
+function startCampaign(){ if(!campaign.levels.length){ if(typeof flashToast==='function') flashToast('Add a level to the campaign first'); return; } campaignActive=true; campaignIdx=0; _campaignComplete=false; _campaignLoad(0); }
+function _captureLoadout(){ const a={}; for(const k of owned){ const w=WEAPONS[k]; if(w) a[k]={ mag:w.mag, reserve:w.reserve }; } return { owned:[...owned], wep:curWep, hp:player.hp, ammo:a }; }
+function _restoreLoadout(c){ if(!c) return; owned.length=0; for(const k of c.owned) owned.push(k); for(const k in c.ammo){ if(WEAPONS[k]){ WEAPONS[k].mag=c.ammo[k].mag; WEAPONS[k].reserve=c.ammo[k].reserve; } } curWep=(c.wep && owned.includes(c.wep))?c.wep:owned[0]; player.hp=Math.max(1, c.hp||player.hp); if(typeof switchWeapon==='function') switchWeapon(curWep); if(typeof updateHUD==='function') updateHUD(); }
+function renderCampaignPanel(){
+  const host = editorEl && editorEl.querySelector('#edCampaign'); if(!host) return;
+  host.innerHTML='';
+  const info=document.createElement('div'); info.className='hint'; info.style.margin='2px 0 6px';
+  info.innerHTML='Chain levels into a solo campaign. Build a level, <b>Add</b> it, repeat, then <b>Play</b>. Each level ends on its win condition (set <b>Extraction</b> as the exit) and loads the next \u2014 weapons + health carry over.';
+  host.appendChild(info);
+  const row=document.createElement('div'); row.className='row2';
+  const addB=document.createElement('button'); addB.textContent='\u2795 Add current level'; addB.onclick=()=>{ campaign.levels.push(serializeLevel()); saveCampaign(); renderCampaignPanel(); };
+  const playB=document.createElement('button'); playB.textContent='\u25b6 Play campaign'; playB.style.cssText='background:rgba(56,245,181,0.22);color:#eafff7;font-weight:600'; playB.onclick=()=>{ startCampaign(); };
+  row.appendChild(addB); row.appendChild(playB); host.appendChild(row);
+  const r2=document.createElement('div'); r2.className='row2'; r2.style.marginTop='6px';
+  const repB=document.createElement('button'); repB.textContent='\u27f3 Replace last'; repB.onclick=()=>{ if(campaign.levels.length){ campaign.levels[campaign.levels.length-1]=serializeLevel(); saveCampaign(); renderCampaignPanel(); } };
+  const clrB=document.createElement('button'); clrB.textContent='Clear all'; clrB.onclick=()=>{ campaign.levels=[]; saveCampaign(); renderCampaignPanel(); };
+  r2.appendChild(repB); r2.appendChild(clrB); host.appendChild(r2);
+  const st=document.createElement('div'); st.className='hint'; st.style.margin='6px 0 2px'; st.textContent = campaign.levels.length ? (campaign.levels.length+' level'+(campaign.levels.length>1?'s':'')+':') : 'No levels yet.';
+  host.appendChild(st);
+  campaign.levels.forEach((lv,i)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;align-items:center;gap:6px;font-size:12px;color:#cfeee2;margin:2px 0;';
+    const lab=document.createElement('span'); lab.style.flex='1'; const obj=(lv.game&&lv.game.objective)||'eliminate'; lab.textContent=(i+1)+'. '+obj+' \u00b7 '+((lv.props&&lv.props.length)||0)+' props';
+    const up=document.createElement('button'); up.textContent='\u25b2'; up.style.cssText='padding:1px 6px'; up.onclick=()=>{ if(i>0){ const t=campaign.levels[i-1]; campaign.levels[i-1]=campaign.levels[i]; campaign.levels[i]=t; saveCampaign(); renderCampaignPanel(); } };
+    const dn=document.createElement('button'); dn.textContent='\u25bc'; dn.style.cssText='padding:1px 6px'; dn.onclick=()=>{ if(i<campaign.levels.length-1){ const t=campaign.levels[i+1]; campaign.levels[i+1]=campaign.levels[i]; campaign.levels[i]=t; saveCampaign(); renderCampaignPanel(); } };
+    const del=document.createElement('button'); del.textContent='\u2715'; del.style.cssText='padding:1px 7px'; del.onclick=()=>{ campaign.levels.splice(i,1); saveCampaign(); renderCampaignPanel(); };
+    r.appendChild(lab); r.appendChild(up); r.appendChild(dn); r.appendChild(del); host.appendChild(r); });
+}
 
 // ---------- Editor undo (Ctrl+Z) ----------
 // Snapshot-based: before each mutating editor action we push a full serialized level. Ctrl+Z restores
@@ -11252,9 +11305,11 @@ function buildEditorPanel(){
       + '<div class="row2" style="margin-top:6px"><button id="edReset">Reset target</button><button id="edCopy">Copy code</button></div>'
       + '<div class="copied" id="edCopied"></div>'
       + '<textarea id="edOut" readonly></textarea>')
+    + sec('Campaign', 'campaign', '<div id="edCampaign"></div>')
     ;
   document.body.appendChild(p);
   editorEl = p;
+  if(typeof renderCampaignPanel==='function') renderCampaignPanel();
   // restore saved width + wire drag-to-resize (drag the left edge; wider = more room for the crowded panels)
   try{ const w = parseInt(localStorage.getItem('breach_editor_width')||'',10); if(w>=260 && w<=window.innerWidth*0.92) p.style.width = w+'px'; }catch(e){}
   (function(){
@@ -11267,7 +11322,7 @@ function buildEditorPanel(){
   })();
   // collapsible section headers (state persists in localStorage so it survives reopening the editor)
   let secState = {}; try{ secState = JSON.parse(localStorage.getItem('breach_editor_sections')||'{}') || {}; }catch(e){}
-  const defaultCollapsed = { material:true, world:true, enemies:true, loot:true, sounds:true, levelfile:true };   // keep Gizmo/Object/Transform open by default
+  const defaultCollapsed = { material:true, world:true, enemies:true, loot:true, sounds:true, levelfile:true, campaign:true };   // keep Gizmo/Object/Transform open by default
   p.querySelectorAll('.edSection').forEach(s=>{
     const k = s.dataset.sec;
     const collapsed = (k in secState) ? secState[k]===true : !!defaultCollapsed[k];
@@ -11599,6 +11654,22 @@ function renderEditorFields(){
       exrow('Zone radius','1.5','10','0.5', ()=>gameCfg.extractRadius, v=>gameCfg.extractRadius=Math.max(1.5,Math.min(10,v||3.5)));
       hint(gHost, '', '2px 0 0').textContent = 'Beacon drops across the arena from your spawn. Hold it '+gameCfg.extractHold+'s to win (leaving resets progress).';
     }
+    // ===== Pickups: weapons / ammo / health / buffs placed on the map =====
+    hint(gHost, '<b>Pickups</b> \u2014 items players grab on the map', '12px 0 4px');
+    { const krow=document.createElement('div'); krow.className='row2'; krow.style.flexWrap='wrap';
+      const KINDS=[['health','+Health'],['ammo','+Ammo'],['rifle','Rifle'],['smg','SMG'],['shotgun','Shotgun'],['launcher','Rocket'],['damage','2x Dmg'],['speed','Speed'],['shield','Shield']];
+      const ksel=document.createElement('select'); ksel.style.cssText='flex:1;min-width:90px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+      KINDS.forEach(k=>{ const o=document.createElement('option'); o.value=k[0]; o.textContent=k[1]; if(k[0]===newPickupKind) o.selected=true; ksel.appendChild(o); });
+      ksel.onchange=()=>{ newPickupKind=ksel.value; };
+      const addB=document.createElement('button'); addB.textContent='+ Place ahead'; addB.onclick=()=>addPickupSpot(newPickupKind);
+      krow.appendChild(ksel); krow.appendChild(addB); gHost.appendChild(krow); }
+    if(pickupSpots.length){
+      hint(gHost,'','3px 0 2px').textContent = pickupSpots.length+' placed:';
+      pickupSpots.forEach((sp,i)=>{ const row=document.createElement('div'); row.style.cssText='display:flex;align-items:center;gap:8px;font-size:12px;color:#cfeee2;margin:2px 0;';
+        const lab=document.createElement('span'); lab.style.flex='1'; lab.textContent=(i+1)+'. '+((POWERUP_KINDS[sp.kind]&&POWERUP_KINDS[sp.kind].label)||sp.kind)+'  ('+sp.x.toFixed(1)+', '+sp.z.toFixed(1)+')';
+        const del=document.createElement('button'); del.textContent='\u2715'; del.style.cssText='padding:1px 7px'; del.onclick=()=>removePickupSpot(i);
+        row.appendChild(lab); row.appendChild(del); gHost.appendChild(row); });
+    } else { hint(gHost,'','3px 0 0').textContent='None yet. Pick a kind, walk where you want it, then Place ahead. They respawn on a timer.'; }
     hint(gHost, '<b>Wave mode</b>', '12px 0 4px');
     const gmRow=document.createElement('div'); gmRow.className='row2';
     const gmBtn=(key,txt)=>{ const b=document.createElement('button'); b.textContent=txt; if(gameCfg.mode===key){ b.style.background='rgba(56,245,181,0.30)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); gameCfg.mode=key; renderEditorFields(); }; return b; };
@@ -12791,6 +12862,7 @@ function toggleEditor(){
     destroyPhysWorld();     // edit plain meshes; snap dynamic props back to their authored transform
     for(const o of dynamicProps){ if(o.userData.physHome) o.position.copy(o.userData.physHome); if(o.userData.physHomeQ) o.quaternion.copy(o.userData.physHomeQ); }
     if(typeof xaSnapToBase==='function') xaSnapToBase();
+    if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
     for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible = true; }
     if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(true);
     const mm=$('minimap'); if(mm) mm.style.display='none';        // declutter combat HUD while editing
@@ -12832,6 +12904,7 @@ function startGame(){
   WEAPONS.shotgun.mag=6; WEAPONS.shotgun.reserve=24;
   reloading=false; score=0; wave=1; credits=0; grenadeCount=0; runKills=0;
   if(typeof startObjective==='function') startObjective();   // reset survival timer for this run
+  if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false);
   if(typeof spawnPowerups==='function') spawnPowerups();   // lay out map powerups for this run
   if(typeof preloadVfx==='function') preloadVfx();   // warm the flipbook VFX textures (no-op if already loaded)
   if(pvpMode()) credits = 150;   // starting stipend so the economy is usable from the first life
@@ -12924,6 +12997,15 @@ function bindEndScreen(){
 }
 function gameWon(){
   if(!gameOn) return;
+  if(campaignActive && campaign.levels.length){
+    if(campaignIdx < campaign.levels.length-1){
+      const carry=_captureLoadout();
+      campaignIdx++; _campaignLoad(campaignIdx); _restoreLoadout(carry);
+      if(typeof flashToast==='function') flashToast('LEVEL '+(campaignIdx+1)+' / '+campaign.levels.length);
+      return;
+    }
+    campaignActive=false; _campaignComplete=true;
+  }
   stopMusic();
   if(typeof extractZone!=='undefined' && extractZone) extractZone.visible=false;
   if(typeof closeUpgradePicker==='function') closeUpgradePicker();
@@ -12934,7 +13016,7 @@ function gameWon(){
   const pr=$('prompt'); if(pr) pr.style.display='none';
   const ov=$('overlay'); ov.classList.remove('hidden');
   ov.innerHTML = `
-    <h1 style="color:#38f5b5;text-shadow:0 0 30px rgba(56,245,181,.5)">MISSION COMPLETE</h1>
+    <h1 style="color:#38f5b5;text-shadow:0 0 30px rgba(56,245,181,.5)">${_campaignComplete?'CAMPAIGN COMPLETE':'MISSION COMPLETE'}</h1>
     <div class="sub">${ gameCfg.objective==='survival' ? ('SURVIVED '+fmtClock(gameCfg.surviveSecs)) : gameCfg.objective==='extraction' ? 'EXTRACTED' : (gameCfg.winWaves+' WAVE'+(gameCfg.winWaves===1?'':'S')+' CLEARED') }</div>
     ${runSummaryHTML()}
     ${challengeResultHTML()}
