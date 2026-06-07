@@ -8936,7 +8936,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 184 · 2026-06-06';
+const BUILD_VERSION = 'build 185 · 2026-06-06';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9659,8 +9659,11 @@ function updatePhysics(dt){
     if(u.explosive && u.impactVel > 0 && !u._shattered && obj !== heldProp){
       const lv = b.linvel();
       const pvx=u._pvx||0, pvy=u._pvy||0, pvz=u._pvz||0;
-      const prevSp = Math.hypot(pvx,pvy,pvz), dv = Math.hypot(lv.x-pvx, lv.y-pvy, lv.z-pvz);
-      if(prevSp >= u.impactVel && dv >= u.impactVel*0.5){ (_impactList||(_impactList=[])).push({ o:obj, d:new THREE.Vector3(pvx,pvy,pvz) }); }
+      const prevSp = Math.hypot(pvx,pvy,pvz), curSp = Math.hypot(lv.x,lv.y,lv.z);
+      // Detonate on a hard DECELERATION (slam into ground/collider, or a bounce that kills its speed) — not on
+      // being accelerated. A trebuchet/launcher sweeping the prop UP to speed is acceleration, so it must not
+      // set it off; only a real impact, where the prop suddenly loses speed, counts.
+      if(prevSp >= u.impactVel && (prevSp - curSp) >= u.impactVel*0.5){ (_impactList||(_impactList=[])).push({ o:obj, d:new THREE.Vector3(pvx,pvy,pvz) }); }
       u._pvx=lv.x; u._pvy=lv.y; u._pvz=lv.z;
     }
   }
@@ -13256,6 +13259,7 @@ function startGame(){
   for(const rk of rockets) scene.remove(rk.mesh); rockets.length=0;
   // client: adopt the host's level (props + lights) so everyone shares the same map
   if(NET.pendingLevel){ loadLevelFromNet(NET.pendingLevel); NET.pendingLevel=null; }
+  if(typeof xaSnapToBase==='function') xaSnapToBase();   // restore animated props to their base FIRST, so a run that ended mid-swing doesn't bake the half-open pose in as the new home
   if(typeof xaCapture==='function') xaCapture();
   if(NET.pendingSounds){ NET.sounds=_sanitizeSounds(NET.pendingSounds); NET.pendingSounds=null; if(typeof preloadCustomSounds==='function') preloadCustomSounds(); }   // play the host's SFX this session
   if(NET.pendingMusic!=null){ NET.musicUrl=(typeof NET.pendingMusic==='string'?NET.pendingMusic:''); NET.pendingMusic=null; }   // and the host's music
