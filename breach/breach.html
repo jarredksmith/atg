@@ -208,11 +208,12 @@
   /* Touch relayout: readouts move to the top band, controls own the bottom band, so nothing overlaps in landscape */
   body.touch #stats { top: calc(8px + env(safe-area-inset-top)); left: calc(82px + env(safe-area-inset-left)); bottom:auto; min-width:0; }
   body.touch #stats .big { font-size:18px; }
-  body.touch #ammoPanel { top: calc(68px + env(safe-area-inset-top)); left: calc(82px + env(safe-area-inset-left)); right:auto; bottom:auto; text-align:left; min-width:0; }
+  body.touch #ammoPanel { top: calc(52px + env(safe-area-inset-top)); left: calc(82px + env(safe-area-inset-left)); right:auto; bottom:auto; text-align:left; min-width:0; }
   body.touch #ammoPanel .big { font-size:18px; }
-  body.touch #score { top: calc(12px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right)); }
-  body.touch #scoreVal { font-size:16px; }
-  body.touch #creditsVal { font-size:16px; }
+  body.touch #score { top: calc(12px + env(safe-area-inset-top)); right: calc(58px + env(safe-area-inset-right)); }
+  body.touch #pauseBtn { top: calc(10px + env(safe-area-inset-top)); right: calc(10px + env(safe-area-inset-right)); width:38px; height:38px; }
+  body.touch #scoreVal { font-size:15px; }
+  body.touch #creditsVal { font-size:15px; }
   body.touch #score .label { font-size:9px; }
   body.touch #minimap { width:66px; height:66px; top: calc(8px + env(safe-area-inset-top)); left: calc(8px + env(safe-area-inset-left)); }
   body.touch #prompt { pointer-events:auto; z-index:45; cursor:pointer; bottom:150px; }
@@ -222,14 +223,16 @@
   body.touch #wavePanel { top: calc(30px + env(safe-area-inset-top)); transform: translateX(-50%) scale(.82); transform-origin:top center; padding:2px 12px; min-width:170px; }
   body.touch #waveNum { font-size:16px; }
   body.touch #cpHud { top: calc(30px + env(safe-area-inset-top)); transform: translateX(-50%) scale(.82); transform-origin:top center; padding:5px 10px; }
-  body.touch #minimap { transform: scale(.8); transform-origin: top right; }
+  body.touch #minimap { background: rgba(7,13,18,0.88); border-color: rgba(56,245,181,0.6); box-shadow: 0 0 10px rgba(0,0,0,0.55), inset 0 0 14px rgba(56,245,181,0.08); }
+  body.touch #buffs { top: calc(100px + env(safe-area-inset-top)); left: calc(82px + env(safe-area-inset-left)); gap:4px; }
+  body.touch .buff { padding:3px 7px; font-size:10px; }
   body.touch #waveNum { font-size:13px; letter-spacing:2px; }
   body.touch #enemyCount { font-size:9px; margin-top:1px; }
   /* tidy mobile readouts: tight rounded panels (no angled clip), smaller numbers, no keyboard-only hints */
-  body.touch .panel { padding:5px 9px; clip-path:none; border-radius:9px; background:rgba(8,18,22,.7); }
-  body.touch #stats .big, body.touch #ammoPanel .big { font-size:18px; }
-  body.touch #stats { min-width:96px; }
-  body.touch #ammoPanel { min-width:96px; }
+  body.touch .panel { padding:3px 8px; clip-path:none; border-radius:8px; background:rgba(8,18,22,.7); }
+  body.touch #stats .big, body.touch #ammoPanel .big { font-size:15px; }
+  body.touch #stats { min-width:84px; }
+  body.touch #ammoPanel { min-width:84px; }
   body.touch #stats .label, body.touch #ammoPanel .label { font-size:9px; letter-spacing:1.2px; }
   body.touch #nadeKbd { display:none; }   /* "[G] THROW" is keyboard-only on mobile */
   body.touch #stats .bar { height:4px; margin-top:4px; }
@@ -318,7 +321,7 @@
   #scoreboard .sbRow.me { background:rgba(56,245,181,0.16); color:#eafff7; }
   #scoreboard .sbName { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #scoreboard .sbK { color:#ffd166; }
-  body.touch #scoreboard { top: calc(60px + env(safe-area-inset-top)); right: calc(8px + env(safe-area-inset-right)); left:auto; min-width:118px; font-size:11px; padding:4px 6px; }
+  body.touch #scoreboard { top: calc(86px + env(safe-area-inset-top)); right: calc(8px + env(safe-area-inset-right)); left:auto; min-width:118px; font-size:11px; padding:4px 6px; }
   #killFeed { position:fixed; bottom:104px; left:18px; z-index:41; display:flex; flex-direction:column; gap:3px; pointer-events:none; font:600 12px ui-monospace,monospace; }
   #killFeed .kfRow { background:rgba(5,10,12,0.62); border:1px solid rgba(56,245,181,0.18); border-radius:5px; padding:2px 7px; opacity:1; transition:opacity .8s; display:flex; align-items:center; gap:6px; white-space:nowrap; }
   #killFeed .kfRow.kfFade { opacity:0; }
@@ -346,6 +349,7 @@
   body.touch #bossBar { top:158px; width:62vw; }
   #pauseBtn {
     position:fixed; top:14px; right:14px; z-index:45; width:42px; height:42px;
+
     display:flex; align-items:center; justify-content:center; cursor:pointer;
     background:rgba(5,10,12,.66); color:#9fe6cf; border:1px solid rgba(56,245,181,.4);
     border-radius:9px; font:13px/1 'Chakra Petch',ui-monospace,monospace; letter-spacing:1px;
@@ -8770,7 +8774,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 165 · 2026-06-06';
+const BUILD_VERSION = 'build 168 · 2026-06-06';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8892,9 +8896,20 @@ addEventListener('contextmenu', e=>{ if(gameOn) e.preventDefault(); });
   stick.addEventListener('pointerup', stickEnd); stick.addEventListener('pointercancel', stickEnd);
   // look pad (drag anywhere on the right to aim)
   let lookId=null, lx=0, ly=0;
-  look.addEventListener('pointerdown', e=>{ isTouch=true; lookId=e.pointerId; lx=e.clientX; ly=e.clientY; try{look.setPointerCapture(e.pointerId);}catch(_){} e.preventDefault(); });
-  look.addEventListener('pointermove', e=>{ if(e.pointerId!==lookId) return; touchLookDX+=(e.clientX-lx); touchLookDY+=(e.clientY-ly); lx=e.clientX; ly=e.clientY; e.preventDefault(); });
-  const lookEnd=e=>{ if(e.pointerId!==lookId) return; lookId=null; };
+  look.addEventListener('pointerdown', e=>{ isTouch=true; lookId=e.pointerId; lx=e.clientX; ly=e.clientY; try{look.setPointerCapture(e.pointerId);}catch(_){}
+    // In the editor a press first tries to grab a gizmo axis handle; otherwise it's a look-drag (or, if it ends without moving, a tap-to-select).
+    if(editorOpen){ editorDragMoved=false; if(typeof tryGizmoGrab==='function' && tryGizmoGrab(e)){ editorDragMoved=true; } else { gizmoDrag=null; } }
+    e.preventDefault(); });
+  look.addEventListener('pointermove', e=>{ if(e.pointerId!==lookId) return; const dx=e.clientX-lx, dy=e.clientY-ly;
+    if(editorOpen){
+      if(gizmoDrag){ gizmoDragMove(e); editorDragMoved=true; }                 // drag the grabbed handle (move/rotate/scale)
+      else { touchLookDX+=dx; touchLookDY+=dy; if(Math.abs(dx)+Math.abs(dy)>3) editorDragMoved=true; }   // otherwise orbit the fly-cam
+      lx=e.clientX; ly=e.clientY; e.preventDefault(); return;
+    }
+    touchLookDX+=dx; touchLookDY+=dy; lx=e.clientX; ly=e.clientY; e.preventDefault(); });
+  const lookEnd=e=>{ if(e.pointerId!==lookId) return; lookId=null;
+    if(editorOpen){ if(!editorDragMoved){ renderer.domElement.dispatchEvent(new MouseEvent('click', { clientX:e.clientX, clientY:e.clientY, bubbles:true })); }   // a clean tap selects the prop/light/spawn under it
+      gizmoDrag=null; } };
   look.addEventListener('pointerup', lookEnd); look.addEventListener('pointercancel', lookEnd);
   // helpers for buttons
   const hold=(id,on,off)=>{ const b=document.getElementById(id); if(!b) return;
@@ -12622,7 +12637,7 @@ function updateGizmo(){
   const pos = movable ? getSelPos() : null;
   if(!pos){ gr.translate.visible=gr.scale.visible=gr.rotate.visible=false; gizmo.visible = false; return; }
   gizmo.position.copy(pos);
-  if(activeCam()===camera){ const d = camera.position.distanceTo(pos); gizmo.scale.setScalar(Math.max(0.4, d*0.06)); }
+  if(activeCam()===camera){ const d = camera.position.distanceTo(pos); gizmo.scale.setScalar(Math.max(0.4, d*0.06) * (isTouch?1.5:1)); }
   else { gizmo.scale.setScalar(Math.max(0.6, topZoom*0.03)); }
   // lights + spawns have no scale; force translate/rotate only for them
   let mode = gizmoMode;
