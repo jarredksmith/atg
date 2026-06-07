@@ -5371,9 +5371,9 @@ scene.fog = SCENE_FOG;
 
 const camera = new THREE.PerspectiveCamera(78, innerWidth/innerHeight, 0.1, 400);
 const IS_COARSE = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches);   // touch/mobile -> trade visual polish for frame rate
-const renderer = new THREE.WebGLRenderer({ antialias: !IS_COARSE });   // MSAA is expensive on mobile GPUs
+const renderer = new THREE.WebGLRenderer({ antialias: true });   // smooth edges everywhere (modern mobile GPUs handle MSAA fine)
 renderer.setSize(innerWidth, innerHeight, false);
-renderer.setPixelRatio(Math.min(devicePixelRatio, IS_COARSE ? 1.0 : 1.5));   // cap supersampling on hi-DPI screens — big FPS win (1x on mobile)
+renderer.setPixelRatio(Math.min(devicePixelRatio, IS_COARSE ? 2.0 : 1.5));   // render closer to native res on hi-DPI phones (1x looked low-res/jagged); still capped for FPS
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = IS_COARSE ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
@@ -8795,7 +8795,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 173 · 2026-06-06';
+const BUILD_VERSION = 'build 174 · 2026-06-06';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
