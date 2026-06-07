@@ -215,7 +215,14 @@
   body.touch #creditsVal { font-size:16px; }
   body.touch #score .label { font-size:9px; }
   body.touch #minimap { width:66px; height:66px; top: calc(8px + env(safe-area-inset-top)); left: calc(8px + env(safe-area-inset-left)); }
-  body.touch #wavePanel { top: calc(90px + env(safe-area-inset-top)); padding:3px 12px; }
+  body.touch #prompt { pointer-events:auto; z-index:45; cursor:pointer; bottom:150px; }
+  body.touch #prompt b { background:rgba(56,245,181,.32); }
+  body.editing #tFire, body.editing #tAim, body.editing #tJump, body.editing #tReload, body.editing #tNade, body.editing #tWeapon, body.editing #tUse { display:none !important; }
+  body.editing #tLook { left:0; right:330px; }   /* keep look-drag off the right-side editor panel */
+  body.touch #wavePanel { top: calc(30px + env(safe-area-inset-top)); transform: translateX(-50%) scale(.82); transform-origin:top center; padding:2px 12px; min-width:170px; }
+  body.touch #waveNum { font-size:16px; }
+  body.touch #cpHud { top: calc(30px + env(safe-area-inset-top)); transform: translateX(-50%) scale(.82); transform-origin:top center; padding:5px 10px; }
+  body.touch #minimap { transform: scale(.8); transform-origin: top right; }
   body.touch #waveNum { font-size:13px; letter-spacing:2px; }
   body.touch #enemyCount { font-size:9px; margin-top:1px; }
   /* tidy mobile readouts: tight rounded panels (no angled clip), smaller numbers, no keyboard-only hints */
@@ -8763,7 +8770,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 164 · 2026-06-05';
+const BUILD_VERSION = 'build 165 · 2026-06-06';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -8895,6 +8902,7 @@ addEventListener('contextmenu', e=>{ if(gameOn) e.preventDefault(); });
     const up=()=>{ off(); b.classList.remove('on'); };
     b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up); };
   const tap=(id,fn)=>{ const b=document.getElementById(id); if(!b) return; b.addEventListener('pointerdown', e=>{ fn(); e.preventDefault(); }); };
+  { const pr=document.getElementById('prompt'); if(pr) pr.addEventListener('pointerdown', e=>{ if(isTouch){ if(typeof interact==='function') interact(); e.preventDefault(); } }); }   // tap the "E" prompt to use it
   // Fire button doubles as a look surface: hold to fire AND drag the same thumb to keep aiming.
   (function(){
     const fire=document.getElementById('tFire'); if(!fire) return;
@@ -10201,13 +10209,13 @@ function loop(){
   if((shopOpen || choosingUpgrade || (paused && NET.mode==='off')) && !(duelDead && pvpMode())) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }  // freeze world while shopping / picking an upgrade / paused (solo) — but never while waiting to respawn
 
   pollGamepad(dt);   // controller input feeds the same flags as keyboard/mouse
-  if(isTouch && !shopOpen && !editorOpen && !choosingUpgrade){   // touch look: applied here since there's no pointer lock on mobile
+  if(isTouch && !shopOpen && !choosingUpgrade){   // touch look (also drives the editor fly camera): applied here since there's no pointer lock on mobile
     const tsens = (ads||touchAds) ? TOUCH_ADS_SENS : TOUCH_LOOK_SENS;
     player.yaw   -= touchLookDX * tsens;
     player.pitch  = Math.max(-1.5, Math.min(1.5, player.pitch - touchLookDY * tsens));
   }
   touchLookDX = 0; touchLookDY = 0;
-  if(isTouch){ const tu=document.getElementById('touchUI'); if(tu){ const d=(gameOn && !shopOpen && !editorOpen && !choosingUpgrade)?'block':'none'; if(tu.style.display!==d) tu.style.display=d; } }
+  if(isTouch){ const tu=document.getElementById('touchUI'); if(tu){ const d=(gameOn && !shopOpen && !choosingUpgrade)?'block':'none'; if(tu.style.display!==d) tu.style.display=d; } document.body.classList.toggle('editing', !!editorOpen); }
   updateColliderViz(dt);   // debug overlay of collision boxes (toggle in editor)
 
   // advance any model animations (terminal/gun/prop idle loops, etc.)
@@ -10349,6 +10357,7 @@ function loop(){
     const ctrlHeld = keys['ControlLeft'] || keys['ControlRight'];
     const ctrlCombo = ctrlHeld && (keys['KeyZ'] || keys['KeyY']);   // undo / redo — don't sink the camera while undoing
     if(keys['KeyQ'] || (ctrlHeld && !ctrlCombo)) flyPos.y -= spd;
+    if(isTouch){ if(touchMoveZ) flyPos.addScaledVector(fwd, -touchMoveZ*spd*1.5); if(touchMoveX) flyPos.addScaledVector(right, touchMoveX*spd*1.5); }   // mobile: joystick flies (look up + forward to ascend)
     camera.position.copy(flyPos);
     camera.rotation.order = 'YXZ';
     camera.rotation.y = player.yaw;
@@ -10404,7 +10413,7 @@ function loop(){
   recoil *= 0.85;
   muzzle.intensity *= 0.6; flashMat.opacity *= 0.5;
 
-  if((firing || padFiring || touchFiring) && !heldProp) shoot();
+  if((firing || padFiring || touchFiring) && !heldProp && !editorOpen) shoot();
 
   // tracers
   for(let i=tracers.length-1;i>=0;i--){
@@ -12916,6 +12925,7 @@ function toggleEditor(){
     for(const o of dynamicProps){ if(o.userData.physHome) o.position.copy(o.userData.physHome); if(o.userData.physHomeQ) o.quaternion.copy(o.userData.physHomeQ); }
     if(typeof xaSnapToBase==='function') xaSnapToBase();
     if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
+    if(isTouch){ editorFreeFly=true; flyInit=false; }   // mobile: fly-around editing (joystick moves, drag the left side to look)
     for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible = true; }
     if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(true);
     const mm=$('minimap'); if(mm) mm.style.display='none';        // declutter combat HUD while editing
