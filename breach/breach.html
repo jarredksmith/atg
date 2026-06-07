@@ -8412,9 +8412,11 @@ function explodeAt(pos, R, dmg, byId){
   if(typeof SFX!=='undefined' && SFX.explode) SFX.explode();
   addShake(Math.max(0, 1 - player.pos.distanceTo(pos)/22) * 0.9);
   const bl=new THREE.PointLight(0xffaa44, 30, Math.max(12, R*2.5)); bl.position.copy(pos); scene.add(bl);
-  const usedSheet=playFlipbook('explosion', pos, Math.max(0.4, R*0.18));
+  const eScale=Math.max(0.4, R*0.18);
+  const _vp = pos.clone(); _vp.y += (VFX.explosion.size||6) * eScale * 0.35;   // lift so the billboard sits ON the surface, not half-buried
+  const usedSheet=playFlipbook('explosion', _vp, eScale);
   let blast=null;
-  if(usedSheet){ playFlipbook('smoke', pos, Math.max(0.4, R*0.16)); }
+  if(usedSheet){ playFlipbook('smoke', _vp, Math.max(0.4, R*0.16)); }
   else { blast=new THREE.Mesh(new THREE.SphereGeometry(1,16,16), new THREE.MeshBasicMaterial({color:0xffaa44, transparent:true, opacity:0.8})); blast.position.copy(pos); scene.add(blast); }
   explosions.push({ mesh:blast, light:bl, life:0.35, maxR:R });
   for(let i=0;i<(usedSheet?6:14);i++) spark(pos, 0xffaa44);
@@ -8934,7 +8936,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 182 · 2026-06-06';
+const BUILD_VERSION = 'build 183 · 2026-06-06';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9288,7 +9290,7 @@ function applyPropDynState(obj, p){
     if(p.fc!=null) obj.userData.fragCount = p.fc;
     if(p.fz!=null) obj.userData.fragSize = p.fz;
     obj.userData.debrisShape = (p.dsh==='cubes') ? 'cubes' : 'shards';
-    if(p.exp){ obj.userData.explosive=true; if(p.br!=null) obj.userData.blastRadius=p.br; if(p.bd!=null) obj.userData.blastDmg=p.bd; }
+    if(p.exp){ obj.userData.explosive=true; if(p.br!=null) obj.userData.blastRadius=p.br; if(p.bd!=null) obj.userData.blastDmg=p.bd; if(p.iv!=null) obj.userData.impactVel=p.iv; }
   }
 }
 function removeDynamicProp(obj){
@@ -9444,7 +9446,7 @@ function deployProp(src, exp){
   spawnProp(src, [px, 1.1, pz, 0,0,0, 0.9], (obj)=>{
     obj.userData.runtime = true;   // radial-deployed: session-only (never saved, hidden from the editor, cleared on redeploy)
     setPropDynamic(obj, true);
-    if(exp){ obj.userData.explosive=true; obj.userData.blastRadius=7; obj.userData.blastDmg=70; }
+    if(exp){ obj.userData.explosive=true; obj.userData.blastRadius=7; obj.userData.blastDmg=70; obj.userData.impactVel=10; }
   }, undefined, 'loop', null);
   if(typeof SFX!=='undefined' && SFX.swap) SFX.swap();
 }
@@ -9644,12 +9646,25 @@ function updatePhysics(dt){
     kb.setNextKinematicRotation({ x:q.x, y:q.y, z:q.z, w:q.w }); }
   let n = 0;
   while(physAccum >= PHYS_DT && n < PHYS_MAX_SUBSTEPS){ physWorld.step(); physAccum -= PHYS_DT; n++; }
+  let _impactList=null;
   for(const obj of dynamicProps){
     const b = obj.userData.phys && obj.userData.phys.body; if(!b) continue;
     const t = b.translation(), r = b.rotation();
     obj.position.set(t.x, t.y, t.z);
     obj.quaternion.set(r.x, r.y, r.z, r.w);
+    // impact fuse: an explosive that was moving fast (>= impactVel) and suddenly changes velocity (slams into
+    // something) detonates. The speed threshold keeps a gentle drop or roll from setting it off; a prop you're
+    // holding is exempt so it can't go off in your hands.
+    const u = obj.userData;
+    if(u.explosive && u.impactVel > 0 && !u._shattered && obj !== heldProp){
+      const lv = b.linvel();
+      const pvx=u._pvx||0, pvy=u._pvy||0, pvz=u._pvz||0;
+      const prevSp = Math.hypot(pvx,pvy,pvz), dv = Math.hypot(lv.x-pvx, lv.y-pvy, lv.z-pvz);
+      if(prevSp >= u.impactVel && dv >= u.impactVel*0.5){ (_impactList||(_impactList=[])).push({ o:obj, d:new THREE.Vector3(pvx,pvy,pvz) }); }
+      u._pvx=lv.x; u._pvy=lv.y; u._pvz=lv.z;
+    }
   }
+  if(_impactList){ for(const it of _impactList) shatterProp(it.o, it.o.position.clone(), it.d, 9, null); }
 }
 // A recently thrown prop deals damage to the first thing it hits, scaled by impact speed * mass. Host/solo
 // author it; kills credit the thrower. One hit per throw; it disarms after a moment or once it slows down.
@@ -11274,7 +11289,7 @@ function propEntry(o){
       if(o.userData.fragCount!=null) e.fc=o.userData.fragCount;
       if(o.userData.fragSize!=null && Math.abs(o.userData.fragSize-DEBRIS_SIZE_FRAC)>1e-6) e.fz=o.userData.fragSize;
       if(o.userData.debrisShape==='cubes') e.dsh='cubes';   // shards is the default; only store cubes
-      if(o.userData.explosive){ e.exp=1; if(o.userData.blastRadius!=null) e.br=o.userData.blastRadius; if(o.userData.blastDmg!=null) e.bd=o.userData.blastDmg; }
+      if(o.userData.explosive){ e.exp=1; if(o.userData.blastRadius!=null) e.br=o.userData.blastRadius; if(o.userData.blastDmg!=null) e.bd=o.userData.blastDmg; if(o.userData.impactVel!=null) e.iv=o.userData.impactVel; }
     }
   }
   const m=propMaterialDesc(o); if(m) e.mat=m;
@@ -12345,8 +12360,8 @@ function renderEditorFields(){
             // ---- Explosive: detonate (blast fx + grenade-style AoE) when destroyed (propane / gas cans) ----
             const ex=document.createElement('label'); ex.style.cssText='display:flex;align-items:center;gap:7px;color:#ffb38a;font-size:12px;margin-top:8px;cursor:pointer;';
             const excb=document.createElement('input'); excb.type='checkbox'; excb.checked=!!sel.userData.explosive; excb.style.accentColor='#ff6b3a';
-            excb.onchange=()=>{ pushUndoSnapshot(); sel.userData.explosive=excb.checked; if(excb.checked){ if(sel.userData.blastRadius==null) sel.userData.blastRadius=7; if(sel.userData.blastDmg==null) sel.userData.blastDmg=70; } renderEditorFields(); };
-            const exsp=document.createElement('span'); exsp.innerHTML='<b>\ud83d\udca5 Explosive</b> \u2014 detonates when destroyed';
+            excb.onchange=()=>{ pushUndoSnapshot(); sel.userData.explosive=excb.checked; if(excb.checked){ if(sel.userData.blastRadius==null) sel.userData.blastRadius=7; if(sel.userData.blastDmg==null) sel.userData.blastDmg=70; if(sel.userData.impactVel==null) sel.userData.impactVel=10; } renderEditorFields(); };
+            const exsp=document.createElement('span'); exsp.innerHTML='<b>\ud83d\udca5 Explosive</b> \u2014 detonates when destroyed or on hard impact';
             ex.appendChild(excb); ex.appendChild(exsp); animHost.appendChild(ex);
             if(sel.userData.explosive){
               const mkSlider=(label,min,max,step,val,fmt,set)=>{
@@ -12359,7 +12374,8 @@ function renderEditorFields(){
               };
               mkSlider('Radius',2,20,0.5,(sel.userData.blastRadius!=null?sel.userData.blastRadius:7),(m)=>m+'m',(m)=>sel.userData.blastRadius=m);
               mkSlider('Damage',10,200,5,(sel.userData.blastDmg!=null?sel.userData.blastDmg:70),(m)=>String(Math.round(m)),(m)=>sel.userData.blastDmg=m);
-              const exn=document.createElement('div'); exn.className='hint'; exn.style.marginTop='3px'; exn.textContent='Shoot it to blow it: flipbook blast + falloff damage to everyone in range (you too). Chain-reacts nearby explosives.';
+              mkSlider('Impact',0,30,1,(sel.userData.impactVel!=null?sel.userData.impactVel:10),(m)=>m>0?(m+' m/s'):'off',(m)=>sel.userData.impactVel=m);
+              const exn=document.createElement('div'); exn.className='hint'; exn.style.marginTop='3px'; exn.textContent='Shoot it, or slam it into something above the Impact speed, to blow it (Impact 0 = shoot-only): flipbook blast + falloff damage to everyone in range (you too). Chain-reacts nearby explosives.';
               animHost.appendChild(exn);
             }
             const hlab=document.createElement('label'); hlab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin-top:6px;';
