@@ -8936,7 +8936,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 187 · 2026-06-07';
+const BUILD_VERSION = 'build 188 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10296,7 +10296,8 @@ function surfaceTopAt(x, z){
   const hits = _downRay.intersectObjects(colliders, true);
   for(const h of hits){ if(h.point.y > top) top = h.point.y; }
   if(dynamicProps.length){
-    const dh = _downRay.intersectObjects(dynamicProps, true);
+    const list = heldProp ? dynamicProps.filter(o=>o!==heldProp) : dynamicProps;   // never let the player stand on / collide with the object they're carrying
+    const dh = _downRay.intersectObjects(list, true);
     for(const h of dh){ if(h.point.y > top) top = h.point.y; }
   }
   // Safety net: ONLY when the downward ray found nothing at all (slipped through an open/awkward model
