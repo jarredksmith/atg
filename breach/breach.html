@@ -5877,6 +5877,66 @@ function applyPropTexRepeat(obj, u, v){
   eachPrimMesh(obj, o=>{ if(o.material.map){ o.material.map.repeat.set(u, v); o.material.map.needsUpdate = true; } });
 }
 
+// ---------- Texture search (Poly Haven, CC0) ----------
+// Poly Haven is free/CC0 and CORS-enabled, so its API + image CDN load directly (no proxy needed). We fetch
+// the full texture catalog once, filter it client-side (the API has no free-text search), and resolve the
+// chosen asset's color/diffuse map to a direct .jpg URL that drops into the existing applyPropTexture path.
+let _texCatalog = null;                  // cached [{id,name,hay}] of every Poly Haven texture
+let texLastQuery = '', texLastResults = [];
+function _texFetchCatalog(cb, errcb){
+  if(_texCatalog){ cb(_texCatalog); return; }
+  fetch('https://api.polyhaven.com/assets?t=textures')
+    .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(d=>{ const list=[]; for(const id in d){ const a=d[id]||{}; const tags=(a.tags||[]).join(' '), cats=(a.categories||[]).join(' ');
+        list.push({ id, name:a.name||id, hay:(id+' '+(a.name||'')+' '+tags+' '+cats).toLowerCase() }); }
+      _texCatalog=list; cb(list); })
+    .catch(errcb);
+}
+function texSearch(query, cb, errcb){
+  _texFetchCatalog(list=>{ const q=(query||'').trim().toLowerCase();
+    const hits = q ? list.filter(a=>a.hay.indexOf(q)>=0) : list.slice(); cb(hits.slice(0,24)); }, errcb);
+}
+function _texPickDiffuse(files){
+  if(!files) return null; const keys=Object.keys(files);
+  const key = keys.find(k=>/^(diffuse|diff|color|col|albedo)$/i.test(k)) || keys.find(k=>/diff|color|albedo/i.test(k)) || keys[0];
+  const m=files[key]; if(!m) return null;
+  const res = ['1k','2k','4k'].find(r=>m[r]) || Object.keys(m)[0]; const rr=m[res]; if(!rr) return null;
+  const fmt = rr.jpg ? 'jpg' : (rr.png ? 'png' : Object.keys(rr)[0]); const f=rr[fmt];
+  return (f && f.url) ? f.url : null;
+}
+function texResolve(id, cb, errcb){    // -> direct color-map .jpg URL for a Poly Haven texture id
+  fetch('https://api.polyhaven.com/files/'+encodeURIComponent(id))
+    .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(files=>{ const url=_texPickDiffuse(files); if(!url) throw new Error('no usable color map'); cb(url); })
+    .catch(errcb);
+}
+function renderTexSearch(host){
+  host.innerHTML='';
+  const head=document.createElement('div'); head.className='hint'; head.style.margin='6px 0 4px';
+  head.innerHTML='<b>Search textures</b> \u2014 Poly Haven (CC0), tap one to apply it to this primitive.';
+  host.appendChild(head);
+  const sRow=document.createElement('div'); sRow.className='row2'; sRow.style.marginBottom='4px';
+  const q=document.createElement('input'); q.type='text'; q.placeholder='e.g. brick, wood, metal, grass'; q.value=texLastQuery;
+  q.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+  const sBtn=document.createElement('button'); sBtn.textContent='Search'; sRow.appendChild(q); sRow.appendChild(sBtn); host.appendChild(sRow);
+  const status=document.createElement('div'); status.className='hint'; status.style.margin='2px 0'; host.appendChild(status);
+  const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:repeat(3,1fr);gap:5px;'; host.appendChild(grid);
+  const renderGrid=(list)=>{ grid.innerHTML=''; if(!list||!list.length){ status.textContent=texLastQuery?'No matches.':''; return; } status.textContent='';
+    list.forEach(a=>{ const cell=document.createElement('button'); cell.title=a.name; cell.style.cssText='padding:0;border:1px solid #2a3a42;border-radius:5px;overflow:hidden;cursor:pointer;background:#0c1418;aspect-ratio:1;';
+      const img=document.createElement('img'); img.src='https://cdn.polyhaven.com/asset_img/thumbs/'+a.id+'.png?width=128&height=128&format=png'; img.loading='lazy'; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block;';
+      cell.appendChild(img);
+      cell.onclick=()=>{ const sel=editorTargets.props.obj(); if(!sel || !isShapePrimitive(sel.userData.src)){ status.textContent='Select a primitive first.'; return; }
+        status.textContent='Loading '+a.name+'\u2026';
+        texResolve(a.id, (url)=>{ pushUndoSnapshot(); applyPropTexture(sel, url); status.textContent=a.name+' applied.'; const ti=document.getElementById('edTexInput'); if(ti) ti.value=url; },
+          (e)=>{ status.textContent='Could not load that texture: '+((e&&e.message)||e); }); };
+      grid.appendChild(cell); }); };
+  if(texLastResults.length) renderGrid(texLastResults);
+  const doSearch=()=>{ texLastQuery=q.value; status.textContent='Searching\u2026';
+    texSearch(q.value, (list)=>{ texLastResults=list; renderGrid(list); },
+      (e)=>{ status.textContent='Search failed (Poly Haven unreachable): '+((e&&e.message)||e); }); };
+  sBtn.onclick=doSearch; q.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); doSearch(); } });
+}
+
 // --- emissive glow + real point light (the "light emitter") ---
 function applyPropEmissive(obj, hex, intensity){
   if(!obj || !isShapePrimitive(obj.userData.src)) return;
@@ -8795,7 +8855,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 174 · 2026-06-06';
+const BUILD_VERSION = 'build 175 · 2026-06-06';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12384,6 +12444,7 @@ function renderEditorFields(){
       ru.oninput=setRep; rv.oninput=setRep; ru.addEventListener('focus',()=>pushUndoSnapshot()); rv.addEventListener('focus',()=>pushUndoSnapshot());
       const x=document.createElement('span'); x.className='hint'; x.textContent='×';
       rrow.appendChild(rlbl); rrow.appendChild(ru); rrow.appendChild(x); rrow.appendChild(rv); matHost.appendChild(rrow);
+      const tsHost=document.createElement('div'); tsHost.style.marginTop='8px'; matHost.appendChild(tsHost); renderTexSearch(tsHost);
 
       // emissive / light emitter
       const eHead=document.createElement('div'); eHead.className='hint'; eHead.style.margin='8px 0 3px'; eHead.innerHTML='<b>Emits light</b> — glow + casts a point light (use sparingly)';
