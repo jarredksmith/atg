@@ -6595,7 +6595,8 @@ addEventListener('keydown', e=>{
   if(editorOpen) return;   // ignore gameplay keys while editing
   if(e.code==='KeyR') reload();
   if(e.code==='KeyE') interact();
-  if(e.code==='KeyG') throwGrenade();
+  if(e.code==='KeyG') grabAction();   // grab / drop a prop (grenade moved to F)
+  if(e.code==='KeyF') throwGrenade();
   // weapon switching by owned slot
   if(e.code==='Digit1' && owned[0]) switchWeapon(owned[0]);
   if(e.code==='Digit2' && owned[1]) switchWeapon(owned[1]);
@@ -8754,6 +8755,9 @@ function interact(){
     openShop(nearTarget.chest);
   }
 }
+// Dedicated grab / drop, bound to G and middle-mouse (scroll-wheel push). E still grabs+uses as before
+// (and is what the touch Use button routes through), so this just adds the new bindings.
+function grabAction(){ if(heldProp) releaseHeld(); else tryGrabProp(); }
 
 function openShop(chest){
   if(duelDead) return;   // no shopping while waiting to respawn
@@ -8930,7 +8934,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 181 · 2026-06-06';
+const BUILD_VERSION = 'build 182 · 2026-06-06';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9030,6 +9034,7 @@ addEventListener('mousedown', e=>{
   if(radialOpen){ if(e.button===0) closeRadial(true); return; }
   if(shopOpen || editorOpen || paused) return;
   if(e.button===0){ if(heldProp){ throwHeld(); return; } firing=true; }
+  else if(e.button===1){ e.preventDefault(); grabAction(); }   // middle-click (scroll-wheel push): grab / drop
   else if(e.button===2) ads = true;   // right-click: aim down sights
 });
 addEventListener('mouseup', e=>{
@@ -9369,8 +9374,8 @@ function throwHeld(){
 function updateGrabHint(){
   const el=document.getElementById('grabHint'); if(!el) return;
   let txt='';
-  if(heldProp) txt='[E] Drop \u00b7 Click Throw \u00b7 Scroll Distance';
-  else if(_grabAvail) txt='[E] Grab';
+  if(heldProp) txt='[G / MMB] Drop \u00b7 Click Throw \u00b7 Scroll Distance';
+  else if(_grabAvail) txt='[G / MMB] Grab';
   if(txt){ if(el.textContent!==txt) el.textContent=txt; el.style.display='block'; } else el.style.display='none';
 }
 function tickGrabHint(dt){
