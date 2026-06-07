@@ -8774,7 +8774,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 170 · 2026-06-06';
+const BUILD_VERSION = 'build 171 · 2026-06-06';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9265,6 +9265,7 @@ function deployProp(src, exp){
   const fwd=new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw));
   const px=player.pos.x+fwd.x*3.5, pz=player.pos.z+fwd.z*3.5;
   spawnProp(src, [px, 1.1, pz, 0,0,0, 0.9], (obj)=>{
+    obj.userData.runtime = true;   // radial-deployed: session-only (never saved, hidden from the editor, cleared on redeploy)
     setPropDynamic(obj, true);
     if(exp){ obj.userData.explosive=true; obj.userData.blastRadius=7; obj.userData.blastDmg=70; }
   }, undefined, 'loop', null);
@@ -9426,7 +9427,17 @@ function shatterProp(obj, point, dir, power, byId){
     try{ const fx=obj.userData._breakFx||{}; netSendProp({ t:'break', nid:obj.userData.nid, c:colorHex, ctr:[_shCtr.x,_shCtr.y,_shCtr.z], sz:[_shSize.x,_shSize.y,_shSize.z], n:count, st:style, sf:fx.sf, sh:fx.sh, exp:obj.userData.explosive?1:0, br:obj.userData.blastRadius||7 }); }catch(e){}
     try{ netSendProp({ t:'pDel', nid:obj.userData.nid }); }catch(e){}
   }
-  if(typeof removeProp==='function'){ const idx = propModels.indexOf(obj); if(idx>=0){ removeProp(idx); return; } }
+  const idx = propModels.indexOf(obj);
+  if(idx>=0 && !obj.userData.runtime){
+    // authored prop: keep it in the level (hidden) so it respawns at its home on the next deploy/reset
+    obj.userData._destroyHome = { p:(obj.userData.physHome||obj.position).clone(), q:(obj.userData.physHomeQ||obj.quaternion).clone() };
+    obj.userData._wasDyn = !!obj.userData.phys;
+    if(obj.userData.phys && typeof removeDynamicProp==='function') removeDynamicProp(obj);
+    else { const ci=colliders.indexOf(obj); if(ci>=0) colliders.splice(ci,1); }
+    obj.userData._destroyed = true; obj.visible=false; if(obj.parent) scene.remove(obj);
+    return;
+  }
+  if(typeof removeProp==='function'){ if(idx>=0){ removeProp(idx); return; } }   // runtime (radial) prop: gone for good
   // fallback removal
   if(obj.userData.phys) removeDynamicProp(obj);
   scene.remove(obj);
@@ -9486,8 +9497,25 @@ function clearFragments(){
   for(const f of fragments){ scene.remove(f.mesh); if(f.mesh.material) f.mesh.material.dispose(); if(f.body && physWorld){ try{ physWorld.removeRigidBody(f.body); }catch(e){} } }
   fragments.length = 0;
 }
+function clearRuntimeProps(){   // remove radial-deployed (session-only) props from the world + level list
+  for(let i=propModels.length-1;i>=0;i--){ const o=propModels[i]; if(o && o.userData.runtime && typeof removeProp==='function') removeProp(i); }
+}
+function restoreDestroyedProps(){   // bring back authored props destroyed during the last run, at their home + full HP
+  for(const o of propModels){
+    if(!o || !o.userData._destroyed) continue;
+    const home = o.userData._destroyHome;
+    o.userData._destroyed=false; o.userData._shattered=false;
+    if(home){ o.position.copy(home.p); o.quaternion.copy(home.q); }
+    o.visible=true; if(!o.parent) scene.add(o);
+    if(o.userData._wasDyn){ o.userData._wasDyn=false; setPropDynamic(o, true); }   // re-register dynamic (recaptures physHome from the restored position)
+    else { refreshPropCollider(o); if(colliders.indexOf(o)<0) colliders.push(o); }
+    if(o.userData.maxHp) o.userData.hp = o.userData.maxHp;
+  }
+}
 function resetDynamicProps(){
   clearFragments();
+  clearRuntimeProps();        // radial props are session-only — clear them on every (re)deploy
+  restoreDestroyedProps();    // respawn any authored props destroyed last run
   for(const obj of dynamicProps){
     if(obj.userData.physHome)  obj.position.copy(obj.userData.physHome);
     if(obj.userData.physHomeQ) obj.quaternion.copy(obj.userData.physHomeQ); else obj.quaternion.identity();
@@ -11086,7 +11114,7 @@ function serializeLevel(){
     chest:   { url: chestModelUrl, scale: chestModelScale },
     coin:    { url: coinCfg.url, scale: coinCfg.scale, on: coinCfg.on !== false },
     enemies: ENEMY_TYPE_KEYS.reduce((a,k)=>{ const m=enemyModelCfg(k); a[k]={ url:m.url, scale:m.scale, face:m.face, cr:m.cr, ch:m.ch, yoff:m.yoff, xoff:m.xoff, zoff:m.zoff, clip:m.clip, clips:Object.assign({}, m.clips) }; return a; }, {}),
-    props:   propModels.filter(Boolean).map(propEntry),
+    props:   propModels.filter(o=>o && !o.userData.runtime).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
     pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind })),
@@ -12938,6 +12966,8 @@ function toggleEditor(){
     if(typeof syncSelToIdx==='function') syncSelToIdx();   // start each editor session with a clean (single) selection
     destroyPhysWorld();     // edit plain meshes; snap dynamic props back to their authored transform
     for(const o of dynamicProps){ if(o.userData.physHome) o.position.copy(o.userData.physHome); if(o.userData.physHomeQ) o.quaternion.copy(o.userData.physHomeQ); }
+    if(typeof clearRuntimeProps==='function') clearRuntimeProps();        // radial props don't belong in the editor or the saved level
+    if(typeof restoreDestroyedProps==='function') restoreDestroyedProps();   // show authored props that were destroyed in play, so they can be edited again
     if(typeof xaSnapToBase==='function') xaSnapToBase();
     if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
     if(isTouch){ editorFreeFly=true; flyInit=false; }   // mobile: fly-around editing (joystick moves, drag the left side to look)
