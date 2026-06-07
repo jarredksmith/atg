@@ -5856,15 +5856,17 @@ function loadTextureCached(url){
 // (memory-friendly); two props using the same image at DIFFERENT tiling each get their own, so the tiling
 // you set on one prop never bleeds onto another.
 const _texInst = {};
-function texInstance(url, u, v, srgb){
+function texInstance(url, u, v, srgb, rot){
   srgb = (srgb !== false);   // color maps are sRGB; normal/roughness maps must stay linear
-  const key = url + '|' + u + '|' + v + '|' + (srgb?'s':'l');
+  rot = +rot || 0;           // radians, rotated about the texture center (planks/bricks running a new way)
+  const key = url + '|' + u + '|' + v + '|' + (srgb?'s':'l') + '|' + rot;
   if(_texInst[key]) return _texInst[key];
   const loader = new THREE.TextureLoader(); loader.crossOrigin = 'anonymous';
   const t = loader.load(url, undefined, undefined, (err)=>{ console.warn('Texture load failed for', url, '-', err && err.message); });
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   if(srgb){ if('colorSpace' in t) t.colorSpace = THREE.SRGBColorSpace; else if('encoding' in t) t.encoding = 3001; }
   t.repeat.set(u||1, v||1);
+  if(rot){ t.center.set(0.5, 0.5); t.rotation = rot; }
   _texInst[key] = t; return t;
 }
 function eachPrimMesh(obj, fn){ obj.traverse(o=>{ if(o.isMesh && o.material) fn(o); }); }
@@ -5882,11 +5884,12 @@ function applyPropTexture(obj, url){
   obj.userData.tex = url || '';
   if(!url){ obj.userData.texN = ''; obj.userData.texR = ''; }   // clearing color clears the PBR maps too
   const rep = obj.userData.texRepeat || [1,1];
+  const rot = (+obj.userData.texRot || 0) * Math.PI/180;
   eachPrimMesh(obj, o=>{
     if(url){
-      o.material.map          = texInstance(url, rep[0], rep[1]);   // per-prop instance keeps each prop's own tiling
-      o.material.normalMap    = obj.userData.texN ? texInstance(obj.userData.texN, rep[0], rep[1], false) : null;   // depth
-      o.material.roughnessMap = obj.userData.texR ? texInstance(obj.userData.texR, rep[0], rep[1], false) : null;
+      o.material.map          = texInstance(url, rep[0], rep[1], true, rot);   // per-prop instance keeps each prop's own tiling
+      o.material.normalMap    = obj.userData.texN ? texInstance(obj.userData.texN, rep[0], rep[1], false, rot) : null;   // depth
+      o.material.roughnessMap = obj.userData.texR ? texInstance(obj.userData.texR, rep[0], rep[1], false, rot) : null;
       o.material.color.setHex(0xffffff);          // let the image show its true colors
     } else {
       o.material.map = null; o.material.normalMap = null; o.material.roughnessMap = null;
@@ -5901,7 +5904,11 @@ function applyPropTexture(obj, url){
 function applyPropTexRepeat(obj, u, v){
   if(!obj) return;
   obj.userData.texRepeat = [u, v];
-  eachPrimMesh(obj, o=>{ if(o.material.map){ o.material.map.repeat.set(u, v); o.material.map.needsUpdate = true; } });
+  eachPrimMesh(obj, o=>{ for(const k of ['map','normalMap','roughnessMap']){ const t=o.material[k]; if(t){ t.repeat.set(u, v); t.needsUpdate = true; } } });
+}
+function applyPropTexRot(obj, deg){   // live-rotate all maps about their center (committed/re-keyed via rebind)
+  if(!obj) return; obj.userData.texRot = deg; const r = (+deg||0) * Math.PI/180;
+  eachPrimMesh(obj, o=>{ for(const k of ['map','normalMap','roughnessMap']){ const t=o.material[k]; if(t){ t.center.set(0.5,0.5); t.rotation = r; t.needsUpdate = true; } } });
 }
 function applyPropTexRebind(obj){ if(obj && obj.userData.tex) applyPropTexture(obj, obj.userData.tex); }  // re-key per-prop texture to committed tiling
 function applyPropTexturePBR(obj, maps){ if(!obj || !maps) return; obj.userData.texN = maps.normal || ''; obj.userData.texR = maps.rough || ''; applyPropTexture(obj, maps.map || ''); }
@@ -6014,6 +6021,7 @@ function applyStoredMaterial(obj, mat){
   if(mat.texRepeat) obj.userData.texRepeat = mat.texRepeat.slice();
   if(mat.texN) obj.userData.texN = mat.texN;
   if(mat.texR) obj.userData.texR = mat.texR;
+  if(mat.texRot != null) obj.userData.texRot = mat.texRot;
   if(mat.tex) applyPropTexture(obj, mat.tex);
   if(mat.emit) applyPropEmissive(obj, mat.emit.c, mat.emit.i);
   if(mat.shine) applyPropShine(obj, mat.shine.r, mat.shine.m);
@@ -6344,19 +6352,20 @@ const player = {
 };
 const EYE = 1.7;            // standing camera height above the surface the player stands on
 // ---- World movement settings (editable in the editor's World panel; saved with the level) ----
-const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, launchPower:1, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorTex:'', floorTexN:'', floorTexR:'', floorTile:0, wallColor:0x1a242b, wallTex:'', wallTexN:'', wallTexR:'', wallTile:0, sky_hdri:'', fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4 };
+const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, launchPower:1, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorRough:0.95, floorMetal:0.1, floorTex:'', floorTexN:'', floorTexR:'', floorTile:0, floorTileU:0, floorTileV:0, floorRot:0, wallColor:0x1a242b, wallRough:0.8, wallMetal:0.2, wallTex:'', wallTexN:'', wallTexR:'', wallTile:0, wallTileU:0, wallTileV:0, wallRot:0, sky_hdri:'', fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4 };
 let worldCfg = Object.assign({}, DEFAULT_WORLD, (savedLevel && savedLevel.world) || {});
 
 // Apply (or clear) a tiling texture on a shared material. Stores the current url on the material under
 // `urlKey` so re-applying the same url is a no-op. Cross-origin textures load via the proxying loader.
-function _loadSurfaceMap(mat, slot, url, repeat, srgb){   // load/clear one map slot (map/normalMap/roughnessMap)
+function _surfTf(tex, ru, rv, rot){ tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(ru, rv); if(rot){ tex.center.set(0.5,0.5); tex.rotation = rot; } else tex.rotation = 0; }
+function _loadSurfaceMap(mat, slot, url, ru, rv, srgb, rot){   // load/clear one map slot (map/normalMap/roughnessMap)
   url = (url||'').trim(); const key = '_'+slot+'Url';
-  if(mat[key] === url){ if(url && mat[slot]){ mat[slot].repeat.set(repeat, repeat); mat.needsUpdate=true; } return; }
+  if(mat[key] === url){ if(url && mat[slot]){ _surfTf(mat[slot], ru, rv, rot); mat.needsUpdate=true; } return; }   // url unchanged: live-update tiling/rotation
   mat[key] = url;
   if(!url){ if(mat[slot]){ mat[slot] = null; mat.needsUpdate = true; } return; }
   const loader = new THREE.TextureLoader(); loader.setCrossOrigin('anonymous');
   const finish = (tex)=>{ if(mat[key] !== url){ if(tex.dispose) tex.dispose(); return; }   // a newer url won the race
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(repeat, repeat);
+    _surfTf(tex, ru, rv, rot);
     if(srgb){ if('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace; else if('encoding' in tex) tex.encoding = 3001; }
     mat[slot] = tex; mat.needsUpdate = true; };
   const pUrl = proxied(url);
@@ -6366,12 +6375,12 @@ function _loadSurfaceMap(mat, slot, url, repeat, srgb){   // load/clear one map 
     else console.warn('Surface map load failed:', url);
   });
 }
-// Color + optional normal/roughness maps on a shared surface material (floor / walls). urlKey is kept for
-// call-site compatibility; per-slot dedup keys are used internally so the three maps load independently.
-function applySurfaceTexture(mat, url, urlKey, repeat, normalUrl, roughUrl){
-  _loadSurfaceMap(mat, 'map',          url,       repeat, true);
-  _loadSurfaceMap(mat, 'normalMap',    normalUrl, repeat, false);
-  _loadSurfaceMap(mat, 'roughnessMap', roughUrl,  repeat, false);
+// Color + optional normal/roughness maps on a shared surface material (floor / walls). Separate U/V tiling
+// (fixes stretch on non-square surfaces) + rotation. urlKey kept for call-site compatibility.
+function applySurfaceTexture(mat, url, urlKey, repU, repV, normalUrl, roughUrl, rot){
+  _loadSurfaceMap(mat, 'map',          url,       repU, repV, true,  rot);
+  _loadSurfaceMap(mat, 'normalMap',    normalUrl, repU, repV, false, rot);
+  _loadSurfaceMap(mat, 'roughnessMap', roughUrl,  repU, repV, false, rot);
 }
 
 // Equirectangular sky / image-based lighting. Pass a panorama image URL (jpg/png; many "HDRI" panos are
@@ -6462,14 +6471,22 @@ function applyWorldCfg(){
   if(typeof floorMat!=='undefined'){
     if(worldCfg.floorColor==null) worldCfg.floorColor = DEFAULT_WORLD.floorColor;
     floorMat.color.setHex(worldCfg.floorColor>>>0);
-    const ft = (+worldCfg.floorTile > 0) ? +worldCfg.floorTile : Math.max(2, Math.round(ARENA/4));
-    applySurfaceTexture(floorMat, worldCfg.floorTex, '_floorTexUrl', ft, worldCfg.floorTexN, worldCfg.floorTexR);
+    if(worldCfg.floorRough!=null) floorMat.roughness = Math.max(0, Math.min(1, +worldCfg.floorRough));
+    if(worldCfg.floorMetal!=null) floorMat.metalness = Math.max(0, Math.min(1, +worldCfg.floorMetal));
+    if(+worldCfg.floorTile>0 && !(+worldCfg.floorTileU>0) && !(+worldCfg.floorTileV>0)){ worldCfg.floorTileU=worldCfg.floorTileV=+worldCfg.floorTile; worldCfg.floorTile=0; }   // migrate legacy uniform tile
+    const fAuto = Math.max(2, Math.round(ARENA/4));
+    const fu = +worldCfg.floorTileU>0 ? +worldCfg.floorTileU : fAuto, fv = +worldCfg.floorTileV>0 ? +worldCfg.floorTileV : fAuto;
+    applySurfaceTexture(floorMat, worldCfg.floorTex, '_floorTexUrl', fu, fv, worldCfg.floorTexN, worldCfg.floorTexR, (+worldCfg.floorRot||0)*Math.PI/180);
   }
   if(typeof wallMat!=='undefined'){
     if(worldCfg.wallColor==null) worldCfg.wallColor = DEFAULT_WORLD.wallColor;
     wallMat.color.setHex(worldCfg.wallColor>>>0);
-    const wt = (+worldCfg.wallTile > 0) ? +worldCfg.wallTile : Math.max(2, Math.round(ARENA/8));
-    applySurfaceTexture(wallMat, worldCfg.wallTex, '_wallTexUrl', wt, worldCfg.wallTexN, worldCfg.wallTexR);
+    if(worldCfg.wallRough!=null) wallMat.roughness = Math.max(0, Math.min(1, +worldCfg.wallRough));
+    if(worldCfg.wallMetal!=null) wallMat.metalness = Math.max(0, Math.min(1, +worldCfg.wallMetal));
+    if(+worldCfg.wallTile>0 && !(+worldCfg.wallTileU>0) && !(+worldCfg.wallTileV>0)){ worldCfg.wallTileU=worldCfg.wallTileV=+worldCfg.wallTile; worldCfg.wallTile=0; }   // migrate legacy uniform tile
+    const wAuto = Math.max(2, Math.round(ARENA/8));
+    const wu = +worldCfg.wallTileU>0 ? +worldCfg.wallTileU : wAuto, wv = +worldCfg.wallTileV>0 ? +worldCfg.wallTileV : wAuto;
+    applySurfaceTexture(wallMat, worldCfg.wallTex, '_wallTexUrl', wu, wv, worldCfg.wallTexN, worldCfg.wallTexR, (+worldCfg.wallRot||0)*Math.PI/180);
   }
   // camera: field of view + view distance (the range before geometry/fog fades out)
   worldCfg.fov      = Math.max(40, Math.min(120, worldCfg.fov == null ? DEFAULT_WORLD.fov : +worldCfg.fov));
@@ -8907,7 +8924,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 179 · 2026-06-06';
+const BUILD_VERSION = 'build 180 · 2026-06-06';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11228,6 +11245,7 @@ function propMaterialDesc(o){
   if(o.userData.tex) m.tex = o.userData.tex;
   if(o.userData.texN) m.texN = o.userData.texN;
   if(o.userData.texR) m.texR = o.userData.texR;
+  if(o.userData.texRot) m.texRot = o.userData.texRot;
   if(o.userData.texRepeat && (o.userData.texRepeat[0]!==1 || o.userData.texRepeat[1]!==1)) m.texRepeat = o.userData.texRepeat.slice();
   if(o.userData.emit) m.emit = { c:o.userData.emit.c, i:o.userData.emit.i };
   if(o.userData.shine && (Math.abs(o.userData.shine.r-PRIM_DEFAULT_ROUGH)>1e-3 || Math.abs(o.userData.shine.m-PRIM_DEFAULT_METAL)>1e-3)) m.shine = { r:o.userData.shine.r, m:o.userData.shine.m };
@@ -11780,18 +11798,26 @@ function renderEditorFields(){
     worldHost.appendChild(presetRow);
     const skStatus=document.createElement('div'); skStatus.id='edSkyStatus'; skStatus.className='hint'; skStatus.style.cssText='margin:-2px 0 6px;font-size:10px;'; worldHost.appendChild(skStatus);
 
-    hint(worldHost, '<b>Floor</b> — color + optional tiling texture', '10px 0 4px');
+    hint(worldHost, '<b>Floor</b> — color, finish + optional tiling texture', '10px 0 4px');
     colorRow(worldHost, 'Floor color', 'floorColor');
+    slider(worldHost, 'Floor roughness','floorRough', 0, 1, 0.05);
+    slider(worldHost, 'Floor metalness','floorMetal', 0, 1, 0.05);
     texRow(worldHost, 'https://…/floor.jpg (tiles)', 'floorTex');
-    slider(worldHost, 'Floor tiles','floorTile', 0, 80, 1);
+    slider(worldHost, 'Floor tile W','floorTileU', 0, 80, 0.5);
+    slider(worldHost, 'Floor tile H','floorTileV', 0, 80, 0.5);
+    slider(worldHost, 'Floor rotate°','floorRot', 0, 360, 5);
     { const fh=document.createElement('div'); worldHost.appendChild(fh); renderTexSearch(fh, (maps)=>{ pushUndoSnapshot(); worldCfg.floorTex=maps.map||''; worldCfg.floorTexN=maps.normal||''; worldCfg.floorTexR=maps.rough||''; applyWorldCfg(); renderEditorFields(); }); }
 
-    hint(worldHost, '<b>Walls</b> — color + optional tiling texture');
+    hint(worldHost, '<b>Walls</b> — color, finish + optional tiling texture');
     colorRow(worldHost, 'Wall color', 'wallColor');
+    slider(worldHost, 'Wall roughness','wallRough', 0, 1, 0.05);
+    slider(worldHost, 'Wall metalness','wallMetal', 0, 1, 0.05);
     texRow(worldHost, 'https://…/wall.jpg (tiles)', 'wallTex');
-    slider(worldHost, 'Wall tiles','wallTile', 0, 80, 1);
+    slider(worldHost, 'Wall tile W','wallTileU', 0, 80, 0.5);
+    slider(worldHost, 'Wall tile H','wallTileV', 0, 80, 0.5);
+    slider(worldHost, 'Wall rotate°','wallRot', 0, 360, 5);
     { const wh=document.createElement('div'); worldHost.appendChild(wh); renderTexSearch(wh, (maps)=>{ pushUndoSnapshot(); worldCfg.wallTex=maps.map||''; worldCfg.wallTexN=maps.normal||''; worldCfg.wallTexR=maps.rough||''; applyWorldCfg(); renderEditorFields(); }); }
-    hint(worldHost, '', '0 0 6px').textContent = 'Tiles = how many times the texture repeats across the surface (0 = auto-scale to arena).';
+    hint(worldHost, '', '0 0 6px').textContent = 'Tile W/H = repeats across width / height (0 = auto). Lower roughness = shinier; metalness adds sheen. Rotate spins the texture (planks/bricks a new way).';
 
     // ===== ENEMIES section =====
     const eHost = enemyHost || worldHost;
@@ -12524,6 +12550,12 @@ function renderEditorFields(){
       ru.oninput=setRep; rv.oninput=setRep; ru.onchange=commitRep; rv.onchange=commitRep; ru.addEventListener('focus',()=>pushUndoSnapshot()); rv.addEventListener('focus',()=>pushUndoSnapshot());
       const x=document.createElement('span'); x.className='hint'; x.textContent='×';
       rrow.appendChild(rlbl); rrow.appendChild(ru); rrow.appendChild(x); rrow.appendChild(rv); matHost.appendChild(rrow);
+      // texture rotation (planks/bricks running a different direction)
+      const rotRow=document.createElement('div'); rotRow.style.cssText='display:flex;align-items:center;gap:8px;margin-top:6px;';
+      const rotL=document.createElement('span'); rotL.className='hint'; rotL.textContent='Rotate°';
+      const rotI=document.createElement('input'); rotI.type='number'; rotI.step='5'; rotI.value=selObj.userData.texRot||0; rotI.className='valnum'; rotI.style.width='62px';
+      rotI.oninput=()=>{ applyPropTexRot(selObj, +rotI.value||0); }; rotI.onchange=()=>{ applyPropTexRebind(selObj); }; rotI.addEventListener('focus',()=>pushUndoSnapshot());
+      rotRow.appendChild(rotL); rotRow.appendChild(rotI); matHost.appendChild(rotRow);
       const tsHost=document.createElement('div'); tsHost.style.marginTop='8px'; matHost.appendChild(tsHost); renderTexSearch(tsHost);
 
       // emissive / light emitter
