@@ -5881,7 +5881,7 @@ function eachPrimMesh(obj, fn){ obj.traverse(o=>{ if(o.isMesh && o.material) fn(
 function applyPropColor(obj, hex){
   if(!obj || !isShapePrimitive(obj.userData.src)) return;
   obj.userData.col = hex;
-  eachPrimMesh(obj, o=>{ if(!obj.userData.tex) o.material.color.setHex(hex); o.material.needsUpdate=true; });
+  eachPrimMesh(obj, o=>{ o.material.color.setHex(hex); o.material.needsUpdate=true; });   // tints the texture too (MeshStandard multiplies map by color)
 }
 
 // --- image texture + tiling ---
@@ -5896,7 +5896,7 @@ function applyPropTexture(obj, url){
       o.material.map          = texInstance(url, rep[0], rep[1], true, rot);   // per-prop instance keeps each prop's own tiling
       o.material.normalMap    = obj.userData.texN ? texInstance(obj.userData.texN, rep[0], rep[1], false, rot) : null;   // depth
       o.material.roughnessMap = obj.userData.texR ? texInstance(obj.userData.texR, rep[0], rep[1], false, rot) : null;
-      o.material.color.setHex(0xffffff);          // let the image show its true colors
+      o.material.color.setHex(obj.userData.col != null ? obj.userData.col : 0xffffff);   // tint the image by the prop color (white = true colors)
     } else {
       o.material.map = null; o.material.normalMap = null; o.material.roughnessMap = null;
       o.material.color.setHex(obj.userData.col != null ? obj.userData.col : PRIM_DEFAULT_COLOR);
@@ -8936,7 +8936,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 183 · 2026-06-06';
+const BUILD_VERSION = 'build 184 · 2026-06-06';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12554,7 +12554,7 @@ function renderEditorFields(){
       const cpick=document.createElement('input'); cpick.type='color'; cpick.value=toHex(selObj.userData.col!=null?selObj.userData.col:PRIM_DEFAULT_COLOR);
       cpick.style.cssText='width:42px;height:26px;padding:0;border:1px solid rgba(56,245,181,0.3);border-radius:4px;background:#05080b;cursor:pointer;';
       cpick.addEventListener('mousedown', ()=>pushUndoSnapshot()); cpick.oninput=()=>{ applyPropColor(selObj, parseInt(cpick.value.slice(1),16)); };
-      const cnote=document.createElement('span'); cnote.className='hint'; cnote.textContent=selObj.userData.tex?'(hidden under texture)':'';
+      const cnote=document.createElement('span'); cnote.className='hint'; cnote.textContent=selObj.userData.tex?'(tints the texture)':'';
       crow.appendChild(cpick); crow.appendChild(cnote); matHost.appendChild(crow);
 
       // texture + tiling
