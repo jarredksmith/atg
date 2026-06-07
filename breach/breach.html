@@ -5847,13 +5847,14 @@ function loadTextureCached(url){
 // (memory-friendly); two props using the same image at DIFFERENT tiling each get their own, so the tiling
 // you set on one prop never bleeds onto another.
 const _texInst = {};
-function texInstance(url, u, v){
-  const key = url + '|' + u + '|' + v;
+function texInstance(url, u, v, srgb){
+  srgb = (srgb !== false);   // color maps are sRGB; normal/roughness maps must stay linear
+  const key = url + '|' + u + '|' + v + '|' + (srgb?'s':'l');
   if(_texInst[key]) return _texInst[key];
   const loader = new THREE.TextureLoader(); loader.crossOrigin = 'anonymous';
   const t = loader.load(url, undefined, undefined, (err)=>{ console.warn('Texture load failed for', url, '-', err && err.message); });
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  if('colorSpace' in t) t.colorSpace = THREE.SRGBColorSpace; else if('encoding' in t) t.encoding = 3001;
+  if(srgb){ if('colorSpace' in t) t.colorSpace = THREE.SRGBColorSpace; else if('encoding' in t) t.encoding = 3001; }
   t.repeat.set(u||1, v||1);
   _texInst[key] = t; return t;
 }
@@ -5870,13 +5871,16 @@ function applyPropColor(obj, hex){
 function applyPropTexture(obj, url){
   if(!obj || !isShapePrimitive(obj.userData.src)) return;   // textures only for the built-in shapes
   obj.userData.tex = url || '';
+  if(!url){ obj.userData.texN = ''; obj.userData.texR = ''; }   // clearing color clears the PBR maps too
+  const rep = obj.userData.texRepeat || [1,1];
   eachPrimMesh(obj, o=>{
     if(url){
-      const rep = obj.userData.texRepeat || [1,1];
-      o.material.map = texInstance(url, rep[0], rep[1]);   // per-prop instance keeps each prop's own tiling
+      o.material.map          = texInstance(url, rep[0], rep[1]);   // per-prop instance keeps each prop's own tiling
+      o.material.normalMap    = obj.userData.texN ? texInstance(obj.userData.texN, rep[0], rep[1], false) : null;   // depth
+      o.material.roughnessMap = obj.userData.texR ? texInstance(obj.userData.texR, rep[0], rep[1], false) : null;
       o.material.color.setHex(0xffffff);          // let the image show its true colors
     } else {
-      o.material.map = null;
+      o.material.map = null; o.material.normalMap = null; o.material.roughnessMap = null;
       o.material.color.setHex(obj.userData.col != null ? obj.userData.col : PRIM_DEFAULT_COLOR);
     }
     o.material.needsUpdate = true;
@@ -5891,6 +5895,7 @@ function applyPropTexRepeat(obj, u, v){
   eachPrimMesh(obj, o=>{ if(o.material.map){ o.material.map.repeat.set(u, v); o.material.map.needsUpdate = true; } });
 }
 function applyPropTexRebind(obj){ if(obj && obj.userData.tex) applyPropTexture(obj, obj.userData.tex); }  // re-key per-prop texture to committed tiling
+function applyPropTexturePBR(obj, maps){ if(!obj || !maps) return; obj.userData.texN = maps.normal || ''; obj.userData.texR = maps.rough || ''; applyPropTexture(obj, maps.map || ''); }
 
 // ---------- Texture search (Poly Haven, CC0) ----------
 // Poly Haven is free/CC0 and CORS-enabled, so its API + image CDN load directly (no proxy needed). We fetch
@@ -5911,22 +5916,31 @@ function texSearch(query, cb, errcb){
   _texFetchCatalog(list=>{ const q=(query||'').trim().toLowerCase();
     const hits = q ? list.filter(a=>a.hay.indexOf(q)>=0) : list.slice(); cb(hits.slice(0,24)); }, errcb);
 }
-function _texPickDiffuse(files, hi){
-  if(!files) return null; const keys=Object.keys(files);
-  const key = keys.find(k=>/^(diffuse|diff|color|col|albedo)$/i.test(k)) || keys.find(k=>/diff|color|albedo/i.test(k)) || keys[0];
-  const m=files[key]; if(!m) return null;
+function _texPickMap(files, rx, hi){       // pick one map kind (color/normal/rough) at a sane resolution
+  if(!files) return null;
+  const key = Object.keys(files).find(k=>rx.test(k)); if(!key) return null;
+  const m=files[key]; if(!m || typeof m!=='object') return null;
   const order = hi ? ['2k','1k','4k'] : ['1k','2k','4k'];
-  const res = order.find(r=>m[r]) || Object.keys(m)[0]; const rr=m[res]; if(!rr) return null;
+  const res = order.find(r=>m[r]) || Object.keys(m).find(r=>m[r] && typeof m[r]==='object'); const rr = res ? m[res] : null; if(!rr) return null;
   const fmt = rr.jpg ? 'jpg' : (rr.png ? 'png' : Object.keys(rr)[0]); const f=rr[fmt];
   return (f && f.url) ? f.url : null;
 }
-function texResolve(id, hi, cb, errcb){    // -> direct color-map .jpg URL (hi=true prefers 2K)
+function _texPickDiffuse(files, hi){
+  return _texPickMap(files, /^(diffuse|diff|color|col|albedo)$/i, hi) || _texPickMap(files, /diff|color|albedo/i, hi) || _texPickMap(files, /[\s\S]/, hi);
+}
+function texResolvePBR(id, hi, cb, errcb){   // -> { map, normal, rough } direct URLs (hi=true prefers 2K)
   fetch('https://api.polyhaven.com/files/'+encodeURIComponent(id))
     .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
-    .then(files=>{ const url=_texPickDiffuse(files, hi); if(!url) throw new Error('no usable color map'); cb(url); })
+    .then(files=>{
+      const map = _texPickDiffuse(files, hi); if(!map) throw new Error('no usable color map');
+      const normal = _texPickMap(files, /nor_gl/i, hi) || _texPickMap(files, /normal/i, hi);
+      const rough  = _texPickMap(files, /rough/i, hi);
+      cb({ map, normal, rough });
+    })
     .catch(errcb);
 }
-function renderTexSearch(host){
+function renderTexSearch(host, onPick){
+  onPick = onPick || ((maps)=>{ const sel=editorTargets.props.obj(); if(!sel || !isShapePrimitive(sel.userData.src)) return false; pushUndoSnapshot(); applyPropTexturePBR(sel, maps); const ti=document.getElementById('edTexInput'); if(ti) ti.value=maps.map||''; });
   host.innerHTML='';
   const head=document.createElement('div'); head.className='hint'; head.style.margin='6px 0 4px';
   head.innerHTML='<b>Search textures</b> \u2014 Poly Haven (CC0), tap one to apply it to this primitive.';
@@ -5944,9 +5958,8 @@ function renderTexSearch(host){
     list.forEach(a=>{ const cell=document.createElement('button'); cell.title=a.name; cell.style.cssText='padding:0;border:1px solid #2a3a42;border-radius:5px;overflow:hidden;cursor:pointer;background:#0c1418;aspect-ratio:1;';
       const img=document.createElement('img'); img.src='https://cdn.polyhaven.com/asset_img/thumbs/'+a.id+'.png?width=128&height=128&format=png'; img.loading='lazy'; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block;';
       cell.appendChild(img);
-      cell.onclick=()=>{ const sel=editorTargets.props.obj(); if(!sel || !isShapePrimitive(sel.userData.src)){ status.textContent='Select a primitive first.'; return; }
-        status.textContent='Loading '+a.name+'\u2026';
-        texResolve(a.id, texHiRes, (url)=>{ pushUndoSnapshot(); applyPropTexture(sel, url); status.textContent=a.name+' applied.'; const ti=document.getElementById('edTexInput'); if(ti) ti.value=url; },
+      cell.onclick=()=>{ status.textContent='Loading '+a.name+'\u2026';
+        texResolvePBR(a.id, texHiRes, (maps)=>{ if(onPick(maps, a)===false){ status.textContent='Select a primitive first.'; return; } status.textContent=a.name+' applied'+(maps.normal?' (PBR)':'')+'.'; },
           (e)=>{ status.textContent='Could not load that texture: '+((e&&e.message)||e); }); };
       grid.appendChild(cell); }); };
   if(texLastResults.length) renderGrid(texLastResults);
@@ -5990,6 +6003,8 @@ function applyStoredMaterial(obj, mat){
   if(!mat) return;
   if(mat.col != null) applyPropColor(obj, mat.col);
   if(mat.texRepeat) obj.userData.texRepeat = mat.texRepeat.slice();
+  if(mat.texN) obj.userData.texN = mat.texN;
+  if(mat.texR) obj.userData.texR = mat.texR;
   if(mat.tex) applyPropTexture(obj, mat.tex);
   if(mat.emit) applyPropEmissive(obj, mat.emit.c, mat.emit.i);
   if(mat.shine) applyPropShine(obj, mat.shine.r, mat.shine.m);
@@ -6320,26 +6335,34 @@ const player = {
 };
 const EYE = 1.7;            // standing camera height above the surface the player stands on
 // ---- World movement settings (editable in the editor's World panel; saved with the level) ----
-const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorTex:'', floorTile:0, wallColor:0x1a242b, wallTex:'', wallTile:0, sky_hdri:'', fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4 };
+const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorTex:'', floorTexN:'', floorTexR:'', floorTile:0, wallColor:0x1a242b, wallTex:'', wallTexN:'', wallTexR:'', wallTile:0, sky_hdri:'', fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4 };
 let worldCfg = Object.assign({}, DEFAULT_WORLD, (savedLevel && savedLevel.world) || {});
 
 // Apply (or clear) a tiling texture on a shared material. Stores the current url on the material under
 // `urlKey` so re-applying the same url is a no-op. Cross-origin textures load via the proxying loader.
-function applySurfaceTexture(mat, url, urlKey, repeat){
-  url = (url||'').trim();
-  if(mat[urlKey] === url){ if(url && mat.map){ mat.map.repeat.set(repeat, repeat); mat.needsUpdate=true; } return; }
-  mat[urlKey] = url;
-  if(!url){ if(mat.map){ mat.map = null; mat.needsUpdate = true; } return; }
+function _loadSurfaceMap(mat, slot, url, repeat, srgb){   // load/clear one map slot (map/normalMap/roughnessMap)
+  url = (url||'').trim(); const key = '_'+slot+'Url';
+  if(mat[key] === url){ if(url && mat[slot]){ mat[slot].repeat.set(repeat, repeat); mat.needsUpdate=true; } return; }
+  mat[key] = url;
+  if(!url){ if(mat[slot]){ mat[slot] = null; mat.needsUpdate = true; } return; }
   const loader = new THREE.TextureLoader(); loader.setCrossOrigin('anonymous');
-  const finish = (tex)=>{ tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(repeat, repeat);
-    if('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace; else if('encoding' in tex) tex.encoding = 3001;
-    mat.map = tex; mat.needsUpdate = true; };
-  const proxiedUrl = proxied(url);
-  loader.load(proxiedUrl, finish, undefined, ()=>{
-    if(mat[urlKey] !== url) return;
-    if(proxiedUrl !== url) loader.load(url, finish, undefined, ()=>{ if(mat[urlKey]===url) console.warn('Texture load failed (CORS?):', url); });   // direct fallback
-    else console.warn('Texture load failed:', url);
+  const finish = (tex)=>{ if(mat[key] !== url){ if(tex.dispose) tex.dispose(); return; }   // a newer url won the race
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(repeat, repeat);
+    if(srgb){ if('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace; else if('encoding' in tex) tex.encoding = 3001; }
+    mat[slot] = tex; mat.needsUpdate = true; };
+  const pUrl = proxied(url);
+  loader.load(pUrl, finish, undefined, ()=>{
+    if(mat[key] !== url) return;
+    if(pUrl !== url) loader.load(url, finish, undefined, ()=>{ if(mat[key]===url) console.warn('Surface map load failed (CORS?):', url); });   // direct fallback
+    else console.warn('Surface map load failed:', url);
   });
+}
+// Color + optional normal/roughness maps on a shared surface material (floor / walls). urlKey is kept for
+// call-site compatibility; per-slot dedup keys are used internally so the three maps load independently.
+function applySurfaceTexture(mat, url, urlKey, repeat, normalUrl, roughUrl){
+  _loadSurfaceMap(mat, 'map',          url,       repeat, true);
+  _loadSurfaceMap(mat, 'normalMap',    normalUrl, repeat, false);
+  _loadSurfaceMap(mat, 'roughnessMap', roughUrl,  repeat, false);
 }
 
 // Equirectangular sky / image-based lighting. Pass a panorama image URL (jpg/png; many "HDRI" panos are
@@ -6430,13 +6453,13 @@ function applyWorldCfg(){
     if(worldCfg.floorColor==null) worldCfg.floorColor = DEFAULT_WORLD.floorColor;
     floorMat.color.setHex(worldCfg.floorColor>>>0);
     const ft = (+worldCfg.floorTile > 0) ? +worldCfg.floorTile : Math.max(2, Math.round(ARENA/4));
-    applySurfaceTexture(floorMat, worldCfg.floorTex, '_floorTexUrl', ft);
+    applySurfaceTexture(floorMat, worldCfg.floorTex, '_floorTexUrl', ft, worldCfg.floorTexN, worldCfg.floorTexR);
   }
   if(typeof wallMat!=='undefined'){
     if(worldCfg.wallColor==null) worldCfg.wallColor = DEFAULT_WORLD.wallColor;
     wallMat.color.setHex(worldCfg.wallColor>>>0);
     const wt = (+worldCfg.wallTile > 0) ? +worldCfg.wallTile : Math.max(2, Math.round(ARENA/8));
-    applySurfaceTexture(wallMat, worldCfg.wallTex, '_wallTexUrl', wt);
+    applySurfaceTexture(wallMat, worldCfg.wallTex, '_wallTexUrl', wt, worldCfg.wallTexN, worldCfg.wallTexR);
   }
   // camera: field of view + view distance (the range before geometry/fog fades out)
   worldCfg.fov      = Math.max(40, Math.min(120, worldCfg.fov == null ? DEFAULT_WORLD.fov : +worldCfg.fov));
@@ -8874,7 +8897,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 176 · 2026-06-06';
+const BUILD_VERSION = 'build 177 · 2026-06-06';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11171,6 +11194,8 @@ function propMaterialDesc(o){
   const m = {};
   if(o.userData.col != null && o.userData.col !== PRIM_DEFAULT_COLOR) m.col = o.userData.col;
   if(o.userData.tex) m.tex = o.userData.tex;
+  if(o.userData.texN) m.texN = o.userData.texN;
+  if(o.userData.texR) m.texR = o.userData.texR;
   if(o.userData.texRepeat && (o.userData.texRepeat[0]!==1 || o.userData.texRepeat[1]!==1)) m.texRepeat = o.userData.texRepeat.slice();
   if(o.userData.emit) m.emit = { c:o.userData.emit.c, i:o.userData.emit.i };
   if(o.userData.shine && (Math.abs(o.userData.shine.r-PRIM_DEFAULT_ROUGH)>1e-3 || Math.abs(o.userData.shine.m-PRIM_DEFAULT_METAL)>1e-3)) m.shine = { r:o.userData.shine.r, m:o.userData.shine.m };
@@ -11644,7 +11669,7 @@ function renderEditorFields(){
       const row=document.createElement('div'); row.style.cssText='display:flex;gap:6px;align-items:center;margin:2px 0 6px;';
       const inp=document.createElement('input'); inp.type='text'; inp.placeholder=placeholder; inp.value=worldCfg[key]||''; inp.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
       const ab=document.createElement('button'); ab.textContent='Apply'; ab.style.flex='0 0 auto';
-      const apply=()=>{ pushUndoSnapshot(); worldCfg[key]=inp.value.trim(); applyWorldCfg(); };
+      const apply=()=>{ pushUndoSnapshot(); worldCfg[key]=inp.value.trim(); if(key==='floorTex'){ worldCfg.floorTexN=''; worldCfg.floorTexR=''; } else if(key==='wallTex'){ worldCfg.wallTexN=''; worldCfg.wallTexR=''; } applyWorldCfg(); };
       ab.onclick=apply; inp.addEventListener('keydown', e=>{ if(e.code==='Enter'){ e.preventDefault(); apply(); } });
       row.appendChild(inp); row.appendChild(ab); host.appendChild(row);
     };
@@ -11726,11 +11751,13 @@ function renderEditorFields(){
     colorRow(worldHost, 'Floor color', 'floorColor');
     texRow(worldHost, 'https://…/floor.jpg (tiles)', 'floorTex');
     slider(worldHost, 'Floor tiles','floorTile', 0, 80, 1);
+    { const fh=document.createElement('div'); worldHost.appendChild(fh); renderTexSearch(fh, (maps)=>{ pushUndoSnapshot(); worldCfg.floorTex=maps.map||''; worldCfg.floorTexN=maps.normal||''; worldCfg.floorTexR=maps.rough||''; applyWorldCfg(); renderEditorFields(); }); }
 
     hint(worldHost, '<b>Walls</b> — color + optional tiling texture');
     colorRow(worldHost, 'Wall color', 'wallColor');
     texRow(worldHost, 'https://…/wall.jpg (tiles)', 'wallTex');
     slider(worldHost, 'Wall tiles','wallTile', 0, 80, 1);
+    { const wh=document.createElement('div'); worldHost.appendChild(wh); renderTexSearch(wh, (maps)=>{ pushUndoSnapshot(); worldCfg.wallTex=maps.map||''; worldCfg.wallTexN=maps.normal||''; worldCfg.wallTexR=maps.rough||''; applyWorldCfg(); renderEditorFields(); }); }
     hint(worldHost, '', '0 0 6px').textContent = 'Tiles = how many times the texture repeats across the surface (0 = auto-scale to arena).';
 
     // ===== ENEMIES section =====
@@ -12450,7 +12477,7 @@ function renderEditorFields(){
       const tinp=document.createElement('input'); tinp.type='text'; tinp.id='edTexInput'; tinp.value=selObj.userData.tex||''; tinp.placeholder='https://…/texture.jpg';
       matHost.appendChild(tinp);
       const trow=document.createElement('div'); trow.className='row2'; trow.style.marginTop='6px';
-      const applyB=document.createElement('button'); applyB.textContent='Apply texture'; applyB.onclick=()=>{ pushUndoSnapshot(); applyPropTexture(selObj, tinp.value.trim()); renderEditorFields(); };
+      const applyB=document.createElement('button'); applyB.textContent='Apply texture'; applyB.onclick=()=>{ pushUndoSnapshot(); selObj.userData.texN=''; selObj.userData.texR=''; applyPropTexture(selObj, tinp.value.trim()); renderEditorFields(); };
       const clearB=document.createElement('button'); clearB.textContent='Clear'; clearB.onclick=()=>{ pushUndoSnapshot(); tinp.value=''; applyPropTexture(selObj, ''); renderEditorFields(); };
       trow.appendChild(applyB); trow.appendChild(clearB); matHost.appendChild(trow);
       // tiling U/V
