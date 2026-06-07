@@ -5754,11 +5754,29 @@ function xaToggle(o){ const a=o&&o.userData&&o.userData.xa; if(!a||!a.on) return
 function broadcastXAnim(i){ const o=propModels[i]; const dest=(o&&o.userData.xa)?(o.userData.xa.dest?1:0):0;
   if(NET.mode==='host'){ for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'xa', i, dest}); }catch(e){} } }
   else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send({t:'xa', i, dest}); }catch(e){} } }
-function _xaCarry(o,dx,dy,dz){   // ride a moving platform: if grounded on its top, move with it
+const _xaCur=new THREE.Matrix4(), _xaPrevM=new THREE.Matrix4(), _xaDelta=new THREE.Matrix4(), _xaPt=new THREE.Vector3(), _xaPt2=new THREE.Vector3(), _xaPrevP=new THREE.Vector3(), _xaPrevQ=new THREE.Quaternion();
+const XA_LAUNCH=9;   // surface speed (m/s) past which a moving prop FLINGS the player (trebuchet/launcher) instead of carrying them (elevator)
+function _xaCarry(o, prevP, prevQ, dt){   // ride a moving/rotating prop while standing on it; a fast surface launches you off it
   const b=o.userData.box; if(!b) return; const R=player.radius||0.4, feet=player.pos.y-EYE;
   if(player.pos.x<b.min.x-R||player.pos.x>b.max.x+R||player.pos.z<b.min.z-R||player.pos.z>b.max.z+R) return;
-  if(feet < b.max.y-0.3 || feet > b.max.y+0.6) return;
-  player.pos.x+=dx; player.pos.z+=dz; if(dy>0) player.pos.y+=dy;
+  // how the player's contact point moves with the prop's FULL transform this frame (translation + rotation)
+  _xaCur.copy(o.matrixWorld);
+  _xaPrevM.compose(prevP, prevQ, o.scale);
+  _xaDelta.multiplyMatrices(_xaCur, _xaPrevM.invert());
+  _xaPt.set(player.pos.x, feet, player.pos.z);
+  _xaPt2.copy(_xaPt).applyMatrix4(_xaDelta);
+  const mvx=_xaPt2.x-_xaPt.x, mvy=_xaPt2.y-_xaPt.y, mvz=_xaPt2.z-_xaPt.z;
+  const lift=Math.abs(mvy);   // widen the "on top" band by how far the surface moved, so a fast lift can't drop you through it
+  if(feet < b.max.y-0.5-lift || feet > b.max.y+0.7+lift) return;
+  const sp=Math.hypot(mvx,mvy,mvz)/Math.max(dt,1e-4);
+  if(sp > XA_LAUNCH){
+    // fling: imprint the surface velocity so the player sails off (extVel carries horizontally, vel.y arcs)
+    player.extVel.x = mvx/dt; player.extVel.z = mvz/dt;
+    const vy=mvy/dt; player.vel.y = (vy>=0) ? Math.max(player.vel.y, vy, 4) : Math.max(player.vel.y, vy);   // small upward pop so a horizontal whip still lifts off
+    player.onGround=false;
+  } else {
+    player.pos.x+=mvx; player.pos.y+=mvy; player.pos.z+=mvz;   // ride it (elevator / slow platform)
+  }
 }
 function updateXAnim(dt){
   if(!gameOn || editorOpen || paused) return;
@@ -5772,10 +5790,12 @@ function updateXAnim(dt){
     else { a.ph+=step; if(a.ph>=1) a.ph-=1; lin=true; }   // loop = continuous (best for spins / conveyors)
     const e = lin ? a.ph : (a.ph*a.ph*(3-2*a.ph));
     const ox=o.position.x, oy=o.position.y, oz=o.position.z;
+    _xaPrevP.set(ox,oy,oz); _xaPrevQ.copy(o.quaternion);
     o.position.set(a.bpx+(a.mx||0)*e, a.bpy+(a.my||0)*e, a.bpz+(a.mz||0)*e);
     o.rotation.set(a.brx+(a.rx||0)*_XA_D2R*e, a.bry+(a.ry||0)*_XA_D2R*e, a.brz+(a.rz||0)*_XA_D2R*e);
     const dx=o.position.x-ox, dy=o.position.y-oy, dz=o.position.z-oz;
-    if(dx||dy||dz){ o.updateMatrixWorld(true); if(colliders.indexOf(o)>=0||o.userData.box) refreshPropCollider(o); if(player.onGround) _xaCarry(o,dx,dy,dz); }
+    const turns=(a.rx||a.ry||a.rz);   // a rotating prop's surface moves even when its origin doesn't
+    if(dx||dy||dz||turns){ o.updateMatrixWorld(true); if(colliders.indexOf(o)>=0||o.userData.box) refreshPropCollider(o); if(player.onGround) _xaCarry(o, _xaPrevP, _xaPrevQ, dt); }
   }
 }
 const _pcV = new THREE.Vector3();
@@ -8541,10 +8561,11 @@ function checkProximity(){
       const b = o.userData.box;
       if(b){
         const cx = Math.max(b.min.x, Math.min(player.pos.x, b.max.x));
+        const cy = Math.max(b.min.y, Math.min(player.pos.y, b.max.y));
         const cz = Math.max(b.min.z, Math.min(player.pos.z, b.max.z));
-        d = Math.hypot(player.pos.x-cx, player.pos.z-cz);   // 0 when standing within the footprint
+        d = Math.hypot(player.pos.x-cx, player.pos.y-cy, player.pos.z-cz);   // distance to the mesh box in 3D (so a door one floor up doesn't prompt from below)
       } else {
-        d = Math.hypot(player.pos.x-o.position.x, player.pos.z-o.position.z);
+        d = Math.hypot(player.pos.x-o.position.x, player.pos.y-o.position.y, player.pos.z-o.position.z);
       }
       if(d < bd){ bd=d; best=o; }
     }
@@ -8554,8 +8575,8 @@ function checkProximity(){
     let best=null, bd=2.6;
     for(const o of propModels){ const a=o&&o.userData&&o.userData.xa; if(!a||!a.on||a.trig!=='interact') continue;
       const b=o.userData.box; let d;
-      if(b){ const cx=Math.max(b.min.x,Math.min(player.pos.x,b.max.x)), cz=Math.max(b.min.z,Math.min(player.pos.z,b.max.z)); d=Math.hypot(player.pos.x-cx, player.pos.z-cz); }
-      else d=Math.hypot(player.pos.x-o.position.x, player.pos.z-o.position.z);
+      if(b){ const cx=Math.max(b.min.x,Math.min(player.pos.x,b.max.x)), cy=Math.max(b.min.y,Math.min(player.pos.y,b.max.y)), cz=Math.max(b.min.z,Math.min(player.pos.z,b.max.z)); d=Math.hypot(player.pos.x-cx, player.pos.y-cy, player.pos.z-cz); }
+      else d=Math.hypot(player.pos.x-o.position.x, player.pos.y-o.position.y, player.pos.z-o.position.z);
       if(d<bd){ bd=d; best=o; } }
     if(best) nearTarget = { type:'xanim', obj:best };
   }
@@ -8774,7 +8795,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 171 · 2026-06-06';
+const BUILD_VERSION = 'build 173 · 2026-06-06';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10625,11 +10646,12 @@ function loop(){
       if(en.ranged){
         en.shootCd -= dt;
         if(en._chase && en.shootCd<=0 && !editorOpen && en._dist < en.standoff*1.7
+           && Math.abs((near.pos.y - EYE) - en.mesh.position.y) < 2.6   // roughly the same level — no shooting through a floor
            && !segmentBlocked(en.mesh.position.x, en.mesh.position.z, near.pos.x, near.pos.z, 1.4)){
           fireEnemyShot(en, near);          // clear line of sight + in range -> shoot
           en.shootCd = en.fireCd; en._attackT = nowMs + 450;   // brief attack-animation window
         }
-      } else if(en._chase && en._dist < (en._reach || 2.4) && en.cooldown<=0 && !editorOpen){   // aware/chasing melee enemy in reach attacks
+      } else if(en._chase && en._dist < (en._reach || 2.4) && Math.abs((near.pos.y - EYE) - en.mesh.position.y) < 2.6 && en.cooldown<=0 && !editorOpen){   // aware/chasing melee enemy in reach AND at roughly the same height attacks (no hitting a floor above/below)
         en.cooldown = 0.8; en._attackT = nowMs + 550;   // brief attack-animation window
         near.hurt(en.dmg || 9, en.mesh.position.x, en.mesh.position.z);   // routes to the local player or, in co-op, the remote one
       }
