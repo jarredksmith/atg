@@ -6659,7 +6659,7 @@ renderer.domElement.addEventListener('mousedown', e=>{
   if(tryGizmoGrab(e)){ editorDragMoved = true; return; }   // grabbing an axis handle (suppresses select)
   if(editorTopView) editorDragPan = true; else editorDragLook = true;
 });
-addEventListener('mouseup', e=>{ if(e.button===0){ editorDragLook = false; editorDragPan = false; gizmoDrag = null; } });
+addEventListener('mouseup', e=>{ if(e.button===0){ editorDragLook = false; editorDragPan = false; const _wg=gizmoDrag; gizmoDrag = null; if(_wg){ const tg=editorTargets[editorActive]; if(tg && typeof tg.sync==='function') tg.sync(); if(typeof updateFieldDisplays==='function') updateFieldDisplays(); } } });
 
 // ---------- Weapon (viewmodel) ----------
 // The `gun` group is what the render loop animates (sway, recoil, ADS). We load a hosted
@@ -8936,7 +8936,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 185 · 2026-06-06';
+const BUILD_VERSION = 'build 186 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9072,7 +9072,7 @@ addEventListener('contextmenu', e=>{ if(gameOn) e.preventDefault(); });
     touchLookDX+=dx; touchLookDY+=dy; lx=e.clientX; ly=e.clientY; e.preventDefault(); });
   const lookEnd=e=>{ if(e.pointerId!==lookId) return; lookId=null;
     if(editorOpen){ if(!editorDragMoved){ renderer.domElement.dispatchEvent(new MouseEvent('click', { clientX:e.clientX, clientY:e.clientY, bubbles:true })); }   // a clean tap selects the prop/light/spawn under it
-      gizmoDrag=null; } };
+      const _wg=gizmoDrag; gizmoDrag=null; if(_wg){ const tg=editorTargets[editorActive]; if(tg && typeof tg.sync==='function') tg.sync(); if(typeof updateFieldDisplays==='function') updateFieldDisplays(); } } };
   look.addEventListener('pointerup', lookEnd); look.addEventListener('pointercancel', lookEnd);
   // helpers for buttons
   const hold=(id,on,off)=>{ const b=document.getElementById(id); if(!b) return;
@@ -10870,16 +10870,23 @@ loop();
 // then emits copy-paste-ready code so the chosen values can be baked into the source.
 const STEP_POS = 0.00001, STEP_ROT = 0.001, STEP_SCALE = 0.00001;   // hundred-thousandths
 const fmt = n => (+n).toFixed(5);
-function prsTransform(min,max){
-  return [
+function prsTransform(min,max,perAxisScale){
+  const f = [
     { k:'px', label:'Pos X', min:min, max:max, step:STEP_POS },
     { k:'py', label:'Pos Y', min:-10, max:20, step:STEP_POS },
     { k:'pz', label:'Pos Z', min:min, max:max, step:STEP_POS },
     { k:'rx', label:'Rot X', min:-180, max:180, step:STEP_ROT },
     { k:'ry', label:'Rot Y', min:-180, max:180, step:STEP_ROT },
     { k:'rz', label:'Rot Z', min:-180, max:180, step:STEP_ROT },
-    { k:'s',  label:'Scale', min:0.00001, max:10, step:STEP_SCALE },
   ];
+  if(perAxisScale){
+    f.push({ k:'sx', label:'Scale X', min:0.00001, max:10, step:STEP_SCALE });
+    f.push({ k:'sy', label:'Scale Y', min:0.00001, max:10, step:STEP_SCALE });
+    f.push({ k:'sz', label:'Scale Z', min:0.00001, max:10, step:STEP_SCALE });
+  } else {
+    f.push({ k:'s', label:'Scale', min:0.00001, max:10, step:STEP_SCALE });
+  }
+  return f;
 }
 
 function applyPlayerLevel(pl){ if(!pl) return; if(pl.state) Object.assign(editorTargets.player.state, pl.state);
@@ -10992,8 +10999,8 @@ const editorTargets = {
     label: 'Props',
     idx: 0,                         // which prop instance is selected
     selectable: true,               // tells the UI to show a prop picker
-    state: { px:0, py:0, pz:0, rx:0, ry:0, rz:0, s:1 },
-    fields: prsTransform(-65,65),
+    state: { px:0, py:0, pz:0, rx:0, ry:0, rz:0, sx:1, sy:1, sz:1 },
+    fields: prsTransform(-65,65,true),
     count(){ return propModels.filter(Boolean).length; },
     obj(){ return propModels[this.idx] || null; },
     urlField: true,
@@ -11004,9 +11011,9 @@ const editorTargets = {
     sync(){ const o=this.obj(); if(!o) return;
       this.state.px=o.position.x; this.state.py=o.position.y; this.state.pz=o.position.z;
       this.state.rx=o.rotation.x*DEG; this.state.ry=o.rotation.y*DEG; this.state.rz=o.rotation.z*DEG;
-      this.state.s=o.scale.x; },
+      this.state.sx=o.scale.x; this.state.sy=o.scale.y; this.state.sz=o.scale.z; },
     apply(){ const o=this.obj(), s=this.state; if(!o) return;
-      o.position.set(s.px,s.py,s.pz); o.scale.setScalar(s.s);
+      o.position.set(s.px,s.py,s.pz); o.scale.set(s.sx,s.sy,s.sz);
       o.rotation.set(s.rx*RAD, s.ry*RAD, s.rz*RAD);
       refreshPropCollider(o);   // keep the solid hitbox aligned with what you see
     },
@@ -12732,7 +12739,8 @@ function ensureSelBoxes(n){
 function syncPropStateFromObj(){
   const o = editorTargets.props.obj(); if(!o) return; const s = editorTargets.props.state;
   s.px=o.position.x; s.py=o.position.y; s.pz=o.position.z;
-  s.rx=o.rotation.x*DEG; s.ry=o.rotation.y*DEG; s.rz=o.rotation.z*DEG; s.s=o.scale.x;
+  s.rx=o.rotation.x*DEG; s.ry=o.rotation.y*DEG; s.rz=o.rotation.z*DEG;
+  s.sx=o.scale.x; s.sy=o.scale.y; s.sz=o.scale.z;
 }
 function selectedSceneObject(){
   if(editorActive==='station') return station && station.model;
@@ -12827,7 +12835,7 @@ function setSelScale(v){
   } else if(editorActive==='props'){
     const o=editorTargets.props.obj(); if(!o) return;
     o.scale.copy(v); refreshPropCollider(o);
-    editorTargets.props.state.s = v.x;     // numeric field shows X (uniform reference)
+    const ps=editorTargets.props.state; ps.sx=v.x; ps.sy=v.y; ps.sz=v.z;   // per-axis scale fields stay in sync
   }
 }
 function buildGizmo(){
