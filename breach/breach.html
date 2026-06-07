@@ -5754,7 +5754,7 @@ function xaToggle(o){ const a=o&&o.userData&&o.userData.xa; if(!a||!a.on) return
 function broadcastXAnim(i){ const o=propModels[i]; const dest=(o&&o.userData.xa)?(o.userData.xa.dest?1:0):0;
   if(NET.mode==='host'){ for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'xa', i, dest}); }catch(e){} } }
   else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send({t:'xa', i, dest}); }catch(e){} } }
-const _xaCur=new THREE.Matrix4(), _xaPrevM=new THREE.Matrix4(), _xaDelta=new THREE.Matrix4(), _xaPt=new THREE.Vector3(), _xaPt2=new THREE.Vector3(), _xaPrevP=new THREE.Vector3(), _xaPrevQ=new THREE.Quaternion();
+const _xaCur=new THREE.Matrix4(), _xaPrevM=new THREE.Matrix4(), _xaDelta=new THREE.Matrix4(), _xaPt=new THREE.Vector3(), _xaPt2=new THREE.Vector3(), _xaPrevP=new THREE.Vector3(), _xaPrevQ=new THREE.Quaternion(), _xaUp=new THREE.Vector3();
 const XA_LAUNCH=9;   // surface speed (m/s) past which a moving prop FLINGS the player (trebuchet/launcher) instead of carrying them (elevator)
 function _xaCarry(o, b, prevP, prevQ, dt){   // ride a moving/rotating prop while standing on it; a fast surface launches you off it
   if(!b) return; const R=player.radius||0.4, feet=player.pos.y-EYE;
@@ -5770,10 +5770,16 @@ function _xaCarry(o, b, prevP, prevQ, dt){   // ride a moving/rotating prop whil
   if(feet < b.max.y-0.5-lift || feet > b.max.y+0.7+lift) return;
   const sp=Math.hypot(mvx,mvy,mvz)/Math.max(dt,1e-4);
   if(sp > XA_LAUNCH){
-    // fling: imprint the surface velocity so the player sails off (extVel carries horizontally, vel.y arcs)
+    // Fling. A bottom-hinged plank's surface moves mostly UP, so the raw surface velocity alone launches you
+    // nearly straight up. Add a kick along the plank's tilting face normal (which points forward+up once the
+    // plank has swung up a bit) so you arc FORWARD off the face — a real catapult. Raw horizontal surface
+    // drift is kept too, so a translating mover (conveyor) still flings you along its motion.
     const LP = (worldCfg && +worldCfg.launchPower) || 1;   // tunable launch strength (World panel)
-    player.extVel.x = mvx/dt*LP; player.extVel.z = mvz/dt*LP;
-    const vy=mvy/dt*LP; player.vel.y = (vy>=0) ? Math.max(player.vel.y, vy, 4) : Math.max(player.vel.y, vy);   // small upward pop so a horizontal whip still lifts off
+    _xaUp.set(0,1,0).applyQuaternion(o.quaternion);        // top-face normal in world space (tilts as the plank swings)
+    player.extVel.x = (_xaUp.x*sp + mvx/dt) * LP;
+    player.extVel.z = (_xaUp.z*sp + mvz/dt) * LP;
+    const vy = Math.max(mvy/dt, _xaUp.y*sp) * LP;          // vertical pop from whichever is stronger
+    player.vel.y = (vy>=0) ? Math.max(player.vel.y, vy, 4) : Math.max(player.vel.y, vy);
     player.onGround=false;
   } else {
     player.pos.x+=mvx; player.pos.y+=mvy; player.pos.z+=mvz;   // ride it (elevator / slow platform)
@@ -8924,7 +8930,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 180 · 2026-06-06';
+const BUILD_VERSION = 'build 181 · 2026-06-06';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10510,7 +10516,7 @@ function loop(){
   // apply horizontal movement (input + decaying knockback) with step/ramp/wall handling
   const feetY = player.pos.y - EYE;
   moveHorizontal(player.pos.x, player.pos.z, (player.vel.x+player.extVel.x)*dt, (player.vel.z+player.extVel.z)*dt, feetY);
-  { const kd = Math.max(0, 1 - 6*dt); player.extVel.x *= kd; player.extVel.z *= kd; }   // knockback fades
+  { const kd = Math.max(0, 1 - (player.onGround ? 6 : 0.6)*dt); player.extVel.x *= kd; player.extVel.z *= kd; }   // fades fast on the ground; a launch keeps its forward momentum through the air
 
   // apply vertical movement
   const prevY = player.pos.y;
