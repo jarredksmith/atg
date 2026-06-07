@@ -7496,7 +7496,7 @@ function loadLevelFromNet(level){
   // rebuild from the host's data
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p);  if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));
+    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p); if(p.nc){ obj.userData.noCollide=true; const _ci=colliders.indexOf(obj); if(_ci>=0) colliders.splice(_ci,1); } if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));
   }
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
@@ -8774,7 +8774,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 168 · 2026-06-06';
+const BUILD_VERSION = 'build 169 · 2026-06-06';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11054,6 +11054,7 @@ function propEntry(o){
   if(o.userData.xa && o.userData.xa.on){ const a=o.userData.xa; e.xa={ mode:a.mode||'loop', trig:a.trig||'auto', mx:a.mx||0, my:a.my||0, mz:a.mz||0, rx:a.rx||0, ry:a.ry||0, rz:a.rz||0, dur:a.dur||2 }; }
   if(o.userData.phys){ e.dyn=true; if(o.userData.mass!=null) e.mass=o.userData.mass;
     if(o.userData.noGrab) e.ng=true;
+    if(o.userData.noCollide) e.nc=true;
     if(o.userData.breakable===false) e.brk=false;   // breakable defaults true; only store when off
     else { if(o.userData.maxHp!=null) e.hp=o.userData.maxHp; if(o.userData.breakStyle==='puff') e.bst='puff';
       if(o.userData.fragCount!=null) e.fc=o.userData.fragCount;
@@ -11156,7 +11157,7 @@ function restoreLevel(level){
   propModels.length = 0;
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p);  if(p.att) obj.userData.attribution=p.att; }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));
+    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p); if(p.nc){ obj.userData.noCollide=true; const _ci=colliders.indexOf(obj); if(_ci>=0) colliders.splice(_ci,1); } if(p.att) obj.userData.attribution=p.att; }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));
   }
   // lights
   for(let i=lightModels.length-1;i>=0;i--) removeLight(i);
@@ -12083,6 +12084,13 @@ function renderEditorFields(){
         pcb.onchange=()=>{ pushUndoSnapshot(); setPropDynamic(sel, pcb.checked); renderEditorFields(); };
         const pspan=document.createElement('span'); pspan.textContent='Dynamic (reacts to physics)';
         plab.appendChild(pcb); plab.appendChild(pspan); animHost.appendChild(plab);
+        // Solid: when off, the player and bots pass straight through. Box colliders can't carve out a
+        // model's opening (e.g. a doorway/arch), so turn this off to walk through it.
+        const sol=document.createElement('label'); sol.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin-top:6px;cursor:pointer;';
+        const solcb=document.createElement('input'); solcb.type='checkbox'; solcb.checked=(sel.userData.noCollide!==true); solcb.style.accentColor='#38f5b5';
+        solcb.onchange=()=>{ pushUndoSnapshot(); const solid=solcb.checked; sel.userData.noCollide=!solid; const ci=colliders.indexOf(sel); if(solid){ if(ci<0){ refreshPropCollider(sel); colliders.push(sel); } } else if(ci>=0){ colliders.splice(ci,1); } };
+        const solsp=document.createElement('span'); solsp.innerHTML='<b>Solid</b> \u2014 blocks the player (turn off to walk through, e.g. a doorway)';
+        sol.appendChild(solcb); sol.appendChild(solsp); animHost.appendChild(sol);
         if(sel.userData.phys){
           // Weight (mass): higher = harder to knock around
           if(sel.userData.mass==null) sel.userData.mass = defaultMassFor(sel);
@@ -12964,6 +12972,7 @@ function toggleEditor(){
     setSceneWireframe(false);   // restore solid rendering
     buildInstancing();          // collapse repeated static shapes back into instances for play
     buildPhysWorld();           // (re)create rigid bodies for dynamic props + static colliders
+    if(typeof xaCapture==='function') xaCapture();   // re-base each animated prop to its current (edited) placement so position tweaks actually take effect
   }
 }
 
