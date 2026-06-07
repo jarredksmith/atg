@@ -5843,6 +5843,20 @@ function loadTextureCached(url){
   if('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace; else if('encoding' in tex) tex.encoding = 3001; // sRGBEncoding
   texCache[url] = tex; return tex;
 }
+// Per-prop texture instance keyed by URL + tiling. Identical (url,tile) usages share one GPU texture
+// (memory-friendly); two props using the same image at DIFFERENT tiling each get their own, so the tiling
+// you set on one prop never bleeds onto another.
+const _texInst = {};
+function texInstance(url, u, v){
+  const key = url + '|' + u + '|' + v;
+  if(_texInst[key]) return _texInst[key];
+  const loader = new THREE.TextureLoader(); loader.crossOrigin = 'anonymous';
+  const t = loader.load(url, undefined, undefined, (err)=>{ console.warn('Texture load failed for', url, '-', err && err.message); });
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  if('colorSpace' in t) t.colorSpace = THREE.SRGBColorSpace; else if('encoding' in t) t.encoding = 3001;
+  t.repeat.set(u||1, v||1);
+  _texInst[key] = t; return t;
+}
 function eachPrimMesh(obj, fn){ obj.traverse(o=>{ if(o.isMesh && o.material) fn(o); }); }
 
 // --- base color (tint) ---
@@ -5858,8 +5872,8 @@ function applyPropTexture(obj, url){
   obj.userData.tex = url || '';
   eachPrimMesh(obj, o=>{
     if(url){
-      const t = loadTextureCached(url); o.material.map = t;
-      const rep = obj.userData.texRepeat || [1,1]; t.repeat.set(rep[0], rep[1]);
+      const rep = obj.userData.texRepeat || [1,1];
+      o.material.map = texInstance(url, rep[0], rep[1]);   // per-prop instance keeps each prop's own tiling
       o.material.color.setHex(0xffffff);          // let the image show its true colors
     } else {
       o.material.map = null;
@@ -5876,13 +5890,14 @@ function applyPropTexRepeat(obj, u, v){
   obj.userData.texRepeat = [u, v];
   eachPrimMesh(obj, o=>{ if(o.material.map){ o.material.map.repeat.set(u, v); o.material.map.needsUpdate = true; } });
 }
+function applyPropTexRebind(obj){ if(obj && obj.userData.tex) applyPropTexture(obj, obj.userData.tex); }  // re-key per-prop texture to committed tiling
 
 // ---------- Texture search (Poly Haven, CC0) ----------
 // Poly Haven is free/CC0 and CORS-enabled, so its API + image CDN load directly (no proxy needed). We fetch
 // the full texture catalog once, filter it client-side (the API has no free-text search), and resolve the
 // chosen asset's color/diffuse map to a direct .jpg URL that drops into the existing applyPropTexture path.
 let _texCatalog = null;                  // cached [{id,name,hay}] of every Poly Haven texture
-let texLastQuery = '', texLastResults = [];
+let texLastQuery = '', texLastResults = [], texHiRes = false;
 function _texFetchCatalog(cb, errcb){
   if(_texCatalog){ cb(_texCatalog); return; }
   fetch('https://api.polyhaven.com/assets?t=textures')
@@ -5896,18 +5911,19 @@ function texSearch(query, cb, errcb){
   _texFetchCatalog(list=>{ const q=(query||'').trim().toLowerCase();
     const hits = q ? list.filter(a=>a.hay.indexOf(q)>=0) : list.slice(); cb(hits.slice(0,24)); }, errcb);
 }
-function _texPickDiffuse(files){
+function _texPickDiffuse(files, hi){
   if(!files) return null; const keys=Object.keys(files);
   const key = keys.find(k=>/^(diffuse|diff|color|col|albedo)$/i.test(k)) || keys.find(k=>/diff|color|albedo/i.test(k)) || keys[0];
   const m=files[key]; if(!m) return null;
-  const res = ['1k','2k','4k'].find(r=>m[r]) || Object.keys(m)[0]; const rr=m[res]; if(!rr) return null;
+  const order = hi ? ['2k','1k','4k'] : ['1k','2k','4k'];
+  const res = order.find(r=>m[r]) || Object.keys(m)[0]; const rr=m[res]; if(!rr) return null;
   const fmt = rr.jpg ? 'jpg' : (rr.png ? 'png' : Object.keys(rr)[0]); const f=rr[fmt];
   return (f && f.url) ? f.url : null;
 }
-function texResolve(id, cb, errcb){    // -> direct color-map .jpg URL for a Poly Haven texture id
+function texResolve(id, hi, cb, errcb){    // -> direct color-map .jpg URL (hi=true prefers 2K)
   fetch('https://api.polyhaven.com/files/'+encodeURIComponent(id))
     .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
-    .then(files=>{ const url=_texPickDiffuse(files); if(!url) throw new Error('no usable color map'); cb(url); })
+    .then(files=>{ const url=_texPickDiffuse(files, hi); if(!url) throw new Error('no usable color map'); cb(url); })
     .catch(errcb);
 }
 function renderTexSearch(host){
@@ -5918,7 +5934,10 @@ function renderTexSearch(host){
   const sRow=document.createElement('div'); sRow.className='row2'; sRow.style.marginBottom='4px';
   const q=document.createElement('input'); q.type='text'; q.placeholder='e.g. brick, wood, metal, grass'; q.value=texLastQuery;
   q.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
-  const sBtn=document.createElement('button'); sBtn.textContent='Search'; sRow.appendChild(q); sRow.appendChild(sBtn); host.appendChild(sRow);
+  const sBtn=document.createElement('button'); sBtn.textContent='Search'; sRow.appendChild(q); sRow.appendChild(sBtn);
+  const hiLab=document.createElement('label'); hiLab.title='Fetch 2K maps \u2014 sharper on big surfaces, more GPU memory'; hiLab.style.cssText='display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#9fe6cf;cursor:pointer;white-space:nowrap;';
+  const hiCb=document.createElement('input'); hiCb.type='checkbox'; hiCb.checked=texHiRes; hiCb.style.accentColor='#38f5b5'; hiCb.onchange=()=>{ texHiRes=hiCb.checked; };
+  hiLab.appendChild(hiCb); hiLab.appendChild(document.createTextNode('2K')); sRow.appendChild(hiLab); host.appendChild(sRow);
   const status=document.createElement('div'); status.className='hint'; status.style.margin='2px 0'; host.appendChild(status);
   const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:repeat(3,1fr);gap:5px;'; host.appendChild(grid);
   const renderGrid=(list)=>{ grid.innerHTML=''; if(!list||!list.length){ status.textContent=texLastQuery?'No matches.':''; return; } status.textContent='';
@@ -5927,7 +5946,7 @@ function renderTexSearch(host){
       cell.appendChild(img);
       cell.onclick=()=>{ const sel=editorTargets.props.obj(); if(!sel || !isShapePrimitive(sel.userData.src)){ status.textContent='Select a primitive first.'; return; }
         status.textContent='Loading '+a.name+'\u2026';
-        texResolve(a.id, (url)=>{ pushUndoSnapshot(); applyPropTexture(sel, url); status.textContent=a.name+' applied.'; const ti=document.getElementById('edTexInput'); if(ti) ti.value=url; },
+        texResolve(a.id, texHiRes, (url)=>{ pushUndoSnapshot(); applyPropTexture(sel, url); status.textContent=a.name+' applied.'; const ti=document.getElementById('edTexInput'); if(ti) ti.value=url; },
           (e)=>{ status.textContent='Could not load that texture: '+((e&&e.message)||e); }); };
       grid.appendChild(cell); }); };
   if(texLastResults.length) renderGrid(texLastResults);
@@ -8855,7 +8874,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 175 · 2026-06-06';
+const BUILD_VERSION = 'build 176 · 2026-06-06';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12438,10 +12457,11 @@ function renderEditorFields(){
       const rep=selObj.userData.texRepeat||[1,1];
       const rrow=document.createElement('div'); rrow.style.cssText='display:flex;align-items:center;gap:8px;margin-top:6px;';
       const rlbl=document.createElement('span'); rlbl.className='hint'; rlbl.textContent='Tile';
-      const ru=document.createElement('input'); ru.type='number'; ru.step='0.5'; ru.min='0.1'; ru.value=rep[0]; ru.className='valnum'; ru.style.width='52px';
-      const rv=document.createElement('input'); rv.type='number'; rv.step='0.5'; rv.min='0.1'; rv.value=rep[1]; rv.className='valnum'; rv.style.width='52px';
-      const setRep=()=>{ applyPropTexRepeat(selObj, Math.max(0.1,+ru.value||1), Math.max(0.1,+rv.value||1)); };
-      ru.oninput=setRep; rv.oninput=setRep; ru.addEventListener('focus',()=>pushUndoSnapshot()); rv.addEventListener('focus',()=>pushUndoSnapshot());
+      const ru=document.createElement('input'); ru.type='number'; ru.step='0.001'; ru.min='0.001'; ru.value=rep[0]; ru.className='valnum'; ru.style.width='62px';
+      const rv=document.createElement('input'); rv.type='number'; rv.step='0.001'; rv.min='0.001'; rv.value=rep[1]; rv.className='valnum'; rv.style.width='62px';
+      const setRep=()=>{ applyPropTexRepeat(selObj, Math.max(0.001,+ru.value||1), Math.max(0.001,+rv.value||1)); };
+      const commitRep=()=>{ applyPropTexRebind(selObj); };
+      ru.oninput=setRep; rv.oninput=setRep; ru.onchange=commitRep; rv.onchange=commitRep; ru.addEventListener('focus',()=>pushUndoSnapshot()); rv.addEventListener('focus',()=>pushUndoSnapshot());
       const x=document.createElement('span'); x.className='hint'; x.textContent='×';
       rrow.appendChild(rlbl); rrow.appendChild(ru); rrow.appendChild(x); rrow.appendChild(rv); matHost.appendChild(rrow);
       const tsHost=document.createElement('div'); tsHost.style.marginTop='8px'; matHost.appendChild(tsHost); renderTexSearch(tsHost);
