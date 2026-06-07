@@ -8936,7 +8936,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 186 · 2026-06-07';
+const BUILD_VERSION = 'build 187 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12681,7 +12681,20 @@ function renderEditorFields(){
     rng.min=fld.min; rng.max=fld.max; rng.step=fld.step; rng.value=tgt.state[fld.k];
     const commit = (raw, fromSlider)=>{
       let v = parseFloat(raw); if(isNaN(v)) return;
-      tgt.state[fld.k] = v;                              // typed numbers can exceed slider min/max
+      const isScale = (fld.k==='sx'||fld.k==='sy'||fld.k==='sz');
+      if(isScale && scaleProportional && editorActive==='props'){
+        // Proportional ON: dragging one scale axis scales all three together, preserving their ratios (matches the gizmo's uniform handle).
+        const old = tgt.state[fld.k] || 0.00001, ratio = v/old;
+        if(isFinite(ratio) && ratio>0){
+          tgt.state.sx = Math.max(0.00001, tgt.state.sx*ratio);
+          tgt.state.sy = Math.max(0.00001, tgt.state.sy*ratio);
+          tgt.state.sz = Math.max(0.00001, tgt.state.sz*ratio);
+          v = tgt.state[fld.k];
+        } else { tgt.state[fld.k] = v; }
+        for(const fi of editorFieldInputs){ if((fi.k==='sx'||fi.k==='sy'||fi.k==='sz') && fi.k!==fld.k){ fi.rng.value=tgt.state[fi.k]; fi.num.value=(+tgt.state[fi.k]).toFixed(5); } }   // refresh the sibling axes (leave the one being dragged alone)
+      } else {
+        tgt.state[fld.k] = v;                              // typed numbers can exceed slider min/max
+      }
       rng.value = v; num.value = fromSlider ? (+v).toFixed(5) : num.value;
       tgt.apply(); updateGizmo(); updateEditorOut();
     };
