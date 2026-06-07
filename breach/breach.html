@@ -5756,8 +5756,8 @@ function broadcastXAnim(i){ const o=propModels[i]; const dest=(o&&o.userData.xa)
   else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send({t:'xa', i, dest}); }catch(e){} } }
 const _xaCur=new THREE.Matrix4(), _xaPrevM=new THREE.Matrix4(), _xaDelta=new THREE.Matrix4(), _xaPt=new THREE.Vector3(), _xaPt2=new THREE.Vector3(), _xaPrevP=new THREE.Vector3(), _xaPrevQ=new THREE.Quaternion();
 const XA_LAUNCH=9;   // surface speed (m/s) past which a moving prop FLINGS the player (trebuchet/launcher) instead of carrying them (elevator)
-function _xaCarry(o, prevP, prevQ, dt){   // ride a moving/rotating prop while standing on it; a fast surface launches you off it
-  const b=o.userData.box; if(!b) return; const R=player.radius||0.4, feet=player.pos.y-EYE;
+function _xaCarry(o, b, prevP, prevQ, dt){   // ride a moving/rotating prop while standing on it; a fast surface launches you off it
+  if(!b) return; const R=player.radius||0.4, feet=player.pos.y-EYE;
   if(player.pos.x<b.min.x-R||player.pos.x>b.max.x+R||player.pos.z<b.min.z-R||player.pos.z>b.max.z+R) return;
   // how the player's contact point moves with the prop's FULL transform this frame (translation + rotation)
   _xaCur.copy(o.matrixWorld);
@@ -5771,8 +5771,9 @@ function _xaCarry(o, prevP, prevQ, dt){   // ride a moving/rotating prop while s
   const sp=Math.hypot(mvx,mvy,mvz)/Math.max(dt,1e-4);
   if(sp > XA_LAUNCH){
     // fling: imprint the surface velocity so the player sails off (extVel carries horizontally, vel.y arcs)
-    player.extVel.x = mvx/dt; player.extVel.z = mvz/dt;
-    const vy=mvy/dt; player.vel.y = (vy>=0) ? Math.max(player.vel.y, vy, 4) : Math.max(player.vel.y, vy);   // small upward pop so a horizontal whip still lifts off
+    const LP = (worldCfg && +worldCfg.launchPower) || 1;   // tunable launch strength (World panel)
+    player.extVel.x = mvx/dt*LP; player.extVel.z = mvz/dt*LP;
+    const vy=mvy/dt*LP; player.vel.y = (vy>=0) ? Math.max(player.vel.y, vy, 4) : Math.max(player.vel.y, vy);   // small upward pop so a horizontal whip still lifts off
     player.onGround=false;
   } else {
     player.pos.x+=mvx; player.pos.y+=mvy; player.pos.z+=mvz;   // ride it (elevator / slow platform)
@@ -5795,7 +5796,15 @@ function updateXAnim(dt){
     o.rotation.set(a.brx+(a.rx||0)*_XA_D2R*e, a.bry+(a.ry||0)*_XA_D2R*e, a.brz+(a.rz||0)*_XA_D2R*e);
     const dx=o.position.x-ox, dy=o.position.y-oy, dz=o.position.z-oz;
     const turns=(a.rx||a.ry||a.rz);   // a rotating prop's surface moves even when its origin doesn't
-    if(dx||dy||dz||turns){ o.updateMatrixWorld(true); if(colliders.indexOf(o)>=0||o.userData.box) refreshPropCollider(o); if(player.onGround) _xaCarry(o, _xaPrevP, _xaPrevQ, dt); }
+    if(dx||dy||dz||turns){
+      o.updateMatrixWorld(true);
+      // Carry/launch BEFORE refreshing the collider: the player is standing on the prop's PREVIOUS pose,
+      // so gate the ride on THAT box. Re-gating on the just-rotated box (whose footprint collapses toward
+      // the pivot as a plank tilts up) was ejecting the player mid-swing and dropping them through it.
+      const _xaOldBox = o.userData.box;
+      if(player.onGround) _xaCarry(o, _xaOldBox, _xaPrevP, _xaPrevQ, dt);
+      if(colliders.indexOf(o)>=0||o.userData.box) refreshPropCollider(o);
+    }
   }
 }
 const _pcV = new THREE.Vector3();
@@ -6335,7 +6344,7 @@ const player = {
 };
 const EYE = 1.7;            // standing camera height above the surface the player stands on
 // ---- World movement settings (editable in the editor's World panel; saved with the level) ----
-const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorTex:'', floorTexN:'', floorTexR:'', floorTile:0, wallColor:0x1a242b, wallTex:'', wallTexN:'', wallTexR:'', wallTile:0, sky_hdri:'', fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4 };
+const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, launchPower:1, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorTex:'', floorTexN:'', floorTexR:'', floorTile:0, wallColor:0x1a242b, wallTex:'', wallTexN:'', wallTexR:'', wallTile:0, sky_hdri:'', fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4 };
 let worldCfg = Object.assign({}, DEFAULT_WORLD, (savedLevel && savedLevel.world) || {});
 
 // Apply (or clear) a tiling texture on a shared material. Stores the current url on the material under
@@ -6429,6 +6438,7 @@ function applyWorldCfg(){
   worldCfg.walk   = Math.max(2,  +worldCfg.walk   || DEFAULT_WORLD.walk);
   worldCfg.run    = Math.max(worldCfg.walk, +worldCfg.run || DEFAULT_WORLD.run);
   worldCfg.jump   = Math.max(0,  +worldCfg.jump   || DEFAULT_WORLD.jump);
+  worldCfg.launchPower = Math.max(0.1, Math.min(5, +worldCfg.launchPower || DEFAULT_WORLD.launchPower));
   worldCfg.grav   = Math.max(1,  +worldCfg.grav   || DEFAULT_WORLD.grav);
   worldCfg.crouch = Math.max(1,  Math.min(worldCfg.walk, +worldCfg.crouch || DEFAULT_WORLD.crouch));
   // global lighting (saved with the level)
@@ -8897,7 +8907,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 177 · 2026-06-06';
+const BUILD_VERSION = 'build 179 · 2026-06-06';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9164,6 +9174,21 @@ function trimeshDescFor(o){
 }
 function addStaticColliderFor(o){
   if(!physWorld || !o) return;
+  // Animated prop (moving platform / trebuchet arm): build a KINEMATIC body and drive its pose each
+  // physics step (see updatePhysics) so it actually sweeps through — and launches — dynamic props.
+  // colliderDescFor(propShapeInfo) gives a body-local shape (scale baked into the half-extents), so the
+  // body only needs translation + rotation; primitives are exact, models get a rotating box approximation.
+  if(o.userData && o.userData.xa && o.userData.xa.on){
+    o.updateMatrixWorld(true);
+    const info = propShapeInfo(o), q = o.quaternion;
+    const rb = physWorld.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased()
+      .setTranslation(o.position.x, o.position.y, o.position.z)
+      .setRotation({ x:q.x, y:q.y, z:q.z, w:q.w }));
+    physWorld.createCollider(
+      colliderDescFor(info).setTranslation(info.off.x, info.off.y, info.off.z).setFriction(0.9).setRestitution(0.2), rb);
+    o.userData._kbody = rb;
+    return;
+  }
   if(o.userData && isShapePrimitive(o.userData.src)){
     o.updateMatrixWorld(true);
     const info = propShapeInfo(o), q = o.quaternion;
@@ -9204,6 +9229,7 @@ function destroyPhysWorld(){
   if(typeof clearFragments==='function') clearFragments();   // drop transient debris first, so its bodies aren't left dangling after free()
   if(physWorld){ try{ physWorld.free(); }catch(e){} physWorld = null; }
   for(const o of dynamicProps){ if(o.userData.phys) o.userData.phys.body = null; }
+  for(const o of colliders){ if(o.userData && o.userData._kbody) o.userData._kbody = null; }
   physAccum = 0;
 }
 function setPropDynamic(obj, on){
@@ -9582,6 +9608,12 @@ function updatePhysics(dt){
   driveAllHeld();   // command velocity of any grabbed prop toward its hold point before stepping
   if(!dynamicProps.length && !fragments.length){ physAccum = 0; return; }   // nothing dynamic to simulate (debris counts!)
   physAccum += Math.min(dt, 0.1);
+  // drive kinematic moving-platform bodies to this frame's animated pose; Rapier derives their velocity
+  // from the pose delta and imparts it to anything they sweep into (the trebuchet flinging a ball).
+  for(const o of colliders){ const kb = o.userData && o.userData._kbody; if(!kb) continue;
+    const q = o.quaternion;
+    kb.setNextKinematicTranslation({ x:o.position.x, y:o.position.y, z:o.position.z });
+    kb.setNextKinematicRotation({ x:q.x, y:q.y, z:q.z, w:q.w }); }
   let n = 0;
   while(physAccum >= PHYS_DT && n < PHYS_MAX_SUBSTEPS){ physWorld.step(); physAccum -= PHYS_DT; n++; }
   for(const obj of dynamicProps){
@@ -11680,6 +11712,7 @@ function renderEditorFields(){
     slider(worldHost, 'Run speed','run', 4, 100, 1);
     slider(worldHost, 'Crouch speed','crouch', 1, 40, 1);
     slider(worldHost, 'Jump','jump', 0, 30, 0.5);
+    slider(worldHost, 'Launch power','launchPower', 0.25, 4, 0.25);
     slider(worldHost, 'Gravity','grav', 5, 80, 1);
     hint(worldHost, '', '1px 0 8px').textContent = 'Crouch: hold Ctrl or C (R3 on a controller). Gravity change affects props on next Deploy.';
 
