@@ -40,11 +40,10 @@
   #editor .hint { color: #5a7d72; font-size: 11px; margin-bottom: 10px; }
   #editor .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
   /* primary mode switch — groups the panel so only the relevant tabs+sections show at once */
-  #editor .edModes { display:flex; gap:4px; margin-bottom:10px; }
-  #editor .edMode { flex:1; text-align:center; padding:7px 3px; cursor:pointer; font:700 11px 'Chakra Petch',ui-monospace,monospace; letter-spacing:.5px;
-    background:rgba(56,245,181,0.06); border:1px solid rgba(56,245,181,0.22); border-radius:6px; color:#7fb6a8; transition:background .12s,color .12s,border-color .12s; }
-  #editor .edMode:hover { filter:brightness(1.22); }
-  #editor .edMode.active { background:rgba(56,245,181,0.26); border-color:#38f5b5; color:#eafff7; }
+  #editor .edModes { display:flex; gap:2px; margin-bottom:12px; border-bottom:2px solid rgba(56,245,181,0.28); }
+  #editor .edMode { flex:1; text-align:center; padding:8px 3px 9px; cursor:pointer; font:700 11px 'Chakra Petch',ui-monospace,monospace; letter-spacing:.5px;
+    background:transparent; border:1px solid transparent; border-bottom:none; border-radius:7px 7px 0 0; color:#7fb6a8; margin-bottom:-2px; transition:background .12s,color .12s; }
+  #editor .edMode:hover { filter:brightness(1.25); }
   #editor .tab {
     flex: 1; text-align: center; padding: 5px 0; cursor: pointer;
     background: rgba(56,245,181,0.08); border: 1px solid rgba(56,245,181,0.25);
@@ -9023,7 +9022,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 201 · 2026-06-07';
+const BUILD_VERSION = 'build 202 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11299,6 +11298,7 @@ const EDITOR_MODES = ['build','scene','enemies','rules','kit','files'];
 const MODE_LABEL = { build:'Build', scene:'Scene', enemies:'Enemies', rules:'Rules', kit:'Weapons', files:'Save' };
 const MODE_COLOR = { build:'#38f5b5', scene:'#5db4ff', enemies:'#ff6b8a', rules:'#ffd166', kit:'#ff9b5b', files:'#b69cff' };   // per-mode accent so the buttons read as distinct sections
 function _hexRgba(hex,a){ const nn=parseInt(hex.replace('#',''),16); return 'rgba('+((nn>>16)&255)+','+((nn>>8)&255)+','+(nn&255)+','+a+')'; }
+const SHOW_MODEL_LIBRARY = false;   // hardcoded model-library chips hidden for now (to be rebuilt); flip true to restore
 const MODE_SECTIONS = {
   build:   ['gizmo','object','material','transform'],
   scene:   ['world'],
@@ -11331,13 +11331,24 @@ function applyEditorMode(){
   editorEl.querySelectorAll('#edModes .edMode').forEach(b=>{
     const c = MODE_COLOR[b.dataset.mode] || '#38f5b5', on = b.dataset.mode===editorMode;
     b.classList.toggle('active', on);
-    b.style.borderColor = on ? c : _hexRgba(c,0.32);
-    b.style.background  = on ? _hexRgba(c,0.24) : _hexRgba(c,0.06);
+    b.style.borderColor = on ? c : 'transparent';
+    b.style.background  = on ? _hexRgba(c,0.20) : 'transparent';
     b.style.color       = on ? '#f4fffb' : c;
   });
 }
 // Switch the primary mode. fromSelection=true keeps editorActive (we just clicked an object of this mode);
 // a manual mode click instead snaps editorActive to the mode's first target so its Transform shows something valid.
+function applyContextualSections(){
+  if(!editorEl) return;
+  const CTX = { gizmo:['edGizmo'], material:['edMaterial'], object:['edShapes','edModels','edUrl','edPicker','edAnim','edLibrary'] };
+  const modeSecs = MODE_SECTIONS[editorMode] || [];
+  for(const key in CTX){
+    if(modeSecs.indexOf(key)<0) continue;
+    const el = editorEl.querySelector('.edSection[data-sec="'+key+'"]'); if(!el) continue;
+    const has = CTX[key].some(id=>{ const h=editorEl.querySelector('#'+id); return h && h.innerHTML.trim()!==''; });
+    el.style.display = has ? '' : 'none';
+  }
+}
 function setEditorMode(mode, fromSelection){
   if(EDITOR_MODES.indexOf(mode)<0) mode='build';
   editorMode = mode;
@@ -11807,7 +11818,7 @@ function buildEditorPanel(){
     + '<div class="tabs" id="edTabs"></div>'
     + '<div class="row2" id="edView" style="margin-bottom:8px"></div>'
     + sec('Gizmo', 'gizmo', '<div id="edGizmo"></div>')
-    + sec('Object &amp; selection', 'object', '<div id="edPicker"></div><div id="edLibrary"></div><div id="edModels"></div><div id="edAnim"></div><div id="edUrl"></div>')
+    + sec('Object &amp; selection', 'object', '<div id="edShapes"></div><div id="edModels"></div><div id="edUrl"></div><div id="edPicker"></div><div id="edAnim"></div><div id="edLibrary"></div>')
     + sec('Material', 'material', '<div id="edMaterial"></div>')
     + sec('Transform', 'transform', '<div id="edFields"></div>')
     + sec('World', 'world', '<div id="edWorld"></div>')
@@ -12437,7 +12448,7 @@ function renderEditorFields(){
   const gz = editorEl.querySelector('#edGizmo');
   if(gz){
     gz.innerHTML = '';
-    const selectable = (editorActive==='props' || editorActive==='station' || editorActive==='lights');
+    const selectable = (editorActive==='station') || (editorActive==='props' && !!editorTargets.props.obj()) || (editorActive==='lights' && !!editorTargets.lights.obj());
     if(selectable){
       const head = document.createElement('div'); head.className='hint'; head.style.margin='2px 0 3px'; head.innerHTML='<b>Gizmo</b> — drag the handles in the scene · keys <b>1 2 3</b>' + (isGroupSel() ? (' · <b style="color:#38f5b5">'+activeSel().length+' selected (group)</b>') : '');
       gz.appendChild(head);
@@ -12468,7 +12479,7 @@ function renderEditorFields(){
   const lib = editorEl.querySelector('#edLibrary');
   if(lib){
     lib.innerHTML = '';
-    if(tgt.addable && tgt.urlField){   // the Props target
+    if(SHOW_MODEL_LIBRARY && tgt.addable && tgt.urlField){   // the Props target (hidden for now)
       const head = document.createElement('div'); head.className='hint'; head.style.margin='4px 0 4px';
       head.innerHTML = '<b>Model library</b> — click to add (drops in front of you, then move/scale it). Needs network.';
       lib.appendChild(head);
@@ -12750,15 +12761,20 @@ function renderEditorFields(){
       const pHint=document.createElement('div'); pHint.className='hint'; pHint.style.margin='3px 0 0'; pHint.textContent='Preview avatar is in front of you. Tap a state to test its clip; in-game it switches automatically with movement.';
       urlHost.appendChild(pHint);
     }
+  }
+  // Add-shape primitives rendered at the TOP of the object section (its own host)
+  const shapesHost = editorEl.querySelector('#edShapes');
+  if(shapesHost){
+    shapesHost.innerHTML='';
     if(tgt.addable){
-      const shapeHead = document.createElement('div'); shapeHead.className='hint'; shapeHead.style.margin='8px 0 3px'; shapeHead.innerHTML='<b>Add shape</b> — drops in front of you, then move/scale it';
-      urlHost.appendChild(shapeHead);
+      const shapeHead = document.createElement('div'); shapeHead.className='hint'; shapeHead.style.margin='2px 0 3px'; shapeHead.innerHTML='<b>Add shape</b> — drops in front of you, then move/scale it';
+      shapesHost.appendChild(shapeHead);
       const srow = document.createElement('div'); srow.className='row2';
       for(const [src,label] of [['box','Box'],['sphere','Sphere'],['cylinder','Cylinder'],['cone','Cone']]){
         const b=document.createElement('button'); b.textContent=label; b.onclick=()=>{ addSceneProp(src); };
         srow.appendChild(b);
       }
-      urlHost.appendChild(srow);
+      shapesHost.appendChild(srow);
     }
   }
   // ---- Material section (selected shape primitive only): color, texture+tiling, emissive light ----
@@ -12921,6 +12937,7 @@ function renderEditorFields(){
   // live preview the aimed pose while the Aim tab is open, and highlight the selected scene object
   editorAimPreview = (editorOpen && editorActive==='aim');
   updateSelectionHighlight();
+  applyContextualSections();   // hide Gizmo/Material/Object when the selection gives them nothing to show
   updateEditorOut();
 }
 // push the active target's state back into the on-screen slider/number inputs (e.g. after a gizmo drag)
