@@ -39,6 +39,12 @@
   #editor h3 { margin: 0 0 6px; font-size: 13px; color: #38f5b5; letter-spacing: .04em; }
   #editor .hint { color: #5a7d72; font-size: 11px; margin-bottom: 10px; }
   #editor .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+  /* primary mode switch — groups the panel so only the relevant tabs+sections show at once */
+  #editor .edModes { display:flex; gap:4px; margin-bottom:10px; }
+  #editor .edMode { flex:1; text-align:center; padding:7px 3px; cursor:pointer; font:700 11px 'Chakra Petch',ui-monospace,monospace; letter-spacing:.5px;
+    background:rgba(56,245,181,0.06); border:1px solid rgba(56,245,181,0.22); border-radius:6px; color:#7fb6a8; transition:background .12s,color .12s,border-color .12s; }
+  #editor .edMode:hover { background:rgba(56,245,181,0.16); color:#cfeee2; }
+  #editor .edMode.active { background:rgba(56,245,181,0.26); border-color:#38f5b5; color:#eafff7; }
   #editor .tab {
     flex: 1; text-align: center; padding: 5px 0; cursor: pointer;
     background: rgba(56,245,181,0.08); border: 1px solid rgba(56,245,181,0.25);
@@ -9017,7 +9023,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 199 · 2026-06-07';
+const BUILD_VERSION = 'build 200 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11286,6 +11292,59 @@ const editorTargets = {
   },
 };
 let editorActive = 'gun';
+// ---- Editor MODES: one primary switch that gates which target-tabs + sections are shown, so a new user
+// sees a handful of relevant controls instead of the whole panel at once. Each target/section lives in
+// exactly one mode. (Purely a visibility layer — every panel's editing logic is unchanged.)
+const EDITOR_MODES = ['build','scene','rules','kit','files'];
+const MODE_LABEL = { build:'Build', scene:'Scene', rules:'Rules', kit:'Weapons', files:'Save' };
+const MODE_SECTIONS = {
+  build: ['gizmo','object','material','transform'],
+  scene: ['world'],
+  rules: ['game','enemies','loot'],
+  kit:   ['transform','sounds'],
+  files: ['levelfile','campaign'],
+};
+const MODE_TARGETS = {
+  build: ['props','lights','spawns','station','player','extract'],
+  scene: [],
+  rules: [],
+  kit:   ['gun','aim','grenade'],
+  files: [],
+};
+const TARGET_MODE = {};   // reverse: which mode owns each target tab
+for(const _m of EDITOR_MODES) for(const _t of MODE_TARGETS[_m]) TARGET_MODE[_t]=_m;
+let editorMode = 'build';
+try{ const _sm = localStorage.getItem('breach_editor_mode'); if(_sm && EDITOR_MODES.indexOf(_sm)>=0) editorMode = _sm; }catch(e){}
+// Show only this mode's target-tabs + sections; hide the rest. Highlights the active mode button.
+function applyEditorMode(){
+  if(!editorEl) return;
+  const secs = MODE_SECTIONS[editorMode] || [];
+  editorEl.querySelectorAll('.edSection').forEach(sx=>{ sx.style.display = (secs.indexOf(sx.dataset.sec)>=0) ? '' : 'none'; });
+  const tgts = MODE_TARGETS[editorMode] || [];
+  editorEl.querySelectorAll('#edTabs .tab').forEach(t=>{ t.style.display = (tgts.indexOf(t.dataset.key)>=0) ? '' : 'none'; });
+  const tabRow = editorEl.querySelector('#edTabs'); if(tabRow) tabRow.style.display = tgts.length ? 'flex' : 'none';   // no target picker in Scene/Rules/Save
+  const view = editorEl.querySelector('#edView'); if(view) view.style.display = (editorMode==='build'||editorMode==='scene') ? 'flex' : 'none';   // placement aids only where they help
+  editorEl.querySelectorAll('#edModes .edMode').forEach(b=>b.classList.toggle('active', b.dataset.mode===editorMode));
+}
+// Switch the primary mode. fromSelection=true keeps editorActive (we just clicked an object of this mode);
+// a manual mode click instead snaps editorActive to the mode's first target so its Transform shows something valid.
+function setEditorMode(mode, fromSelection){
+  if(EDITOR_MODES.indexOf(mode)<0) mode='build';
+  editorMode = mode;
+  try{ localStorage.setItem('breach_editor_mode', mode); }catch(e){}
+  if(!fromSelection){
+    const ts = MODE_TARGETS[mode];
+    if(ts.length && ts.indexOf(editorActive)<0){
+      editorActive = ts[0];
+      if(editorActive==='gun' && editorTargets.gun.syncFromWeapon) editorTargets.gun.syncFromWeapon();
+      if(editorActive==='grenade' && editorTargets.grenade.sync) editorTargets.grenade.sync();
+    }
+  }
+  applyEditorMode();
+  renderEditorFields();
+}
+// Clicking an object in the scene sets editorActive; jump to the mode that owns that target so its panels show.
+function syncModeToActive(){ const owner = TARGET_MODE[editorActive]; if(owner && owner!==editorMode) setEditorMode(owner, true); }
 let editorEl = null;
 
 // Default animation behavior applied to newly added animated props (editor toggle controls it).
@@ -11734,6 +11793,7 @@ function buildEditorPanel(){
     + '<h3>LEVEL / TRANSFORM EDITOR</h3>'
     + '<div class="hint">Click an object to select it. <b>Shift+click</b> props to multi-select. Use <b>Move / Rotate / Scale</b> + the handles, or type values. <b>Shift+D</b> duplicates, <b>Delete</b> removes. Drag the left edge to resize. Press <b>P</b> to close.</div>'
     + '<div class="row2" style="margin:0 0 8px"><button id="edPlay" style="background:rgba(56,245,181,0.22);color:#eafff7;font-weight:600">▶ Play level</button><button id="edMenu">⌂ Main menu</button></div>'
+    + '<div class="edModes" id="edModes"></div>'
     + '<div class="tabs" id="edTabs"></div>'
     + '<div class="row2" id="edView" style="margin-bottom:8px"></div>'
     + sec('Gizmo', 'gizmo', '<div id="edGizmo"></div>')
@@ -11770,7 +11830,7 @@ function buildEditorPanel(){
   })();
   // collapsible section headers (state persists in localStorage so it survives reopening the editor)
   let secState = {}; try{ secState = JSON.parse(localStorage.getItem('breach_editor_sections')||'{}') || {}; }catch(e){}
-  const defaultCollapsed = { material:true, world:true, enemies:true, loot:true, sounds:true, levelfile:true, campaign:true };   // keep Gizmo/Object/Transform open by default
+  const defaultCollapsed = { material:true, enemies:true, loot:true, sounds:true, campaign:true };   // collapse secondary sections; primary ones (Gizmo/Object/Transform/World/Game/Level file) start open
   p.querySelectorAll('.edSection').forEach(s=>{
     const k = s.dataset.sec;
     const collapsed = (k in secState) ? secState[k]===true : !!defaultCollapsed[k];
@@ -11788,6 +11848,8 @@ function buildEditorPanel(){
     b.onclick = ()=>{ editorActive = key; if(key==='gun' && editorTargets.gun.syncFromWeapon) editorTargets.gun.syncFromWeapon(); if(key==='grenade' && editorTargets.grenade.sync) editorTargets.grenade.sync(); renderEditorFields(); };
     tabs.appendChild(b);
   }
+  const modeRow = p.querySelector('#edModes');
+  if(modeRow){ for(const m of EDITOR_MODES){ const mb=document.createElement('div'); mb.className='edMode'; mb.dataset.mode=m; mb.textContent=MODE_LABEL[m]; mb.title=m; mb.onclick=()=>setEditorMode(m); modeRow.appendChild(mb); } }
   p.querySelector('#edReset').onclick = ()=>{ resetEditorTarget(editorActive); };
   p.querySelector('#edPlay').onclick = ()=>{ startGame(); };           // test the live-built level immediately (no save/reload)
   p.querySelector('#edMenu').onclick = ()=>{ editorToMenu(); };        // back to the start overlay
@@ -11846,7 +11908,7 @@ function buildEditorPanel(){
     };
     reader.readAsText(file);
   };
-  renderEditorFields();
+  setEditorMode(editorMode);   // apply mode visibility + render (replaces the bare initial render)
 }
 
 function renderEditorFields(){
@@ -13276,7 +13338,7 @@ renderer.domElement.addEventListener('click', (e)=>{
     } else {
       selProps = obj ? [obj] : [];
     }
-    editorActive='props'; renderEditorFields();
+    editorActive='props'; syncModeToActive(); renderEditorFields();
   } else if(picked==='lights'){
     const g = lightModels[editorTargets.lights.idx];
     if(e.shiftKey && g){
@@ -13288,8 +13350,8 @@ renderer.domElement.addEventListener('click', (e)=>{
     } else {
       selLights = g ? [g] : [];
     }
-    editorActive='lights'; renderEditorFields();
-  } else if(picked){ selProps.length=0; selLights.length=0; editorActive=picked; renderEditorFields(); }
+    editorActive='lights'; syncModeToActive(); renderEditorFields();
+  } else if(picked){ selProps.length=0; selLights.length=0; editorActive=picked; syncModeToActive(); renderEditorFields(); }
 });
 
 function updateEditorOut(){
@@ -13361,6 +13423,7 @@ function toggleEditor(){
     if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(true);
     const mm=$('minimap'); if(mm) mm.style.display='none';        // declutter combat HUD while editing
     const wp=$('wavePanel'); if(wp) wp.style.display='none';
+    if(typeof applyEditorMode==='function') applyEditorMode();
     renderEditorFields();
   } else {
     if(editorEl) editorEl.style.display = 'none';
