@@ -565,7 +565,7 @@
     <h2>INSTRUCTIONS</h2>
     <div id="controls">
       <b>WASD</b> move &nbsp;·&nbsp; <b>MOUSE</b> look &nbsp;·&nbsp; <b>L-CLICK</b> fire &nbsp;·&nbsp; <b>R-CLICK</b> aim &nbsp;·&nbsp; <b>SHIFT</b> sprint &nbsp;·&nbsp; <b>SPACE</b> jump &nbsp;·&nbsp; <b>SPRINT+CROUCH</b> slide<br>
-      <b>R</b> reload &nbsp;·&nbsp; <b>G</b> throw grenade &nbsp;·&nbsp; <b>E</b> use station / open cache &nbsp;·&nbsp; <b>1·2·3</b> / <b>scroll</b> weapons<br>
+      <b>R</b> reload &nbsp;·&nbsp; <b>V</b> melee (auto when dry) &nbsp;·&nbsp; <b>G</b> throw grenade &nbsp;·&nbsp; <b>E</b> use station / open cache &nbsp;·&nbsp; <b>1·2·3</b> / <b>scroll</b> weapons<br>
       <b>ESC</b> pause &nbsp;·&nbsp; <b>P</b> open the in-game model/transform editor<br>
       <span style="color:#ffd166">Kill enemies for ◆ credits — spend them at the ammo station and supply caches.</span>
       <div id="padNote" style="display:none;margin-top:10px;color:#38f5b5">🎮 Controller connected — <b>L-stick</b> move · <b>R-stick</b> look · <b>RT</b> fire · <b>LT</b> aim · <b>A</b> jump · <b>X</b> reload · <b>Y</b> use · <b>B</b> grenade · <b>LB/RB</b> weapons · <b>L3</b> sprint · <b>any button</b> deploys &nbsp; <span style="color:#5a7d72">(press <b>`</b> for controller test)</span></div>
@@ -5785,6 +5785,42 @@ function _xaCarry(o, b, prevP, prevQ, dt){   // ride a moving/rotating prop whil
     player.pos.x+=mvx; player.pos.y+=mvy; player.pos.z+=mvz;   // ride it (elevator / slow platform)
   }
 }
+function _xaCarryBot(o, b, prevP, prevQ, dt, bot){   // same ride/launch as the player, but for an AI enemy standing on a moving prop
+  if(!b) return; const R=0.5, feet=bot.pos.y;
+  if(bot.pos.x<b.min.x-R||bot.pos.x>b.max.x+R||bot.pos.z<b.min.z-R||bot.pos.z>b.max.z+R) return;
+  _xaCur.copy(o.matrixWorld); _xaPrevM.compose(prevP, prevQ, o.scale); _xaDelta.multiplyMatrices(_xaCur, _xaPrevM.invert());
+  _xaPt.set(bot.pos.x, feet, bot.pos.z); _xaPt2.copy(_xaPt).applyMatrix4(_xaDelta);
+  const mvx=_xaPt2.x-_xaPt.x, mvy=_xaPt2.y-_xaPt.y, mvz=_xaPt2.z-_xaPt.z;
+  const lift=Math.abs(mvy);
+  if(feet < b.max.y-0.5-lift || feet > b.max.y+0.7+lift) return;
+  const sp=Math.hypot(mvx,mvy,mvz)/Math.max(dt,1e-4);
+  if(sp > XA_LAUNCH){
+    const LP=(worldCfg && +worldCfg.launchPower)||1;
+    _xaUp.set(0,1,0).applyQuaternion(o.quaternion);
+    bot.evx=(_xaUp.x*sp + mvx/dt)*LP; bot.evz=(_xaUp.z*sp + mvz/dt)*LP;
+    const vy=Math.max(mvy/dt, _xaUp.y*sp)*LP;
+    bot.vy=(vy>=0)?Math.max(bot.vy||0, vy, 4):Math.max(bot.vy||0, vy);
+    bot.grounded=false;
+  } else {
+    bot.pos.x+=mvx; bot.pos.y+=mvy; bot.pos.z+=mvz;   // ride a slow platform
+  }
+}
+function _xaCarryEnemy(o, b, prevP, prevQ, dt, en){   // a fast-moving prop flings a single-player enemy off it (enemies hover, so launch-only)
+  if(!b) return; const R=0.6, feet=en.mesh.position.y-1.2;
+  if(en.mesh.position.x<b.min.x-R||en.mesh.position.x>b.max.x+R||en.mesh.position.z<b.min.z-R||en.mesh.position.z>b.max.z+R) return;
+  _xaCur.copy(o.matrixWorld); _xaPrevM.compose(prevP, prevQ, o.scale); _xaDelta.multiplyMatrices(_xaCur, _xaPrevM.invert());
+  _xaPt.set(en.mesh.position.x, feet, en.mesh.position.z); _xaPt2.copy(_xaPt).applyMatrix4(_xaDelta);
+  const mvx=_xaPt2.x-_xaPt.x, mvy=_xaPt2.y-_xaPt.y, mvz=_xaPt2.z-_xaPt.z;
+  const lift=Math.abs(mvy);
+  if(feet < b.max.y-0.7-lift || feet > b.max.y+0.9+lift) return;
+  const sp=Math.hypot(mvx,mvy,mvz)/Math.max(dt,1e-4);
+  if(sp > XA_LAUNCH){
+    const LP=(worldCfg && +worldCfg.launchPower)||1;
+    _xaUp.set(0,1,0).applyQuaternion(o.quaternion);
+    en.evx=(_xaUp.x*sp + mvx/dt)*LP; en.evz=(_xaUp.z*sp + mvz/dt)*LP;
+    const vy=Math.max(mvy/dt, _xaUp.y*sp)*LP; en.vy=(vy>=0)?Math.max(en.vy||0, vy, 4):Math.max(en.vy||0, vy); en.grounded=false;
+  }
+}
 function updateXAnim(dt){
   if(!gameOn || editorOpen || paused) return;
   for(const o of propModels){
@@ -5809,6 +5845,8 @@ function updateXAnim(dt){
       // the pivot as a plank tilts up) was ejecting the player mid-swing and dropping them through it.
       const _xaOldBox = o.userData.box;
       if(player.onGround) _xaCarry(o, _xaOldBox, _xaPrevP, _xaPrevQ, dt);
+      if(bots && bots.length){ for(const _bt of bots){ if(!_bt.dead && _bt.grounded!==false) _xaCarryBot(o, _xaOldBox, _xaPrevP, _xaPrevQ, dt, _bt); } }
+      if(enemies && enemies.length){ for(const _en of enemies){ if(_en.grounded!==false) _xaCarryEnemy(o, _xaOldBox, _xaPrevP, _xaPrevQ, dt, _en); } }
       if(colliders.indexOf(o)>=0||o.userData.box) refreshPropCollider(o);
     }
   }
@@ -6594,6 +6632,7 @@ addEventListener('keydown', e=>{
   if(e.code==='KeyM'){ const m=toggleMute(); if(typeof flashToast==='function') flashToast(m?'Muted':'Sound on'); return; }
   if(editorOpen) return;   // ignore gameplay keys while editing
   if(e.code==='KeyR') reload();
+  if(e.code==='KeyV') meleeAttack();
   if(e.code==='KeyE') interact();
   if(e.code==='KeyG') grabAction();   // grab / drop a prop (grenade moved to F)
   if(e.code==='KeyF') throwGrenade();
@@ -7060,7 +7099,7 @@ function spawnEnemy(spawn){
   mesh.userData.enemyType = typeKey;   // read by buildEnemyVisual for per-type scale + tint
   buildEnemyVisual(mesh);
   scene.add(mesh);
-  const e = { id: nextEnemyId++, mesh, hp:ty.hp, maxHp:ty.hp, speed: ty.speedMin + Math.random()*(ty.speedMax-ty.speedMin), dmg:ty.dmg, type:typeKey, lastHit:0, cooldown:0,
+  const e = { id: nextEnemyId++, mesh, hp:ty.hp, maxHp:ty.hp, speed: ty.speedMin + Math.random()*(ty.speedMax-ty.speedMin), dmg:ty.dmg, type:typeKey, vy:0, evx:0, evz:0, grounded:true, launchY:0, lastHit:0, cooldown:0,
     ranged: !!ty.ranged, standoff: ty.standoff||11, fireCd: ty.fireCd||1.5, projSpeed: ty.projSpeed||24, shootCd: 0.4 + Math.random()*0.8,
     mode: (spawn && spawn.mode) ? spawn.mode : 'hunt',
     home: spawn ? { x:px, z:pz } : null,
@@ -7410,7 +7449,7 @@ function spawnBots(n){
     if(teamMode()){ let c0=(NET.team===0?1:0), c1=(NET.team===1?1:0); for(const b of bots){ if(b.team===0)c0++; else if(b.team===1)c1++; } team=(c0<=c1)?0:1; }
     const nm=BOT_NAMES[i%BOT_NAMES.length]+(i>=BOT_NAMES.length?(' '+(i+1)):'');
     const sp=randomSpawn(); const mesh=makeBot(team, nm); mesh.userData.botId=id; mesh.position.set(sp.x,0,sp.z); mesh.rotation.y=sp.yaw;
-    bots.push({ id, team, name:nm, mesh, pos:new THREE.Vector3(sp.x,0,sp.z), yaw:sp.yaw, hp:100, maxHp:100, dead:false, respawnT:0, fireCd:Math.random()*0.6, strafe:Math.random()<0.5?1:-1, retargetT:0, target:null });
+    bots.push({ id, team, name:nm, mesh, pos:new THREE.Vector3(sp.x,0,sp.z), yaw:sp.yaw, hp:100, maxHp:100, dead:false, respawnT:0, fireCd:Math.random()*0.6, strafe:Math.random()<0.5?1:-1, retargetT:0, target:null, vy:0, evx:0, evz:0, grounded:true });
     if(teamMode()) NET.teams[id]=team;
     NET.duelScore[id]=0;
   }
@@ -7437,7 +7476,7 @@ function updateBots(dt){
   if(NET.mode!=='host' || !pvpMode() || !gameOn || !bots.length) return;
   const koth = NET.gameMode==='cp', lim=ARENA-2, spd=SPEED*0.85;
   for(const b of bots){
-    if(b.dead){ b.respawnT-=dt; if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,0,sp.z); b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; if(b.mesh){ b.mesh.visible=true; b.mesh.position.set(sp.x,0,sp.z); } } continue; }
+    if(b.dead){ b.respawnT-=dt; if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,0,sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; if(b.mesh){ b.mesh.visible=true; b.mesh.position.set(sp.x,0,sp.z); } } continue; }
     b.retargetT-=dt;
     if(b.retargetT<=0 || !_botTargetAlive(b.target)){ b.target=_botAcquire(b); b.retargetT=0.4+Math.random()*0.3; }
     const tgt=b.target;
@@ -7449,10 +7488,22 @@ function updateBots(dt){
     if(tgt && dist<9 && !(koth && !cpOwnedBy(b.team))){ mvx=(-dz/dist)*b.strafe; mvz=(dx/dist)*b.strafe; if(Math.random()<0.012) b.strafe*=-1; }
     else { mvx=dx/dist; mvz=dz/dist; }
     const ox=b.pos.x, oz=b.pos.z;
-    let nx=Math.max(-lim,Math.min(lim, b.pos.x+mvx*spd*dt)), nz=Math.max(-lim,Math.min(lim, b.pos.z+mvz*spd*dt));
-    if(typeof clearAt!=='function' || clearAt(nx,nz,0)){ b.pos.x=nx; b.pos.z=nz; } else { b.strafe*=-1; }
+    if(b.grounded!==false){   // walk only with feet on a surface; while airborne, momentum carries it
+      let nx=Math.max(-lim,Math.min(lim, b.pos.x+mvx*spd*dt)), nz=Math.max(-lim,Math.min(lim, b.pos.z+mvz*spd*dt));
+      if(typeof clearAt!=='function' || clearAt(nx,nz,b.pos.y)){ b.pos.x=nx; b.pos.z=nz; } else { b.strafe*=-1; }
+    }
+    if(b.evx||b.evz){   // launch momentum from a trebuchet / moving platform, fading once grounded
+      b.pos.x=Math.max(-lim,Math.min(lim, b.pos.x+b.evx*dt)); b.pos.z=Math.max(-lim,Math.min(lim, b.pos.z+b.evz*dt));
+      const kd=Math.max(0, 1-((b.grounded?6:0.6))*dt); b.evx*=kd; b.evz*=kd;
+      if(Math.abs(b.evx)<0.05) b.evx=0; if(Math.abs(b.evz)<0.05) b.evz=0;
+    }
+    { const top=(typeof surfaceTopAt==='function')?surfaceTopAt(b.pos.x,b.pos.z):-Infinity;   // gravity + land on the floor or a prop top under the feet
+      const groundY=(top>-Infinity && top<=b.pos.y+STEP)?Math.max(0,top):0;
+      if(b.pos.y>groundY+0.04 || (b.vy||0)>0){ b.vy=(b.vy||0)-GRAV*dt; b.pos.y+=b.vy*dt; if(b.vy<=0 && b.pos.y<=groundY){ b.pos.y=groundY; b.vy=0; b.grounded=true; } else b.grounded=false; }
+      else { b.pos.y=groundY; b.vy=0; b.grounded=true; }
+    }
     b.yaw = tgt ? Math.atan2(tgt.pos.x-b.pos.x, tgt.pos.z-b.pos.z) : Math.atan2(mvx,mvz);
-    if(b.mesh){ b.mesh.position.set(b.pos.x,0,b.pos.z); b.mesh.rotation.y=b.yaw;
+    if(b.mesh){ b.mesh.position.set(b.pos.x,b.pos.y,b.pos.z); b.mesh.rotation.y=b.yaw;
       if(b.mesh.userData.hasModel && b.mesh.userData.visual && b.mesh.userData.visual.userData.stateActions){
         const md=Math.hypot(b.pos.x-ox, b.pos.z-oz);
         let st = md>0.06 ? 'run' : (md>0.015 ? 'walk' : 'idle');
@@ -8372,6 +8423,12 @@ function updateFlipbooks(dt){
   }
 }
 
+function _blastLaunch(actor, cx, cy, cz, R, f){   // shove an AI actor (enemy or bot) away from a blast center + pop it up, scaled by falloff f
+  const ax = actor.pos ? actor.pos.x : actor.mesh.position.x, az = actor.pos ? actor.pos.z : actor.mesh.position.z;
+  const kx=ax-cx, kz=az-cz, kh=Math.hypot(kx,kz)||1, LP=(worldCfg&&+worldCfg.launchPower)||1, kb=(8+R*1.2)*f*LP;
+  actor.evx=(actor.evx||0)+(kx/kh)*kb; actor.evz=(actor.evz||0)+(kz/kh)*kb;
+  actor.vy=Math.max(actor.vy||0,(5+R*0.6)*f*LP); actor.grounded=false;
+}
 function explodeGrenade(g){
   SFX.explode();
   // camera shake — stronger the closer the player is to the blast
@@ -8396,8 +8453,9 @@ function explodeGrenade(g){
   for(const en of enemies.slice()){
     const d = en.mesh.position.distanceTo(g.mesh.position);
     if(d < R){
-      const dmg = GRENADE.damage * (1 - d/R);
-      en.hp -= dmg;
+      const f = 1 - d/R;
+      en.hp -= GRENADE.damage * f;
+      _blastLaunch(en, g.mesh.position.x, g.mesh.position.y, g.mesh.position.z, R, f);   // launch the enemy
       if(en.hp<=0) killEnemy(en);
     }
   }
@@ -8422,9 +8480,9 @@ function explodeAt(pos, R, dmg, byId){
   for(let i=0;i<(usedSheet?6:14);i++) spark(pos, 0xffaa44);
   if(NET.mode==='client') return;   // host/solo author the damage
   if(!pvpMode()){
-    for(const en of enemies.slice()){ const d=en.mesh.position.distanceTo(pos); if(d<R){ en.hp-=dmg*(1-d/R); if(en.hp<=0) killEnemy(en); } }
+    for(const en of enemies.slice()){ const d=en.mesh.position.distanceTo(pos); if(d<R){ const f=1-d/R; en.hp-=dmg*f; _blastLaunch(en, pos.x,pos.y,pos.z, R, f); if(en.hp<=0) killEnemy(en); } }
   } else {
-    for(const bt of bots.slice()){ if(bt.dead||sameTeam(byId,bt.id)) continue; const d=Math.hypot(bt.pos.x-pos.x, 1.0-pos.y, bt.pos.z-pos.z); if(d<R){ bt.hp-=dmg*(1-d/R); if(bt.hp<=0){ registerDuelKill(byId,bt.id); botDie(bt); } } }
+    for(const bt of bots.slice()){ if(bt.dead||sameTeam(byId,bt.id)) continue; const d=Math.hypot(bt.pos.x-pos.x, 1.0-pos.y, bt.pos.z-pos.z); if(d<R){ const f=1-d/R; bt.hp-=dmg*f; const _kx=bt.pos.x-pos.x, _kz=bt.pos.z-pos.z, _kh=Math.hypot(_kx,_kz)||1, _LP=(worldCfg&&+worldCfg.launchPower)||1, _kb=(8+R*1.2)*f*_LP; bt.evx=(bt.evx||0)+(_kx/_kh)*_kb; bt.evz=(bt.evz||0)+(_kz/_kh)*_kb; bt.vy=Math.max(bt.vy||0,(5+R*0.6)*f*_LP); bt.grounded=false; if(bt.hp<=0){ registerDuelKill(byId,bt.id); botDie(bt); } } }   // blast knockback: shove away from center + pop up (uses the bot launch channel)
     for(const id in NET.players){ const rp=NET.players[id]; if(!rp||!rp.posEye) continue; if(sameTeam(byId,+id)) continue; if(rp.hp!=null&&rp.hp<=0) continue; const d=rp.posEye.distanceTo(pos); if(d<R) sendToPlayer(+id, {t:'pvpHit', d:dmg*(1-d/R), from:byId}); }
   }
   // the local (host) player — environmental hazard hits you too
@@ -8936,7 +8994,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 188 · 2026-06-07';
+const BUILD_VERSION = 'build 192 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9821,11 +9879,53 @@ function teardownInstancing(){
   instancingActive = false;
 }
 
+let _meleeT = 0;
+const MELEE_CD = 480, MELEE_RANGE = 2.9, MELEE_DMG = 34;   // punch: cooldown ms, reach m, damage
+// Melee / punch. Fired by the V key or automatically when you pull the trigger fully dry. Hits the nearest
+// enemy / bot / player in a forward cone and shoves them along your aim (reuses the same launch channel the
+// trebuchet + explosions use), and breaks / shoves a prop you're facing. Knockback scales with Launch Power.
+function meleeAttack(){
+  if(!gameOn || editorOpen || paused) return;
+  const now = performance.now();
+  if(now - _meleeT < MELEE_CD) return;
+  _meleeT = now;
+  if(typeof tone==='function') tone({ freq:320, type:'sine', dur:0.07, vol:0.07, slideTo:150 });   // swing whoosh
+  const fwd = new THREE.Vector3(); camera.getWorldDirection(fwd);
+  const fh = Math.hypot(fwd.x, fwd.z) || 1;
+  const px=player.pos.x, py=player.pos.y, pz=player.pos.z;
+  const LP=(worldCfg && +worldCfg.launchPower)||1, KB=11*LP, UP=5*LP;
+  const cone=(tx,ty,tz)=>{ const dx=tx-px, dy=ty-py, dz=tz-pz, dist=Math.hypot(dx,dy,dz); if(dist>MELEE_RANGE) return -1; return ((dx*fwd.x+dy*fwd.y+dz*fwd.z)/(dist||1))>0.35 ? dist : -1; };
+  let hit=false;
+  if(pvpMode()){
+    if(duelDead) return;
+    let best=null, bestD=1e9, bestId=-1, kind=null;
+    for(const bt of bots){ if(bt.dead||sameTeam(NET.myId,bt.id)) continue; const dd=cone(bt.pos.x,1.0,bt.pos.z); if(dd>=0&&dd<bestD){ bestD=dd; best=bt; kind='bot'; } }
+    for(const id in NET.players){ const rp=NET.players[id]; if(!rp||!rp.posEye) continue; if(sameTeam(NET.myId,+id)) continue; if(rp.hp!=null&&rp.hp<=0) continue; const dd=cone(rp.posEye.x,rp.posEye.y,rp.posEye.z); if(dd>=0&&dd<bestD){ bestD=dd; best=rp; kind='player'; bestId=+id; } }
+    if(best){ hit=true;
+      if(kind==='bot'){ best.hp-=MELEE_DMG; best.evx=(best.evx||0)+fwd.x/fh*KB; best.evz=(best.evz||0)+fwd.z/fh*KB; best.vy=Math.max(best.vy||0,UP); best.grounded=false; if(best.mesh) spark(best.mesh.position,0xffd166); if(best.hp<=0){ registerDuelKill(NET.myId,best.id); botDie(best); } }
+      else { sendToPlayer(bestId,{t:'pvpHit', d:MELEE_DMG, from:NET.myId}); if(best.posEye) spark(best.posEye,0xffd166); }
+    }
+  } else {
+    let best=null, bestD=1e9;
+    for(const en of enemies){ if(!en.mesh) continue; const dd=cone(en.mesh.position.x,en.mesh.position.y,en.mesh.position.z); if(dd>=0&&dd<bestD){ bestD=dd; best=en; } }
+    if(best){ hit=true; best.hp-=MELEE_DMG*(buffs.damage?2:1)*run.dmgMul; best.evx=(best.evx||0)+fwd.x/fh*KB; best.evz=(best.evz||0)+fwd.z/fh*KB; best.vy=Math.max(best.vy||0,UP); best.grounded=false; spark(best.mesh.position,0xffd166); if(best.hp<=0) killEnemy(best); }
+  }
+  if(NET.mode!=='client' && dynamicProps.length){   // punch a prop in front: break / detonate + shove
+    raycaster.setFromCamera({x:0,y:0}, camera);
+    const ph = raycaster.intersectObjects(dynamicProps, true);
+    if(ph.length && ph[0].distance<=MELEE_RANGE){
+      let o=ph[0].object; while(o && dynamicProps.indexOf(o)<0) o=o.parent;
+      if(o){ const dir=new THREE.Vector3(fwd.x,0,fwd.z).normalize(); const broke=damageProp(o, MELEE_DMG, ph[0].point, dir, 8, NET.myId); if(!broke) pushDynamic(o, dir, 8, ph[0].point); hit=true; }
+    }
+  }
+  addShake(0.05);
+  if(hit && SFX.hit) SFX.hit();
+}
 function shoot(){
   const w = W();
   const now = performance.now();
   if(now - lastShot < w.fireRate * run.fireMul || reloading) return;
-  if(w.mag<=0){ SFX.empty(); reload(); return; }
+  if(w.mag<=0){ if(w.reserve<=0){ meleeAttack(); return; } SFX.empty(); reload(); return; }   // out of ammo entirely -> throw hands
   if(!w.auto && firingLatch) return;     // semi-auto: one shot per click
   firingLatch = true;
   lastShot = now; w.mag--; updateHUD();
@@ -10655,6 +10755,8 @@ function loop(){
   gun.rotation.x = (reloading?0.5:0) + ADS_ROT.x*adsBlend;
   gun.rotation.y = ADS_ROT.y*adsBlend;
   gun.rotation.z = ADS_ROT.z*adsBlend;
+  const _mp = 1 - Math.min(1, (performance.now()-_meleeT)/250);   // quick out-and-back punch thrust
+  if(_mp>0){ const j=Math.sin(_mp*Math.PI); gun.position.z -= j*0.55; gun.position.y -= j*0.12; gun.rotation.x -= j*0.25; }
   recoil *= 0.85;
   muzzle.intensity *= 0.6; flashMat.opacity *= 0.5;
 
@@ -10768,12 +10870,14 @@ function loop(){
       en._reach = 1.5 + fp;                                // attack range scales with the body too (Phase 3)
       const stopAt = td.chase ? (fp + 0.9) : 0.5;          // patrol: stop on the waypoint; chase: body just shy of the player
       const spd = td.chase ? en.speed : en.speed*0.5;      // patrol/return at half pace
+      if(en.grounded!==false){   // a launched enemy is airborne: momentum carries it, AI walking is paused
       if(en.ranged && td.chase){
         // hold a standoff range: close in if too far, back off if the player crowds it, else hold + shoot
         const toPx = near.pos.x - en.mesh.position.x, toPz = near.pos.z - en.mesh.position.z, pd = Math.hypot(toPx,toPz)||1;
         if(pd > en.standoff + 1){ en.mesh.position.x += toPx/pd*en.speed*dt; en.mesh.position.z += toPz/pd*en.speed*dt; }
         else if(pd < en.standoff*0.6){ en.mesh.position.x -= toPx/pd*en.speed*dt; en.mesh.position.z -= toPz/pd*en.speed*dt; }
       } else if(d > stopAt){ _eDir.set(dx,0,dz).multiplyScalar(1/d); en.mesh.position.addScaledVector(_eDir, spd*dt); }
+      }
     }
     // Phase 2 — separation: shove overlapping enemies apart so they don't stack / clip through each
     // other. Desired spacing is the sum of the two footprints (capped). Runs before obstacle resolve
@@ -10813,13 +10917,17 @@ function loop(){
         const minD = eR + (info.radius||0.5);
         if(d < minD && d > 1e-4){ const push=minD-d; en.mesh.position.x += dx/d*push; en.mesh.position.z += dz/d*push; }
       }
+      // trap launch: horizontal momentum + a vertical pop that arcs under gravity and settles back to the hover height
+      if(en.evx||en.evz){ en.mesh.position.x+=en.evx*dt; en.mesh.position.z+=en.evz*dt; const kd=Math.max(0,1-((en.grounded?6:0.6))*dt); en.evx*=kd; en.evz*=kd; if(Math.abs(en.evx)<0.05)en.evx=0; if(Math.abs(en.evz)<0.05)en.evz=0; }
+      if((en.launchY||0)>0 || (en.vy||0)>0){ en.vy=(en.vy||0)-GRAV*dt; en.launchY=(en.launchY||0)+en.vy*dt; if(en.launchY<=0){ en.launchY=0; en.vy=0; en.grounded=true; } else en.grounded=false; }
+      else { en.launchY=0; en.vy=0; en.grounded=true; }
       // keep inside arena
       const elim = ARENA - 2;
       en.mesh.position.x = Math.max(-elim, Math.min(elim, en.mesh.position.x));
       en.mesh.position.z = Math.max(-elim, Math.min(elim, en.mesh.position.z));
 
       const near = en._near || players[0];
-      en.mesh.position.y = 1.4 + Math.sin(t*4+en.id)*0.08;
+      en.mesh.position.y = 1.4 + Math.sin(t*4+en.id)*0.08 + (en.launchY||0);
       const fx = (en._faceX!=null) ? en._faceX : near.pos.x, fz = (en._faceZ!=null) ? en._faceZ : near.pos.z;
       en.mesh.lookAt(fx, en.mesh.position.y, fz);   // chasing -> face player; patrolling -> face where it walks
       if(en.mesh.userData.hasModel) en.mesh.rotateY(en.mesh.userData.faceOff||0);   // GLB characters vary in which way they face; nudge to face forward
