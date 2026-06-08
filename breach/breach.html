@@ -6151,6 +6151,7 @@ function gltfManager(){
 }
 function loadGLTFCached(url, cb, errcb){
   if(gltfCache[url]){ cb(gltfCache[url]); return; }
+  if(url && url.indexOf('sketchfab:')===0){ loadSketchfabModel(url.slice(10), (gltf)=>{ gltfCache[url]=gltf; cb(gltf); }, errcb); return; }
   if(!THREE.GLTFLoader){ errcb && errcb(new Error('GLTFLoader unavailable')); return; }
   const mgr = gltfManager();
   if(mgr){
@@ -6160,6 +6161,49 @@ function loadGLTFCached(url, cb, errcb){
   } else {
     new THREE.GLTFLoader().load(proxied(url), (gltf)=>{ gltfCache[url]=gltf; cb(gltf); }, undefined, errcb);   // fallback: main file only
   }
+}
+// ---------- Sketchfab (optional model source) ----------
+// Auth is the user's personal API token (sketchfab.com -> Settings -> Password & API). Search is public-ish;
+// downloading requires the token. Models arrive as a zipped glTF, so we unzip (fflate, lazy-loaded) and feed
+// the entries to GLTFLoader via blob URLs. A prop's src is stored as 'sketchfab:<uid>' so it re-resolves on load.
+const SF_TOKEN_KEY='breach_sketchfab_token', SF_ON_KEY='breach_sketchfab_on';
+function sfGetToken(){ try{ return (localStorage.getItem(SF_TOKEN_KEY)||'').trim(); }catch(e){ return ''; } }
+function sfSetToken(k){ try{ localStorage.setItem(SF_TOKEN_KEY, (k||'').trim()); }catch(e){} }
+function sfEnabled(){ try{ return localStorage.getItem(SF_ON_KEY)==='1'; }catch(e){ return false; } }
+function sfSetEnabled(b){ try{ localStorage.setItem(SF_ON_KEY, b?'1':'0'); }catch(e){} }
+function sfThumb(m){ try{ const imgs=(m.thumbnails&&m.thumbnails.images)||[]; const s=imgs.filter(i=>i.width<=320).sort((a,b)=>b.width-a.width)[0]||imgs[0]; return s?s.url:''; }catch(e){ return ''; } }
+function sfSearch(query, cb, errcb){
+  const tok=sfGetToken();
+  const u='https://api.sketchfab.com/v3/search?type=models&downloadable=true&archives_flavours=false&count=24&q='+encodeURIComponent(query);
+  fetch(u, { headers: tok ? { Authorization:'Token '+tok } : {} })
+    .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status+(r.status===401?' \u2014 check your token':'')); return r.json(); })
+    .then(d=>{ const arr=(d.results||[]).map(m=>({ uid:m.uid, title:m.name||'Untitled', thumb:sfThumb(m), animated:!!(m.animationCount), attribution:(m.name||'Model')+(m.user&&m.user.username?(' by '+m.user.username):'')+(m.license&&m.license.label?(' ['+m.license.label+']'):'')+' \u2014 via Sketchfab' })); cb(arr); })
+    .catch(errcb);
+}
+let _fflateP=null;
+function ensureFflate(){
+  if(window.fflate && window.fflate.unzipSync) return Promise.resolve(window.fflate);
+  if(_fflateP) return _fflateP;
+  const urls=['https://cdnjs.cloudflare.com/ajax/libs/fflate/0.8.2/umd/index.js','https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js'];
+  _fflateP=new Promise((res,rej)=>{ let i=0; const go=()=>{ if(i>=urls.length){ rej(new Error('could not load the unzip helper (fflate) from CDN')); return; } const sc=document.createElement('script'); sc.src=urls[i++]; sc.onload=()=>{ if(window.fflate && window.fflate.unzipSync) res(window.fflate); else go(); }; sc.onerror=go; document.head.appendChild(sc); }; go(); });
+  return _fflateP;
+}
+function loadSketchfabModel(uid, cb, errcb){
+  const tok=sfGetToken(); if(!tok){ errcb && errcb(new Error('Add your Sketchfab API token first')); return; }
+  fetch('https://api.sketchfab.com/v3/models/'+uid+'/download', { headers:{ Authorization:'Token '+tok } })
+    .then(r=>{ if(!r.ok) throw new Error('download HTTP '+r.status+(r.status===401?' (token)':r.status===403?' (login / not downloadable)':'')); return r.json(); })
+    .then(d=>{ const z=d.gltf&&d.gltf.url; if(!z) throw new Error('no glTF flavour to download'); return fetch(proxied(z)); })
+    .then(r=>{ if(!r.ok) throw new Error('archive HTTP '+r.status); return r.arrayBuffer(); })
+    .then(buf=> ensureFflate().then(ff=>{
+        const files=ff.unzipSync(new Uint8Array(buf)); const names=Object.keys(files); const blobs={}; let main=null;
+        for(const nm of names){ const ext=(nm.split('.').pop()||'').toLowerCase(); const mt= ext==='gltf'?'model/gltf+json': ext==='png'?'image/png': (ext==='jpg'||ext==='jpeg')?'image/jpeg':'application/octet-stream'; blobs[nm]=URL.createObjectURL(new Blob([files[nm]],{type:mt})); if(!main && (ext==='gltf'||ext==='glb')) main=nm; }
+        if(!main) throw new Error('no .gltf/.glb inside the archive');
+        const base=u=>decodeURIComponent(String(u)).split('?')[0].replace(/^.*[\/\\]/,''); const byBase={}; for(const nm of names) byBase[base(nm)]=blobs[nm];
+        const mgr=new THREE.LoadingManager(); mgr.setURLModifier(u=>{ if(/^blob:|^data:/.test(u)) return u; return byBase[base(u)]||u; });
+        const revoke=()=>{ for(const nm of names) try{ URL.revokeObjectURL(blobs[nm]); }catch(e){} };
+        new THREE.GLTFLoader(mgr).load(blobs[main], (gltf)=>{ setTimeout(revoke, 6000); cb(gltf); }, undefined, e=>{ revoke(); errcb && errcb(e); });
+      }))
+    .catch(e=>{ errcb && errcb(e); });
 }
 // Stable per-prop network id for live multiplayer prop sync. Prefix namespaces by peer so ids never
 // collide across machines: 's' at startup/single-player, 'h' once hosting, 'c<id>' once joined.
@@ -9033,7 +9077,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 209 · 2026-06-07';
+const BUILD_VERSION = 'build 210 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11697,7 +11741,60 @@ function performUndo(){
 
 // Reusable search UI (gun/enemy/loot/grenade/station/player). Calls onPick(model, statusEl) on a click.
 // Includes an "Animated only" filter (uses the model's animated flag when Poly Pizza exposes one).
+let sfLastQuery='', sfLastResults=[];
+function _modelSource(){ try{ return (localStorage.getItem('breach_model_source')==='sf' && sfEnabled()) ? 'sf' : 'pp'; }catch(e){ return 'pp'; } }
+function _setModelSource(x){ try{ localStorage.setItem('breach_model_source', x); }catch(e){} }
+// Small bar atop every model search: enable Sketchfab (off by default), then a Poly Pizza / Sketchfab switch.
+function _modelSourceBar(host, rerender){
+  const wrap=document.createElement('div'); wrap.style.cssText='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 6px;';
+  if(!sfEnabled()){
+    const lab=document.createElement('label'); lab.style.cssText='display:flex;align-items:center;gap:6px;color:#8fb6aa;font-size:11px;cursor:pointer;';
+    const cb=document.createElement('input'); cb.type='checkbox'; cb.style.cssText='width:14px;height:14px;accent-color:#38f5b5;flex:none;';
+    cb.onchange=()=>{ sfSetEnabled(cb.checked); if(cb.checked) _setModelSource('sf'); rerender(); };
+    const sp=document.createElement('span'); sp.textContent='Also search Sketchfab (needs a free account + API token)';
+    lab.appendChild(cb); lab.appendChild(sp); wrap.appendChild(lab);
+  } else {
+    const mk=(key,label,color)=>{ const b=document.createElement('button'); b.textContent=label; const on=_modelSource()===key;
+      b.style.cssText='flex:0 0 auto;padding:3px 12px;font-size:11px;border-radius:6px;border:1px solid '+(on?color:'transparent')+';background:'+(on?_hexRgba(color,0.18):'transparent')+';color:'+(on?'#f4fffb':color)+';cursor:pointer;';
+      b.onclick=()=>{ _setModelSource(key); rerender(); }; return b; };
+    const sw=document.createElement('div'); sw.style.cssText='display:flex;gap:4px;'; sw.appendChild(mk('pp','Poly Pizza','#38f5b5')); sw.appendChild(mk('sf','Sketchfab','#1caad9')); wrap.appendChild(sw);
+    const off=document.createElement('button'); off.textContent='hide'; off.title='Hide the Sketchfab option'; off.style.cssText='flex:0 0 auto;margin-left:auto;padding:3px 8px;font-size:10px;border-radius:6px;border:1px solid #2a3a42;background:transparent;color:#6f968b;cursor:pointer;'; off.onclick=()=>{ sfSetEnabled(false); _setModelSource('pp'); rerender(); }; wrap.appendChild(off);
+  }
+  host.appendChild(wrap); return wrap;
+}
+// Sketchfab search panel: token field, query, thumbnail grid. onPick(model, statusEl) with model.glb = 'sketchfab:<uid>'.
+function renderSketchfabSearch(host, onPick){
+  host.innerHTML='';
+  const tRow=document.createElement('div'); tRow.style.cssText='display:flex;gap:5px;margin-bottom:5px;';
+  const tk=document.createElement('input'); tk.type='password'; tk.placeholder='Sketchfab API token'; tk.value=sfGetToken(); tk.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+  const tb=document.createElement('button'); tb.textContent='Save'; tb.style.flex='0 0 auto'; tRow.appendChild(tk); tRow.appendChild(tb); host.appendChild(tRow);
+  const tHint=document.createElement('div'); tHint.className='hint'; tHint.style.cssText='margin:-1px 0 6px;font-size:10px;'; tHint.innerHTML='Get a token at sketchfab.com \u2192 Settings \u2192 Password &amp; API. Needed to search + download.'; host.appendChild(tHint);
+  const sRow=document.createElement('div'); sRow.className='row2'; sRow.style.marginBottom='4px';
+  const q=document.createElement('input'); q.type='text'; q.placeholder='search Sketchfab\u2026'; q.value=sfLastQuery; q.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+  const sb=document.createElement('button'); sb.textContent='Search'; sb.style.flex='0 0 auto'; sRow.appendChild(q); sRow.appendChild(sb); host.appendChild(sRow);
+  const status=document.createElement('div'); status.className='hint'; status.style.margin='2px 0'; host.appendChild(status);
+  const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:4px;'; host.appendChild(grid);
+  tb.onclick=()=>{ sfSetToken(tk.value); status.textContent='Token saved.'; };
+  function render(list){ grid.innerHTML=''; if(!list||!list.length){ status.textContent='No models found.'; return; } status.textContent=list.length+' result'+(list.length>1?'s':'')+' \u2014 click to use';
+    for(const m of list){ const card=document.createElement('button'); card.style.cssText='display:flex;flex-direction:column;align-items:center;gap:2px;background:#0c1418;border:1px solid #24323a;border-radius:6px;padding:4px;cursor:pointer;overflow:hidden;'; card.title=m.attribution+(m.animated?'  \u00b7  animated':'');
+      if(m.thumb){ const img=document.createElement('img'); img.src=m.thumb; img.loading='lazy'; img.style.cssText='width:100%;aspect-ratio:1;object-fit:cover;background:#06090b;border-radius:3px;'; card.appendChild(img); }
+      const cap=document.createElement('div'); cap.textContent=(m.animated?'\u25b6 ':'')+m.title; cap.style.cssText='font-size:10px;color:#9fe6cf;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'; card.appendChild(cap);
+      card.onclick=()=>{ status.textContent='Using \u201c'+m.title+'\u201d\u2026 (downloading)'; onPick({ title:m.title, glb:'sketchfab:'+m.uid, thumb:m.thumb, attribution:m.attribution, animated:m.animated }, status); };
+      grid.appendChild(card); } }
+  function doSearch(){ const term=q.value.trim(); if(!term){ status.textContent='Type something to search.'; return; } if(!sfGetToken()){ status.textContent='Add your Sketchfab token first.'; return; } sfLastQuery=term; status.textContent='Searching\u2026'; grid.innerHTML='';
+    sfSearch(term, list=>{ sfLastResults=list; render(list); }, err=>{ sfLastResults=[]; status.textContent='Search failed: '+((err&&err.message)||err); }); }
+  sb.onclick=doSearch; q.addEventListener('keydown', e=>{ if(e.code==='Enter'){ e.preventDefault(); doSearch(); } });
+  if(sfLastResults.length) render(sfLastResults);
+}
+// Wrapper: Poly Pizza by default; Sketchfab when enabled + selected. Single-slot search (gun/station/grenade).
 function renderModelSearch(host, onPick, opts){
+  host.innerHTML='';
+  _modelSourceBar(host, ()=>renderModelSearch(host, onPick, opts));
+  const body=document.createElement('div'); host.appendChild(body);
+  if(sfEnabled() && _modelSource()==='sf') renderSketchfabSearch(body, onPick);
+  else renderModelSearchPP(body, onPick, opts);
+}
+function renderModelSearchPP(host, onPick, opts){
   opts = opts || {}; host.innerHTML='';
   const sRow=document.createElement('div'); sRow.className='row2'; sRow.style.marginBottom='4px';
   const q=document.createElement('input'); q.type='text'; q.placeholder=opts.placeholder||'search free models…'; q.value=ppLastQuery;
@@ -11762,6 +11859,14 @@ function ppSearch(query, cb, errcb){
 }
 // Render the browser into a host element (only on the Props tab). Caches query+results across re-renders.
 function renderModelBrowser(host){
+  host.innerHTML='';
+  _modelSourceBar(host, ()=>renderModelBrowser(host));
+  const body=document.createElement('div'); host.appendChild(body);
+  if(sfEnabled() && _modelSource()==='sf'){
+    renderSketchfabSearch(body, (m,st)=>{ if(st) st.textContent='Loading \u201c'+m.title+'\u201d\u2026'; addSceneProp(m.glb, { attribution:m.attribution, onAdded:()=>{ if(st) st.textContent='Added \u201c'+m.title+'\u201d. Move/scale it with the gizmo.'; if(typeof renderModelCredits==='function') renderModelCredits(); }, onError:()=>{ if(st) st.textContent='Could not load \u201c'+m.title+'\u201d (CORS or download blocked).'; } }); });
+  } else renderModelBrowserPP(body);
+}
+function renderModelBrowserPP(host){
   host.innerHTML = '';
   const head = document.createElement('div'); head.className='hint'; head.style.margin='8px 0 4px';
   head.innerHTML = '<b>Poly Pizza</b> — search thousands of free models, click one to add it.';
