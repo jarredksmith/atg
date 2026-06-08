@@ -9033,7 +9033,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 208 · 2026-06-07';
+const BUILD_VERSION = 'build 209 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9122,9 +9122,13 @@ const AIM_DEFAULT = { x:ADS_AIM.x, y:ADS_AIM.y, z:ADS_AIM.z, rx:ADS_ROT.x*180/Ma
 const aimByWep = {};
 function getWeaponAim(key){ if(!aimByWep[key]) aimByWep[key]=Object.assign({}, AIM_DEFAULT); return aimByWep[key]; }
 function applyWeaponAim(key){ const a=getWeaponAim(key); ADS_AIM.set(a.x,a.y,a.z); ADS_ROT.set(a.rx*Math.PI/180, a.ry*Math.PI/180, a.rz*Math.PI/180); adsFovLive = a.fov; }
-// apply saved aim pose if present
+// apply saved aim pose if present — restore the FULL per-weapon map, not just one pose
+if(savedLevel && savedLevel.aimWep){
+  for(const k in savedLevel.aimWep) aimByWep[k]=Object.assign({}, AIM_DEFAULT, savedLevel.aimWep[k]);   // each weapon keeps its own ADS pose across reloads
+}
 if(savedLevel && savedLevel.aim && savedLevel.aim.state){
   const a = savedLevel.aim.state, D2R = Math.PI/180;
+  if(!savedLevel.aimWep){ for(const k of Object.keys(WEAPONS)) aimByWep[k]=Object.assign({}, AIM_DEFAULT, a); }   // legacy levels: seed every weapon from the single saved pose
   ADS_AIM.set(a.x, a.y, a.z); ADS_ROT.set(a.rx*D2R, a.ry*D2R, a.rz*D2R); adsFovLive = a.fov;
 }
 const HIP_SENS = 0.0022, ADS_SENS = 0.0012;  // slower look while aiming for precision
