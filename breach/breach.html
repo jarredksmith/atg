@@ -7503,7 +7503,7 @@ function updateBots(dt){
       else { b.pos.y=groundY; b.vy=0; b.grounded=true; }
     }
     b.yaw = tgt ? Math.atan2(tgt.pos.x-b.pos.x, tgt.pos.z-b.pos.z) : Math.atan2(mvx,mvz);
-    if(b.mesh){ b.mesh.position.set(b.pos.x,b.pos.y,b.pos.z); b.mesh.rotation.y=b.yaw;
+    if(b.mesh){ b.mesh.position.set(b.pos.x,b.pos.y,b.pos.z); if(b.grounded===false){ b._spin=(b._spin||0)+(Math.hypot(b.evx||0,b.evz||0)+Math.abs(b.vy||0))*dt*0.5; b.mesh.rotation.set(b._spin, b.yaw, b._spin*0.5); } else { b._spin=0; b.mesh.rotation.set(0, b.yaw, 0); }
       if(b.mesh.userData.hasModel && b.mesh.userData.visual && b.mesh.userData.visual.userData.stateActions){
         const md=Math.hypot(b.pos.x-ox, b.pos.z-oz);
         let st = md>0.06 ? 'run' : (md>0.015 ? 'walk' : 'idle');
@@ -8995,7 +8995,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 193 · 2026-06-07';
+const BUILD_VERSION = 'build 194 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9903,13 +9903,13 @@ function meleeAttack(){
     for(const bt of bots){ if(bt.dead||sameTeam(NET.myId,bt.id)) continue; const dd=cone(bt.pos.x,1.0,bt.pos.z); if(dd>=0&&dd<bestD){ bestD=dd; best=bt; kind='bot'; } }
     for(const id in NET.players){ const rp=NET.players[id]; if(!rp||!rp.posEye) continue; if(sameTeam(NET.myId,+id)) continue; if(rp.hp!=null&&rp.hp<=0) continue; const dd=cone(rp.posEye.x,rp.posEye.y,rp.posEye.z); if(dd>=0&&dd<bestD){ bestD=dd; best=rp; kind='player'; bestId=+id; } }
     if(best){ hit=true;
-      if(kind==='bot'){ best.hp-=MELEE_DMG; best.evx=(best.evx||0)+fwd.x/fh*KB; best.evz=(best.evz||0)+fwd.z/fh*KB; best.vy=Math.max(best.vy||0,UP); best.grounded=false; if(best.mesh) spark(best.mesh.position,0xffd166); if(best.hp<=0){ registerDuelKill(NET.myId,best.id); botDie(best); } }
-      else { sendToPlayer(bestId,{t:'pvpHit', d:MELEE_DMG, from:NET.myId}); if(best.posEye) spark(best.posEye,0xffd166); }
+      if(kind==='bot'){ best.hp-=MELEE_DMG; best.evx=(best.evx||0)+fwd.x/fh*KB; best.evz=(best.evz||0)+fwd.z/fh*KB; best.vy=Math.max(best.vy||0,UP); best.grounded=false; const _k=best.hp<=0; if(best.mesh){ spark(best.mesh.position,0xffd166); spawnDamageNumber(best.mesh.position, MELEE_DMG, _k, false); } showHitmarker(_k); if(_k){ registerDuelKill(NET.myId,best.id); botDie(best); } }
+      else { sendToPlayer(bestId,{t:'pvpHit', d:MELEE_DMG, from:NET.myId}); if(best.posEye){ spark(best.posEye,0xffd166); spawnDamageNumber(best.posEye, MELEE_DMG, false, false); } showHitmarker(false); }
     }
   } else {
     let best=null, bestD=1e9;
     for(const en of enemies){ if(!en.mesh) continue; const dd=cone(en.mesh.position.x,en.mesh.position.y,en.mesh.position.z); if(dd>=0&&dd<bestD){ bestD=dd; best=en; } }
-    if(best){ hit=true; best.hp-=MELEE_DMG*(buffs.damage?2:1)*run.dmgMul; best.evx=(best.evx||0)+fwd.x/fh*KB; best.evz=(best.evz||0)+fwd.z/fh*KB; best.vy=Math.max(best.vy||0,UP); best.grounded=false; spark(best.mesh.position,0xffd166); if(best.hp<=0) killEnemy(best); }
+    if(best){ hit=true; const _d=MELEE_DMG*(buffs.damage?2:1)*run.dmgMul; best.hp-=_d; best.evx=(best.evx||0)+fwd.x/fh*KB; best.evz=(best.evz||0)+fwd.z/fh*KB; best.vy=Math.max(best.vy||0,UP); best.grounded=false; const _k=best.hp<=0; spark(best.mesh.position,0xffd166); spawnDamageNumber(best.mesh.position, _d, _k, false); flashEnemy(best); showHitmarker(_k); if(_k) killEnemy(best); }
   }
   if(NET.mode!=='client' && dynamicProps.length){   // punch a prop in front: break / detonate + shove
     raycaster.setFromCamera({x:0,y:0}, camera);
@@ -10930,8 +10930,14 @@ function loop(){
       const near = en._near || players[0];
       en.mesh.position.y = 1.4 + Math.sin(t*4+en.id)*0.08 + (en.launchY||0);
       const fx = (en._faceX!=null) ? en._faceX : near.pos.x, fz = (en._faceZ!=null) ? en._faceZ : near.pos.z;
-      en.mesh.lookAt(fx, en.mesh.position.y, fz);   // chasing -> face player; patrolling -> face where it walks
-      if(en.mesh.userData.hasModel) en.mesh.rotateY(en.mesh.userData.faceOff||0);   // GLB characters vary in which way they face; nudge to face forward
+      if(en.grounded===false){   // launched -> tumble through the air
+        en._spin=(en._spin||0)+(Math.hypot(en.evx||0,en.evz||0)+Math.abs(en.vy||0))*dt*0.5;
+        en.mesh.rotation.set(en._spin, en.mesh.rotation.y, en._spin*0.5);
+      } else {
+        en._spin=0;
+        en.mesh.lookAt(fx, en.mesh.position.y, fz);   // chasing -> face player; patrolling -> face where it walks
+        if(en.mesh.userData.hasModel) en.mesh.rotateY(en.mesh.userData.faceOff||0);   // GLB characters vary in which way they face; nudge to face forward
+      }
       en.cooldown -= dt;
       if(en.ranged){
         en.shootCd -= dt;
