@@ -45,6 +45,8 @@
     background:transparent; border:1px solid transparent; border-bottom:none; border-radius:7px 7px 0 0; color:#7fb6a8; margin-bottom:-2px; transition:background .12s,color .12s,opacity .12s; }
   #editor .edMode svg { width:17px; height:17px; display:block; }
   #editor .edModeLbl { font-size:10px; line-height:1; letter-spacing:.4px; }
+  #editor .primBtn { display:flex; align-items:center; justify-content:center; gap:6px; }
+  #editor .primBtn svg { width:15px; height:15px; flex:none; }
   #editor .edMode:hover { filter:brightness(1.25); }
   #editor .tab {
     flex: 1; text-align: center; padding: 5px 0; cursor: pointer;
@@ -9024,7 +9026,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 203 · 2026-06-07';
+const BUILD_VERSION = 'build 204 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11310,6 +11312,12 @@ const MODE_ICON = {
   kit:     _svgIcon('<circle cx="12" cy="12" r="9"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/>'),
   files:   _svgIcon('<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>'),
 };
+const PRIM_ICON = {
+  box:      _svgIcon('<path d="M12 3 21 7.5v9L12 21 3 16.5v-9L12 3Z"/><path d="M3 7.5 12 12l9-4.5"/><path d="M12 12v9"/>'),
+  sphere:   _svgIcon('<circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="9" ry="3.4"/>'),
+  cylinder: _svgIcon('<ellipse cx="12" cy="6" rx="7" ry="2.6"/><path d="M5 6v12M19 6v12"/><ellipse cx="12" cy="18" rx="7" ry="2.6"/>'),
+  cone:     _svgIcon('<ellipse cx="12" cy="18" rx="7.5" ry="2.6"/><path d="M12 3 4.5 18M12 3l7.5 15"/>'),
+};
 const MODE_SECTIONS = {
   build:   ['gizmo','object','material','transform'],
   scene:   ['world'],
@@ -12778,12 +12786,12 @@ function renderEditorFields(){
   const shapesHost = editorEl.querySelector('#edShapes');
   if(shapesHost){
     shapesHost.innerHTML='';
-    if(tgt.addable){
+    if(tgt.addable && tgt.urlField){   // Props only (Lights/Spawns are addable but have no urlField)
       const shapeHead = document.createElement('div'); shapeHead.className='hint'; shapeHead.style.margin='2px 0 3px'; shapeHead.innerHTML='<b>Add shape</b> — drops in front of you, then move/scale it';
       shapesHost.appendChild(shapeHead);
       const srow = document.createElement('div'); srow.className='row2';
       for(const [src,label] of [['box','Box'],['sphere','Sphere'],['cylinder','Cylinder'],['cone','Cone']]){
-        const b=document.createElement('button'); b.textContent=label; b.onclick=()=>{ addSceneProp(src); };
+        const b=document.createElement('button'); b.className='primBtn'; b.innerHTML=(PRIM_ICON[src]||'')+'<span>+ '+label+'</span>'; b.onclick=()=>{ addSceneProp(src); };
         srow.appendChild(b);
       }
       shapesHost.appendChild(srow);
