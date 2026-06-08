@@ -318,9 +318,9 @@
   .lobbyCode{ font-size:26px; letter-spacing:.22em; font-weight:700; color:#38f5b5; text-align:center; margin:2px 0; }
   .lobbyCode:empty{ display:none; }
   #lobbyPlayers{ display:flex; flex-direction:column; gap:6px; margin-top:10px; }
-  .lobbyRow{ display:flex; align-items:center; gap:10px; padding:8px 11px; border-radius:9px; background:rgba(255,255,255,.05); font-size:14px; }
+  .lobbyRow{ display:flex; align-items:center; gap:10px; padding:8px 11px; border-radius:9px; background:rgba(255,255,255,.07); font-size:14px; color:#eafff7; font-weight:500; }
   .lobbyDot{ width:14px; height:14px; border-radius:50%; flex:none; box-shadow:inset 0 0 4px rgba(0,0,0,.5); }
-  .lobbyHostTag{ margin-left:auto; font-size:10px; opacity:.72; letter-spacing:.12em; }
+  .lobbyHostTag{ margin-left:auto; font-size:10px; opacity:1; color:#7fe0c6; font-weight:600; letter-spacing:.12em; }
   #mpGames{ display:flex; flex-direction:column; gap:5px; max-height:170px; overflow:auto; }
   .gameRow{ display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:8px; background:rgba(255,255,255,.05); font-size:13px; }
   .gameRow .gmode{ font-size:10px; letter-spacing:.09em; opacity:.6; }
@@ -429,9 +429,9 @@
   .mpSection.coop .mpTitle { color:#38f5b5; }
   .mpSection.duel .mpTitle { color:#ff5da2; }
   .mpSection.join .mpTitle { color:#9fd8ff; }
-  .mpDesc { color:#9fc7ba; font-size:12px; line-height:1.5; margin-bottom:10px; }   /* global (not just inside .mpSection) so the lobby + char-picker hints are legible, not black */
+  .mpDesc { color:#cdeadf; font-size:12px; line-height:1.5; margin-bottom:10px; }   /* global (not just inside .mpSection) so the lobby + char-picker hints are legible, not black */
   .mpSection .mpActions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  .mpHint { color:#8fb6aa; font-size:12px; }
+  .mpHint { color:#a9d2c6; font-size:12px; }
   .mpBtn.coop { background:rgba(56,245,181,0.18); }
   .mpBtn.duel { color:#ff8fc2; border-color:rgba(255,93,162,0.5); background:rgba(255,93,162,0.14); }
   .mpBtn.duel:hover { background:rgba(255,93,162,0.26); }
@@ -9033,7 +9033,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 207 · 2026-06-07';
+const BUILD_VERSION = 'build 208 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
