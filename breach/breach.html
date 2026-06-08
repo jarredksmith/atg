@@ -7389,9 +7389,11 @@ let _puId = 1;
 // level has none, spawnPowerups() falls back to the auto buff layout. Markers are an editor-only preview.
 let pickupSpots = (savedLevel && Array.isArray(savedLevel.pickups)) ? savedLevel.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : [];
 let newPickupKind = 'health';
+let pickupsOn = !(savedLevel && savedLevel.pickupsOn === false);   // off => no pickups at all (not even the default fallback set)
 let pickupModels = (savedLevel && savedLevel.pickupModels && typeof savedLevel.pickupModels==='object') ? JSON.parse(JSON.stringify(savedLevel.pickupModels)) : {};   // kind -> {url, scale}: custom model in place of the floating icon
 let pickupMarkers = [];
 function refreshPickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m); } pickupMarkers.length=0;
+  if(typeof pickupsOn!=='undefined' && !pickupsOn) return;   // pickups disabled: no editor markers
   for(const sp of pickupSpots){ const g=buildPowerupMesh(sp.kind); g.position.set(sp.x,0,sp.z); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.pickupMarker=true; scene.add(g); pickupMarkers.push(g); } }
 function setPickupMarkersVisible(v){ for(const m of pickupMarkers) m.visible=v; }
 function disposePickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m); } pickupMarkers.length=0; }
@@ -7438,6 +7440,7 @@ function clearPowerups(){ for(const p of powerups){ if(p.mesh) scene.remove(p.me
 function spawnPowerups(){
   clearPowerups();
   if(NET.mode==='client') return;   // clients receive pads via the world snapshot
+  if(!pickupsOn) return;             // pickups disabled for this level
   const spots = (pickupSpots && pickupSpots.length) ? pickupSpots : powerupLayout();
   for(const spot of spots){
     const mesh = buildPowerupMesh(spot.kind); mesh.position.set(spot.x, 0, spot.z); scene.add(mesh);
@@ -7865,6 +7868,7 @@ function loadLevelFromNet(level){
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns) buildSpawnMarker(sp); } setSpawnMarkersVisible(editorOpen);
+  pickupsOn = (level.pickupsOn !== false);
   pickupSpots = Array.isArray(level.pickups) ? level.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : []; pickupModels = (level.pickupModels && typeof level.pickupModels==='object') ? JSON.parse(JSON.stringify(level.pickupModels)) : {}; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }   // adopt the host's sky / ground / fog
   // per-player characters: the client keeps its own avatar; the host's character arrives via the welcome 'char' field
@@ -9153,7 +9157,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 217 · 2026-06-08';
+const BUILD_VERSION = 'build 219 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11532,16 +11536,42 @@ function swapSelectedProp(url){
   spawnProp(url, t, (obj)=>{ editorActive='props'; editorTargets.props.idx = propModels.indexOf(obj); selProps=[obj]; renderEditorFields(); }, undefined, mode);
 }
 // Add a new object (a 'box' primitive or a model URL) in front of the player, using the current default anim mode.
+// Centered "loading model" overlay — the small status line in the search panel is easy to miss, so model
+// loads (Poly Pizza / Sketchfab, which can take a few seconds through the proxy + unzip) show this too.
+let _propLoaderEl = null;
+function showPropLoader(label){
+  if(!_propLoaderEl){
+    const el = document.createElement('div'); el.id='propLoader';
+    el.style.cssText = 'position:fixed;inset:0;z-index:9000;display:flex;align-items:center;justify-content:center;pointer-events:none;';
+    el.innerHTML = '<div style="background:rgba(6,12,14,0.85);border:1px solid rgba(56,245,181,0.4);border-radius:12px;padding:18px 26px;min-width:240px;text-align:center;box-shadow:0 8px 40px rgba(0,0,0,0.6);">'
+      + '<div id="propLoaderLabel" style="color:#eafff7;font:600 14px/1.3 ui-monospace,monospace;margin-bottom:12px;letter-spacing:0.4px;">Loading\u2026</div>'
+      + '<div style="width:220px;height:7px;background:#0c1418;border:1px solid #1c2b30;border-radius:6px;overflow:hidden;">'
+      + '<div style="width:38%;height:100%;background:linear-gradient(90deg,transparent,#38f5b5,transparent);animation:propLoadSlide 1.05s ease-in-out infinite;"></div>'
+      + '</div></div>';
+    document.body.appendChild(el);
+    const st = document.createElement('style'); st.textContent = '@keyframes propLoadSlide{0%{transform:translateX(-110%)}100%{transform:translateX(420%)}}';
+    document.head.appendChild(st);
+    _propLoaderEl = el;
+  }
+  const lab = _propLoaderEl.querySelector('#propLoaderLabel'); if(lab) lab.textContent = label || 'Loading\u2026';
+  _propLoaderEl.style.display = 'flex';
+}
+function hidePropLoader(){ if(_propLoaderEl) _propLoaderEl.style.display = 'none'; }
 function addSceneProp(src, meta){
   meta = meta || {};
   pushUndoSnapshot();
   const fwd = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
   const px = player.pos.x + fwd.x*5, pz = player.pos.z + fwd.z*5;
+  const async = !isPrimitive(src);                              // primitives finalize synchronously: no overlay
+  let _done=false, _to=null;
+  const _finish = ()=>{ if(_done) return; _done=true; if(_to) clearTimeout(_to); hidePropLoader(); };
+  if(async){ showPropLoader(meta.name ? ('Loading \u201c'+meta.name+'\u201d\u2026') : 'Loading model\u2026'); _to=setTimeout(_finish, 60000); }   // safety: never stuck if a callback is missed
   spawnProp(src, [px, 0, pz, 0, 0, 0, 1], (obj)=>{
     if(meta.attribution) obj.userData.attribution = meta.attribution;   // credit (CC-BY models)
     editorActive='props'; editorTargets.props.idx = propModels.indexOf(obj); selProps=[obj]; renderEditorFields();
     if(meta.onAdded) meta.onAdded(obj);
-  }, undefined, newPropAnimMode, null, meta.onError);
+    _finish();
+  }, undefined, newPropAnimMode, null, (err)=>{ _finish(); if(meta.onError) meta.onError(err); });
 }
 function deleteSelectedProp(){
   pushUndoSnapshot();
@@ -11700,6 +11730,7 @@ function serializeLevel(){
     props:   propModels.filter(o=>o && !o.userData.runtime).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
+    pickupsOn: pickupsOn,
     pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind })),
     pickupModels: Object.keys(pickupModels).reduce((a,k)=>{ const m=pickupModels[k]; if(m&&m.url){ a[k]={ url:m.url, scale:m.scale||1 }; } return a; }, {}),
     game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave },
@@ -11943,7 +11974,7 @@ function renderModelBrowser(host){
   _modelSourceBar(host, ()=>renderModelBrowser(host));
   const body=document.createElement('div'); host.appendChild(body);
   if(sfEnabled() && _modelSource()==='sf'){
-    renderSketchfabSearch(body, (m,st)=>{ if(st) st.textContent='Loading \u201c'+m.title+'\u201d\u2026'; addSceneProp(m.glb, { attribution:m.attribution, onAdded:()=>{ if(st) st.textContent='Added \u201c'+m.title+'\u201d. Move/scale it with the gizmo.'; if(typeof renderModelCredits==='function') renderModelCredits(); }, onError:(err)=>{ if(st) st.textContent='Could not load \u201c'+m.title+'\u201d \u2014 '+((err&&err.message)||'download blocked'); } }); });
+    renderSketchfabSearch(body, (m,st)=>{ if(st) st.textContent='Loading \u201c'+m.title+'\u201d\u2026'; addSceneProp(m.glb, { name:m.title, attribution:m.attribution, onAdded:()=>{ if(st) st.textContent='Added \u201c'+m.title+'\u201d. Move/scale it with the gizmo.'; if(typeof renderModelCredits==='function') renderModelCredits(); }, onError:(err)=>{ if(st) st.textContent='Could not load \u201c'+m.title+'\u201d \u2014 '+((err&&err.message)||'download blocked'); } }); });
   } else renderModelBrowserPP(body);
 }
 function renderModelBrowserPP(host){
@@ -11978,7 +12009,7 @@ function renderModelBrowserPP(host){
       const cap=document.createElement('div'); cap.textContent=m.title; cap.style.cssText='font-size:10px;color:#9fe6cf;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'; card.appendChild(cap);
       card.onclick=()=>{
         status.textContent = 'Loading "' + m.title + '"…';
-        addSceneProp(m.glb, { attribution:m.attribution, onAdded:()=>{ status.textContent = 'Added "' + m.title + '". Move/scale it with the gizmo.'; renderModelCredits(); }, onError:()=>{ status.innerHTML = 'Could not load "' + m.title + '" — its host may block cross-origin loading (CORS). Try another, or re-host the .glb alongside your game.'; } });
+        addSceneProp(m.glb, { name:m.title, attribution:m.attribution, onAdded:()=>{ status.textContent = 'Added "' + m.title + '". Move/scale it with the gizmo.'; renderModelCredits(); }, onError:()=>{ status.innerHTML = 'Could not load "' + m.title + '" — its host may block cross-origin loading (CORS). Try another, or re-host the .glb alongside your game.'; } });
       };
       grid.appendChild(card);
     }
@@ -12384,6 +12415,11 @@ function renderEditorFields(){
     }
     // ===== Pickups: weapons / ammo / health / buffs placed on the map =====
     hint(gHost, '<b>Pickups</b> \u2014 items players grab on the map', '12px 0 4px');
+    { const poLab=document.createElement('label'); poLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 6px;cursor:pointer;';
+      const poCb=document.createElement('input'); poCb.type='checkbox'; poCb.checked=pickupsOn; poCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+      poCb.onchange=()=>{ pushUndoSnapshot(); pickupsOn=poCb.checked; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers(); renderEditorFields(); };
+      const poSp=document.createElement('span'); poSp.textContent='Spawn pickups'; poLab.appendChild(poCb); poLab.appendChild(poSp); gHost.appendChild(poLab); }
+    if(!pickupsOn){ hint(gHost,'','2px 0 6px').textContent='Pickups are off \u2014 no health/buff diamonds spawn (placed spots below are kept for when you turn this back on).'; }
     { const krow=document.createElement('div'); krow.className='row2'; krow.style.flexWrap='wrap';
       const KINDS=[['health','+Health'],['ammo','+Ammo'],['rifle','Rifle'],['smg','SMG'],['shotgun','Shotgun'],['launcher','Rocket'],['grenade','Grenade'],['damage','2x Dmg'],['speed','Speed'],['shield','Shield']];
       const ksel=document.createElement('select'); ksel.style.cssText='flex:1;min-width:90px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
