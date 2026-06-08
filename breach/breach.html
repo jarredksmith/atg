@@ -6858,6 +6858,7 @@ const WEAPONS = {
   smg:     { name:'SMG',     mag:40, magSize:40, reserve:120, reserveMax:360, fireRate:55,  dmg:8,  pellets:1, spread:0.02, auto:true,  reloadMs:1000, color:0xa8e6ff, refillAmt:80, refillCost:50, model:'', view:null },
   shotgun: { name:'SHOTGUN', mag:6,  magSize:6,  reserve:24,  reserveMax:72,  fireRate:650, dmg:9,  pellets:8, spread:0.08, auto:false, reloadMs:1300, color:0xffb86b, refillAmt:18, refillCost:60, model:'', view:null },
   launcher:{ name:'ROCKET',  mag:1,  magSize:1,  reserve:6,   reserveMax:18,  fireRate:900, dmg:90, pellets:1, spread:0,    auto:false, reloadMs:1700, color:0xff7a3a, refillAmt:4,  refillCost:120, model:'', view:null, projectile:true, blastRadius:7 },
+  crowbar: { name:'CROWBAR', mag:0,  magSize:0,  reserve:0,   reserveMax:0,   fireRate:500, dmg:60, pellets:0, spread:0,    auto:true,  reloadMs:0,    color:0x9fd8ff, refillAmt:0,  refillCost:0,   model:'', view:null, melee:true, reach:3.4 },
 };
 // Restore per-weapon model + framing saved to localStorage (serialized under "weapons"). Without this the
 // hardcoded model:''/view:null above would wipe gun edits on every reload.
@@ -6874,7 +6875,7 @@ function refillAllWeapons(){
   for(const k in WEAPONS){ const w=WEAPONS[k]; w.mag=w.magSize; w.reserve=w.reserveMax; }
 }
 // Duel loadout: hand the player all three weapons fully loaded (duels are a gunfight, not an economy).
-function giveDuelLoadout(){ owned=['rifle','smg','shotgun','launcher']; curWep='rifle'; refillAllWeapons(); reloading=false; applyWeaponAim('rifle'); applyWeaponMuzzle('rifle'); }
+function giveDuelLoadout(){ owned=['rifle','smg','shotgun','launcher','crowbar']; curWep='rifle'; refillAllWeapons(); reloading=false; applyWeaponAim('rifle'); applyWeaponMuzzle('rifle'); }
 
 function switchWeapon(key){
   if(!owned.includes(key) || key===curWep || reloading) return;
@@ -8634,6 +8635,7 @@ const ITEM_POOL = [
   { id:'smg',     name:'SMG',           desc:'Fast-firing automatic',       cost:200, act:()=>giveWeapon('smg'), oneTime:true },
   { id:'shotgun', name:'SHOTGUN',       desc:'High close-range burst',      cost:220, act:()=>giveWeapon('shotgun'), oneTime:true },
   { id:'launcher', name:'ROCKET LAUNCHER', desc:'Explosive splash — huge AoE', cost:320, act:()=>giveWeapon('launcher'), oneTime:true },
+  { id:'crowbar', name:'CROWBAR', desc:'Heavy melee — big knockback, no ammo', cost:140, act:()=>giveWeapon('crowbar'), oneTime:true },
   { id:'ammo',    name:'AMMO CRATE',    desc:'Refill current weapon ammo',  cost:50,  act:()=>{ const w=W(); w.reserve=w.reserveMax; updateHUD(); } },
 ];
 function giveWeapon(key){ if(!owned.includes(key)){ owned.push(key); } switchWeapon(key); }
@@ -8995,7 +8997,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 194 · 2026-06-07';
+const BUILD_VERSION = 'build 195 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9885,17 +9887,18 @@ const MELEE_CD = 480, MELEE_RANGE = 2.9, MELEE_DMG = 34;   // punch: cooldown ms
 // Melee / punch. Fired by the V key or automatically when you pull the trigger fully dry. Hits the nearest
 // enemy / bot / player in a forward cone and shoves them along your aim (reuses the same launch channel the
 // trebuchet + explosions use), and breaks / shoves a prop you're facing. Knockback scales with Launch Power.
-function meleeAttack(){
+function meleeAttack(wep){
   if(!gameOn || editorOpen || paused) return;
   const now = performance.now();
-  if(now - _meleeT < MELEE_CD) return;
+  if(now - _meleeT < (wep ? 0 : MELEE_CD)) return;   // a weapon is gated by its own fireRate; the bare-fist punch uses MELEE_CD
   _meleeT = now;
+  const RANGE = (wep && wep.reach) || MELEE_RANGE, DMG = (wep && wep.dmg) || MELEE_DMG;
   if(typeof tone==='function') tone({ freq:320, type:'sine', dur:0.07, vol:0.07, slideTo:150 });   // swing whoosh
   const fwd = new THREE.Vector3(); camera.getWorldDirection(fwd);
   const fh = Math.hypot(fwd.x, fwd.z) || 1;
   const px=player.pos.x, py=player.pos.y, pz=player.pos.z;
   const LP=(worldCfg && +worldCfg.launchPower)||1, KB=11*LP, UP=5*LP;
-  const cone=(tx,ty,tz)=>{ const dx=tx-px, dy=ty-py, dz=tz-pz, dist=Math.hypot(dx,dy,dz); if(dist>MELEE_RANGE) return -1; return ((dx*fwd.x+dy*fwd.y+dz*fwd.z)/(dist||1))>0.35 ? dist : -1; };
+  const cone=(tx,ty,tz)=>{ const dx=tx-px, dy=ty-py, dz=tz-pz, dist=Math.hypot(dx,dy,dz); if(dist>RANGE) return -1; return ((dx*fwd.x+dy*fwd.y+dz*fwd.z)/(dist||1))>0.35 ? dist : -1; };
   let hit=false;
   if(pvpMode()){
     if(duelDead) return;
@@ -9903,20 +9906,20 @@ function meleeAttack(){
     for(const bt of bots){ if(bt.dead||sameTeam(NET.myId,bt.id)) continue; const dd=cone(bt.pos.x,1.0,bt.pos.z); if(dd>=0&&dd<bestD){ bestD=dd; best=bt; kind='bot'; } }
     for(const id in NET.players){ const rp=NET.players[id]; if(!rp||!rp.posEye) continue; if(sameTeam(NET.myId,+id)) continue; if(rp.hp!=null&&rp.hp<=0) continue; const dd=cone(rp.posEye.x,rp.posEye.y,rp.posEye.z); if(dd>=0&&dd<bestD){ bestD=dd; best=rp; kind='player'; bestId=+id; } }
     if(best){ hit=true;
-      if(kind==='bot'){ best.hp-=MELEE_DMG; best.evx=(best.evx||0)+fwd.x/fh*KB; best.evz=(best.evz||0)+fwd.z/fh*KB; best.vy=Math.max(best.vy||0,UP); best.grounded=false; const _k=best.hp<=0; if(best.mesh){ spark(best.mesh.position,0xffd166); spawnDamageNumber(best.mesh.position, MELEE_DMG, _k, false); } showHitmarker(_k); if(_k){ registerDuelKill(NET.myId,best.id); botDie(best); } }
-      else { sendToPlayer(bestId,{t:'pvpHit', d:MELEE_DMG, from:NET.myId}); if(best.posEye){ spark(best.posEye,0xffd166); spawnDamageNumber(best.posEye, MELEE_DMG, false, false); } showHitmarker(false); }
+      if(kind==='bot'){ best.hp-=DMG; best.evx=(best.evx||0)+fwd.x/fh*KB; best.evz=(best.evz||0)+fwd.z/fh*KB; best.vy=Math.max(best.vy||0,UP); best.grounded=false; const _k=best.hp<=0; if(best.mesh){ spark(best.mesh.position,0xffd166); spawnDamageNumber(best.mesh.position, DMG, _k, false); } showHitmarker(_k); if(_k){ registerDuelKill(NET.myId,best.id); botDie(best); } }
+      else { sendToPlayer(bestId,{t:'pvpHit', d:DMG, from:NET.myId}); if(best.posEye){ spark(best.posEye,0xffd166); spawnDamageNumber(best.posEye, DMG, false, false); } showHitmarker(false); }
     }
   } else {
     let best=null, bestD=1e9;
     for(const en of enemies){ if(!en.mesh) continue; const dd=cone(en.mesh.position.x,en.mesh.position.y,en.mesh.position.z); if(dd>=0&&dd<bestD){ bestD=dd; best=en; } }
-    if(best){ hit=true; const _d=MELEE_DMG*(buffs.damage?2:1)*run.dmgMul; best.hp-=_d; best.evx=(best.evx||0)+fwd.x/fh*KB; best.evz=(best.evz||0)+fwd.z/fh*KB; best.vy=Math.max(best.vy||0,UP); best.grounded=false; const _k=best.hp<=0; spark(best.mesh.position,0xffd166); spawnDamageNumber(best.mesh.position, _d, _k, false); flashEnemy(best); showHitmarker(_k); if(_k) killEnemy(best); }
+    if(best){ hit=true; const _d=DMG*(buffs.damage?2:1)*run.dmgMul; best.hp-=_d; best.evx=(best.evx||0)+fwd.x/fh*KB; best.evz=(best.evz||0)+fwd.z/fh*KB; best.vy=Math.max(best.vy||0,UP); best.grounded=false; const _k=best.hp<=0; spark(best.mesh.position,0xffd166); spawnDamageNumber(best.mesh.position, _d, _k, false); flashEnemy(best); showHitmarker(_k); if(_k) killEnemy(best); }
   }
   if(NET.mode!=='client' && dynamicProps.length){   // punch a prop in front: break / detonate + shove
     raycaster.setFromCamera({x:0,y:0}, camera);
     const ph = raycaster.intersectObjects(dynamicProps, true);
-    if(ph.length && ph[0].distance<=MELEE_RANGE){
+    if(ph.length && ph[0].distance<=RANGE){
       let o=ph[0].object; while(o && dynamicProps.indexOf(o)<0) o=o.parent;
-      if(o){ const dir=new THREE.Vector3(fwd.x,0,fwd.z).normalize(); const broke=damageProp(o, MELEE_DMG, ph[0].point, dir, 8, NET.myId); if(!broke) pushDynamic(o, dir, 8, ph[0].point); hit=true; }
+      if(o){ const dir=new THREE.Vector3(fwd.x,0,fwd.z).normalize(); const broke=damageProp(o, DMG, ph[0].point, dir, 8, NET.myId); if(!broke) pushDynamic(o, dir, 8, ph[0].point); hit=true; }
     }
   }
   addShake(0.05);
@@ -9926,6 +9929,7 @@ function shoot(){
   const w = W();
   const now = performance.now();
   if(now - lastShot < w.fireRate * run.fireMul || reloading) return;
+  if(w.melee){ if(!w.auto && firingLatch) return; firingLatch=true; lastShot=now; meleeAttack(w); return; }   // equipped melee weapon: swing it
   if(w.mag<=0){ if(w.reserve<=0){ meleeAttack(); return; } SFX.empty(); reload(); return; }   // out of ammo entirely -> throw hands
   if(!w.auto && firingLatch) return;     // semi-auto: one shot per click
   firingLatch = true;
@@ -10121,8 +10125,8 @@ function updateHUD(){
   $('hp').textContent = Math.max(0,Math.ceil(player.hp));
   $('hpFill').style.width = Math.max(0,player.hp/player.maxHp*100)+'%';
   $('wepName').textContent = w.name;
-  $('ammo').textContent = reloading ? '--' : w.mag;
-  $('reserve').textContent = w.reserve;
+  $('ammo').textContent = w.melee ? '∞' : (reloading ? '--' : w.mag);
+  $('reserve').textContent = w.melee ? 'MELEE' : w.reserve;
   $('nades').textContent = grenadeCount;
   $('scoreVal').textContent = score;
   $('creditsVal').textContent = credits;
