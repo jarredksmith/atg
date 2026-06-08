@@ -9084,7 +9084,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 213 · 2026-06-07';
+const BUILD_VERSION = 'build 214 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11816,10 +11816,11 @@ function renderModelSearchPP(host, onPick, opts){
   fRow.appendChild(anim); fRow.appendChild(fSp); host.appendChild(fRow);
   const status=document.createElement('div'); status.className='hint'; status.style.margin='2px 0'; host.appendChild(status);
   const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:4px;'; host.appendChild(grid);
-  let raw=[];
+  const moreWrap=document.createElement('div'); moreWrap.style.cssText='margin-top:6px;text-align:center;'; host.appendChild(moreWrap);
+  let raw=[], _page=1, _more=false;
   function render(){
     const list = anim.checked ? raw.filter(m=>m.animated===true) : raw;
-    grid.innerHTML='';
+    grid.innerHTML=''; moreWrap.innerHTML='';
     if(!raw.length){ status.textContent='No models found.'; return; }
     if(!list.length){ status.textContent='No animated models in these results.'; return; }
     status.textContent = list.length + ' result' + (list.length>1?'s':'') + ' — click to use';
@@ -11832,10 +11833,11 @@ function renderModelSearchPP(host, onPick, opts){
       card.onclick=()=>{ status.textContent='Using "'+m.title+'"…'; onPick(m, status); };
       grid.appendChild(card);
     }
+    if(_more){ const mb=document.createElement('button'); mb.textContent='Show more'; mb.style.cssText='padding:5px 16px;font-size:11px;'; mb.onclick=()=>{ mb.disabled=true; mb.textContent='Loading…'; _page++; ppSearch(ppLastQuery, (list)=>{ const ids=new Set(raw.map(m=>m.id)); const add=list.filter(m=>!ids.has(m.id)); raw=raw.concat(add); _more = add.length>0 && list.length>=24; render(); }, ()=>{ mb.disabled=false; mb.textContent='Show more'; }, _page); }; moreWrap.appendChild(mb); }
   }
   anim.onchange=render;
-  function doSearch(){ const term=q.value.trim(); if(!term){ status.textContent='Type something to search.'; return; } ppLastQuery=term; status.textContent='Searching…'; grid.innerHTML='';
-    ppSearch(term, list=>{ raw=list; render(); }, err=>{ raw=[]; const msg=(err&&err.message)||String(err); status.textContent = (!ppProxy() && /failed|load|network/i.test(msg)) ? 'Search blocked by CORS — the Poly Pizza proxy isn\u2019t reachable.' : ('Search failed: '+msg); }); }
+  function doSearch(){ const term=q.value.trim(); if(!term){ status.textContent='Type something to search.'; return; } ppLastQuery=term; _page=1; status.textContent='Searching…'; grid.innerHTML='';
+    ppSearch(term, (list,total)=>{ raw=list; _more = list.length>=24 && (total==null || raw.length<total); render(); }, err=>{ raw=[]; _more=false; const msg=(err&&err.message)||String(err); status.textContent = (!ppProxy() && /failed|load|network/i.test(msg)) ? 'Search blocked by CORS — the Poly Pizza proxy isn\u2019t reachable.' : ('Search failed: '+msg); }, 1); }
   sBtn.onclick=doSearch; q.addEventListener('keydown', e=>{ if(e.code==='Enter'){ e.preventDefault(); doSearch(); } });
   if(raw.length) render();
 }
@@ -11857,13 +11859,13 @@ function ppParseModel(m){
   if(!attribution){ const c=m.Creator||m.creator||{}; const cn=c.Username||c.username||c.Name||c.name; const lic=m.Licence||m.License||m.licence||m.license; attribution = title + (cn?(' by '+cn):'') + (lic?(' ['+lic+']'):'') + ' — via Poly Pizza'; }
   return { id:m.ID||m.id||m.Id, title, thumb, glb, attribution, animated: !!(m.Animated || m.animated || (m.AnimationCount>0) || (m.animations && m.animations.length) || (m.Animations && m.Animations.length)) };
 }
-function ppSearch(query, cb, errcb){
+function ppSearch(query, cb, errcb, page){
   const key = ppGetKey();
   if(!key){ errcb(new Error('Enter your Poly Pizza API key first')); return; }
-  const apiUrl = 'https://api.poly.pizza/v1.1/search/' + encodeURIComponent(query);
+  const apiUrl = 'https://api.poly.pizza/v1.1/search/' + encodeURIComponent(query) + '?Limit=24' + (page>1 ? ('&Page='+page) : '');
   fetch(proxied(apiUrl), { headers:{ 'x-auth-token': key } })   // proxied() routes through the Worker if one is set
     .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status + (r.status===401||r.status===403 ? ' — check your API key' : '')); return r.json(); })
-    .then(d=>{ const arr = d.results||d.Results||d.models||d.Models||(Array.isArray(d)?d:[]); cb(arr.map(ppParseModel).filter(Boolean)); })
+    .then(d=>{ const arr = d.results||d.Results||d.models||d.Models||(Array.isArray(d)?d:[]); const total=(typeof d.total==='number')?d.total:(typeof d.Total==='number'?d.Total:null); cb(arr.map(ppParseModel).filter(Boolean), total); })
     .catch(errcb);
 }
 // Render the browser into a host element (only on the Props tab). Caches query+results across re-renders.
@@ -11892,9 +11894,11 @@ function renderModelBrowserPP(host){
 
   const status = document.createElement('div'); status.className='hint'; status.style.margin='2px 0'; host.appendChild(status);
   const grid = document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:4px;'; host.appendChild(grid);
+  const moreWrap=document.createElement('div'); moreWrap.style.cssText='margin-top:6px;text-align:center;'; host.appendChild(moreWrap);
+  let _bpage=1, _bmore=false;
 
   function renderResults(list){
-    grid.innerHTML='';
+    grid.innerHTML=''; moreWrap.innerHTML='';
     if(!list.length){ status.textContent='No models found.'; return; }
     status.textContent = list.length + ' result' + (list.length>1?'s':'') + ' — click to add';
     for(const m of list){
@@ -11909,11 +11913,12 @@ function renderModelBrowserPP(host){
       };
       grid.appendChild(card);
     }
+    if(_bmore){ const mb=document.createElement('button'); mb.textContent='Show more'; mb.style.cssText='padding:5px 16px;font-size:11px;'; mb.onclick=()=>{ mb.disabled=true; mb.textContent='Loading…'; _bpage++; ppSearch(ppLastQuery, (list)=>{ const ids=new Set(ppLastResults.map(m=>m.id)); const add=list.filter(m=>!ids.has(m.id)); ppLastResults=ppLastResults.concat(add); _bmore = add.length>0 && list.length>=24; renderResults(ppLastResults); }, ()=>{ mb.disabled=false; mb.textContent='Show more'; }, _bpage); }; moreWrap.appendChild(mb); }
   }
   function doSearch(){
     const term = q.value.trim(); if(!term){ status.textContent='Type something to search.'; return; }
-    ppLastQuery = term; status.textContent='Searching…'; grid.innerHTML='';
-    ppSearch(term, (list)=>{ ppLastResults = list; renderResults(list); }, (err)=>{ ppLastResults=[]; const msg=(err&&err.message)||String(err); status.innerHTML = (!ppProxy() && /failed|load|network/i.test(msg)) ? 'Search blocked by CORS — Poly Pizza needs the proxy. Deploy polypizza-proxy.js as a Cloudflare Worker and paste its URL above.' : ('Search failed: ' + msg); });
+    ppLastQuery = term; _bpage=1; status.textContent='Searching…'; grid.innerHTML='';
+    ppSearch(term, (list,total)=>{ ppLastResults = list; _bmore = list.length>=24 && (total==null || ppLastResults.length<total); renderResults(list); }, (err)=>{ ppLastResults=[]; _bmore=false; const msg=(err&&err.message)||String(err); status.innerHTML = (!ppProxy() && /failed|load|network/i.test(msg)) ? 'Search blocked by CORS — Poly Pizza needs the proxy. Deploy polypizza-proxy.js as a Cloudflare Worker and paste its URL above.' : ('Search failed: ' + msg); }, 1);
   }
   sBtn.onclick = doSearch;
   q.addEventListener('keydown', e=>{ if(e.code==='Enter'){ e.preventDefault(); doSearch(); } });
