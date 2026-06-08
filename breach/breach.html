@@ -5495,6 +5495,12 @@ moon.shadow.mapSize.set(IS_COARSE ? 1024 : 2048, IS_COARSE ? 1024 : 2048);
 moon.shadow.camera.near = 1; moon.shadow.camera.far = 200;
 moon.shadow.camera.left = -80; moon.shadow.camera.right = 80;
 moon.shadow.camera.top = 80; moon.shadow.camera.bottom = -80;
+// Kill shadow acne (the striped self-shadowing bands on flat faces): normalBias offsets the shadow
+// lookup along the surface normal by ~1 world unit, which clears banding on large planes like the marble
+// and stair treads; the small negative depth bias handles grazing angles. Keep normalBias modest so thin
+// contact shadows don't detach (peter-panning).
+moon.shadow.bias = -0.0004;
+moon.shadow.normalBias = 1.2;
 scene.add(moon);
 
 // ---------- Light budget ----------
@@ -5900,40 +5906,52 @@ const _mgA=new THREE.Vector3(), _mgB=new THREE.Vector3(), _mgC=new THREE.Vector3
 // a staircase of low boxes the player can step up. Returns null to fall back to per-mesh boxes.
 function buildModelGridBoxes(obj, overall){
   if(!overall) return null;
-  const sx=overall.max.x-overall.min.x, sz=overall.max.z-overall.min.z;
-  if(!(sx>0)||!(sz>0)||!isFinite(sx)||!isFinite(sz)) return null;
+  const sx=overall.max.x-overall.min.x, sy=overall.max.y-overall.min.y, sz=overall.max.z-overall.min.z;
+  if(!(sx>0)||!(sz>0)||!(sy>0)||!isFinite(sx)||!isFinite(sz)||!isFinite(sy)) return null;
   const span=Math.max(sx,sz);
-  let cell=span/16; cell=Math.max(0.4, Math.min(cell, 2.0));     // target ~16 columns across, clamped
-  const nx=Math.max(1, Math.min(48, Math.ceil(sx/cell)));
-  const nz=Math.max(1, Math.min(48, Math.ceil(sz/cell)));
-  const cw=sx/nx, cd=sz/nz, ox=overall.min.x, oz=overall.min.z, N=nx*nz;
-  const loY=new Array(N).fill(Infinity), hiY=new Array(N).fill(-Infinity);
+  let cell=span/20; cell=Math.max(0.35, Math.min(cell, 1.2));        // finer columns -> walls hug geometry, opening stays wide
+  const nx=Math.max(1, Math.min(64, Math.ceil(sx/cell)));
+  const nz=Math.max(1, Math.min(64, Math.ceil(sz/cell)));
+  const cw=sx/nx, cd=sz/nz, ox=overall.min.x, oz=overall.min.z, oy=overall.min.y;
+  const K=Math.max(8, Math.min(48, Math.round(sy/0.2)));            // vertical occupancy slots (~0.2u each)
+  const sh=sy/K, N=nx*nz;
+  const occ=new Uint8Array(N*K);                                    // occ[(gx*nz+gz)*K + slot] = solid
   let tris=0, bail=false;
   obj.traverse(o=>{
     if(bail || !o.isMesh || o.visible===false || !o.geometry) return;
     const pos=o.geometry.attributes && o.geometry.attributes.position; if(!pos||!pos.count) return;
     o.updateWorldMatrix(true,false);
     const idx=o.geometry.index, tc=idx?idx.count:pos.count;
-    for(let i=0;i+2<tc;i+=3){
-      if(++tris>200000){ bail=true; return; }                    // pathological mesh: fall back to AABB
-      const a=idx?idx.getX(i):i, b=idx?idx.getX(i+1):i+1, c=idx?idx.getX(i+2):i+2;
+    for(let t=0;t+2<tc;t+=3){
+      if(++tris>200000){ bail=true; return; }                      // pathological mesh: fall back to AABB
+      const a=idx?idx.getX(t):t, b=idx?idx.getX(t+1):t+1, c=idx?idx.getX(t+2):t+2;
       _mgA.fromBufferAttribute(pos,a).applyMatrix4(o.matrixWorld);
       _mgB.fromBufferAttribute(pos,b).applyMatrix4(o.matrixWorld);
       _mgC.fromBufferAttribute(pos,c).applyMatrix4(o.matrixWorld);
       const miX=Math.min(_mgA.x,_mgB.x,_mgC.x), maX=Math.max(_mgA.x,_mgB.x,_mgC.x);
       const miZ=Math.min(_mgA.z,_mgB.z,_mgC.z), maZ=Math.max(_mgA.z,_mgB.z,_mgC.z);
       const miY=Math.min(_mgA.y,_mgB.y,_mgC.y), maY=Math.max(_mgA.y,_mgB.y,_mgC.y);
-      let gx0=Math.max(0,Math.min(nx-1,Math.floor((miX-ox)/cw))), gx1=Math.max(0,Math.min(nx-1,Math.floor((maX-ox)/cw)));
-      let gz0=Math.max(0,Math.min(nz-1,Math.floor((miZ-oz)/cd))), gz1=Math.max(0,Math.min(nz-1,Math.floor((maZ-oz)/cd)));
-      for(let gx=gx0;gx<=gx1;gx++) for(let gz=gz0;gz<=gz1;gz++){ const k=gx*nz+gz; if(miY<loY[k])loY[k]=miY; if(maY>hiY[k])hiY[k]=maY; }
+      const gx0=Math.max(0,Math.min(nx-1,Math.floor((miX-ox)/cw))), gx1=Math.max(0,Math.min(nx-1,Math.floor((maX-ox)/cw)));
+      const gz0=Math.max(0,Math.min(nz-1,Math.floor((miZ-oz)/cd))), gz1=Math.max(0,Math.min(nz-1,Math.floor((maZ-oz)/cd)));
+      const s0=Math.max(0,Math.min(K-1,Math.floor((miY-oy)/sh))), s1=Math.max(0,Math.min(K-1,Math.floor((maY-oy)/sh)));
+      for(let gx=gx0;gx<=gx1;gx++) for(let gz=gz0;gz<=gz1;gz++){ const base=(gx*nz+gz)*K; for(let sl=s0;sl<=s1;sl++) occ[base+sl]=1; }
     }
   });
   if(bail || !tris) return null;
+  // Per column, emit ONE box per contiguous vertical run of solid slots. A column under the archway holds a
+  // low threshold run and a high crown run with an EMPTY gap between them, so the player's body band passes
+  // through; a solid wall column is one floor-to-top run; stair treads are single low runs you step up.
   const boxes=[]; const ey=1e-3;
   for(let gx=0;gx<nx;gx++) for(let gz=0;gz<nz;gz++){
-    const k=gx*nz+gz; if(hiY[k]<loY[k]) continue;                // empty column (e.g. the archway opening)
+    const base=(gx*nz+gz)*K;
     const x0=ox+gx*cw, x1=ox+(gx+1)*cw, z0=oz+gz*cd, z1=oz+(gz+1)*cd;
-    boxes.push(new THREE.Box3(new THREE.Vector3(x0-ey,loY[k],z0-ey), new THREE.Vector3(x1+ey,hiY[k],z1+ey)));
+    let sl=0;
+    while(sl<K){
+      if(!occ[base+sl]){ sl++; continue; }
+      let run=sl; while(run<K && occ[base+run]) run++;             // solid run [sl, run)
+      boxes.push(new THREE.Box3(new THREE.Vector3(x0-ey, oy+sl*sh, z0-ey), new THREE.Vector3(x1+ey, oy+run*sh, z1+ey)));
+      sl=run;
+    }
   }
   return boxes.length ? boxes : null;
 }
@@ -9135,7 +9153,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 215 · 2026-06-08';
+const BUILD_VERSION = 'build 217 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11440,7 +11458,7 @@ const MODE_SECTIONS = {
   files:   ['levelfile','campaign'],
 };
 const MODE_TARGETS = {
-  build:   ['props','lights','spawns','station','player','extract'],
+  build:   ['props','lights','spawns','station','player','pstart','extract'],
   scene:   [],
   enemies: [],
   rules:   [],
