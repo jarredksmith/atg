@@ -6188,13 +6188,17 @@ function ensureFflate(){
   _fflateP=new Promise((res,rej)=>{ let i=0; const go=()=>{ if(i>=urls.length){ rej(new Error('could not load the unzip helper (fflate) from CDN')); return; } const sc=document.createElement('script'); sc.src=urls[i++]; sc.onload=()=>{ if(window.fflate && window.fflate.unzipSync) res(window.fflate); else go(); }; sc.onerror=go; document.head.appendChild(sc); }; go(); });
   return _fflateP;
 }
+function _sfFetchArchive(z){
+  const grab=(u,lbl)=> fetch(u).catch(()=>{ throw new Error('archive fetch failed'+lbl+' (CORS/network)'); }).then(r=>{ if(!r.ok) throw new Error('archive HTTP '+r.status+lbl); return r.arrayBuffer(); });
+  return grab(z, '').catch(()=> grab(proxied(z), ' via proxy'));   // signed CDN URLs rarely allow CORS, so fall back through the proxy
+}
 function loadSketchfabModel(uid, cb, errcb){
   const tok=sfGetToken(); if(!tok){ errcb && errcb(new Error('Add your Sketchfab API token first')); return; }
   fetch('https://api.sketchfab.com/v3/models/'+uid+'/download', { headers:{ Authorization:'Token '+tok } })
-    .then(r=>{ if(!r.ok) throw new Error('download HTTP '+r.status+(r.status===401?' (token)':r.status===403?' (login / not downloadable)':'')); return r.json(); })
-    .then(d=>{ const z=d.gltf&&d.gltf.url; if(!z) throw new Error('no glTF flavour to download'); return fetch(proxied(z)); })
-    .then(r=>{ if(!r.ok) throw new Error('archive HTTP '+r.status); return r.arrayBuffer(); })
-    .then(buf=> ensureFflate().then(ff=>{
+    .catch(()=>{ throw new Error('download request blocked (CORS/network) at api.sketchfab.com'); })
+    .then(r=>{ if(!r.ok) throw new Error('download HTTP '+r.status+(r.status===401?' (check token)':r.status===403?' (login / not downloadable)':'')); return r.json(); })
+    .then(d=>{ const z=d.gltf&&d.gltf.url; if(!z) throw new Error('no downloadable glTF for this model'); return _sfFetchArchive(z); })
+    .then(buf=> ensureFflate().catch(()=>{ throw new Error('could not load the unzip helper (fflate) from CDN'); }).then(ff=>{
         const files=ff.unzipSync(new Uint8Array(buf)); const names=Object.keys(files); const blobs={}; let main=null;
         for(const nm of names){ const ext=(nm.split('.').pop()||'').toLowerCase(); const mt= ext==='gltf'?'model/gltf+json': ext==='png'?'image/png': (ext==='jpg'||ext==='jpeg')?'image/jpeg':'application/octet-stream'; blobs[nm]=URL.createObjectURL(new Blob([files[nm]],{type:mt})); if(!main && (ext==='gltf'||ext==='glb')) main=nm; }
         if(!main) throw new Error('no .gltf/.glb inside the archive');
@@ -9077,7 +9081,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 210 · 2026-06-07';
+const BUILD_VERSION = 'build 211 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11863,7 +11867,7 @@ function renderModelBrowser(host){
   _modelSourceBar(host, ()=>renderModelBrowser(host));
   const body=document.createElement('div'); host.appendChild(body);
   if(sfEnabled() && _modelSource()==='sf'){
-    renderSketchfabSearch(body, (m,st)=>{ if(st) st.textContent='Loading \u201c'+m.title+'\u201d\u2026'; addSceneProp(m.glb, { attribution:m.attribution, onAdded:()=>{ if(st) st.textContent='Added \u201c'+m.title+'\u201d. Move/scale it with the gizmo.'; if(typeof renderModelCredits==='function') renderModelCredits(); }, onError:()=>{ if(st) st.textContent='Could not load \u201c'+m.title+'\u201d (CORS or download blocked).'; } }); });
+    renderSketchfabSearch(body, (m,st)=>{ if(st) st.textContent='Loading \u201c'+m.title+'\u201d\u2026'; addSceneProp(m.glb, { attribution:m.attribution, onAdded:()=>{ if(st) st.textContent='Added \u201c'+m.title+'\u201d. Move/scale it with the gizmo.'; if(typeof renderModelCredits==='function') renderModelCredits(); }, onError:(err)=>{ if(st) st.textContent='Could not load \u201c'+m.title+'\u201d \u2014 '+((err&&err.message)||'download blocked'); } }); });
   } else renderModelBrowserPP(body);
 }
 function renderModelBrowserPP(host){
