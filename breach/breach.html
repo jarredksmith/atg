@@ -9033,7 +9033,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 206 · 2026-06-07';
+const BUILD_VERSION = 'build 207 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11367,7 +11367,7 @@ function applyEditorMode(){
 // a manual mode click instead snaps editorActive to the mode's first target so its Transform shows something valid.
 function applyContextualSections(){
   if(!editorEl) return;
-  const CTX = { gizmo:['edGizmo'], material:['edMaterial'], transform:['edFields'], object:['edShapes','edModels','edUrl','edPicker','edAnim','edLibrary'] };
+  const CTX = { gizmo:['edGizmo'], object:['edShapes','edModels','edUrl','edPicker','edAnim','edLibrary'] };
   const modeSecs = MODE_SECTIONS[editorMode] || [];
   for(const key in CTX){
     if(modeSecs.indexOf(key)<0) continue;
@@ -12783,7 +12783,9 @@ function renderEditorFields(){
   if(matHost){
     matHost.innerHTML = '';
     const selObj = (editorActive==='props' && editorTargets.props.obj) ? editorTargets.props.obj() : null;
-    if(selObj && isShapePrimitive(selObj.userData.src)){
+    const matOn = !!(selObj && isShapePrimitive(selObj.userData.src));
+    const matSec = matHost.closest('.edSection'); if(matSec) matSec.style.display = matOn ? '' : 'none';   // only shape primitives have material
+    if(matOn){
       const toHex = n => '#' + ('000000'+(n>>>0).toString(16)).slice(-6);
 
       // base color
@@ -12899,6 +12901,8 @@ function renderEditorFields(){
   const host = editorEl.querySelector('#edFields');
   host.innerHTML = '';
   editorFieldInputs = [];
+  { const xfSec = host.closest('.edSection'); const xfInMode=(MODE_SECTIONS[editorMode]||[]).indexOf('transform')>=0;
+    if(xfSec) xfSec.style.display = (xfInMode && tgt.fields && tgt.fields.length) ? '' : 'none'; }   // no fields (Extract) -> hide
   for(const fld of (tgt.fields || [])){
     const wrap = document.createElement('div'); wrap.className='field';
     const lab = document.createElement('label');
