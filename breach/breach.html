@@ -5756,7 +5756,7 @@ function broadcastXAnim(i){ const o=propModels[i]; const dest=(o&&o.userData.xa)
   else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send({t:'xa', i, dest}); }catch(e){} } }
 const _xaCur=new THREE.Matrix4(), _xaPrevM=new THREE.Matrix4(), _xaDelta=new THREE.Matrix4(), _xaPt=new THREE.Vector3(), _xaPt2=new THREE.Vector3(), _xaPrevP=new THREE.Vector3(), _xaPrevQ=new THREE.Quaternion(), _xaUp=new THREE.Vector3();
 const XA_LAUNCH=9;   // surface speed (m/s) past which a moving prop FLINGS the player (trebuchet/launcher) instead of carrying them (elevator)
-function _xaCarry(o, b, prevP, prevQ, dt){   // ride a moving/rotating prop while standing on it; a fast surface launches you off it
+function _xaCarry(o, b, prevP, prevQ, dt, peakSp){   // ride a moving/rotating prop while standing on it; a fast surface launches you off it
   if(!b) return; const R=player.radius||0.4, feet=player.pos.y-EYE;
   if(player.pos.x<b.min.x-R||player.pos.x>b.max.x+R||player.pos.z<b.min.z-R||player.pos.z>b.max.z+R) return;
   // how the player's contact point moves with the prop's FULL transform this frame (translation + rotation)
@@ -5766,9 +5766,11 @@ function _xaCarry(o, b, prevP, prevQ, dt){   // ride a moving/rotating prop whil
   _xaPt.set(player.pos.x, feet, player.pos.z);
   _xaPt2.copy(_xaPt).applyMatrix4(_xaDelta);
   const mvx=_xaPt2.x-_xaPt.x, mvy=_xaPt2.y-_xaPt.y, mvz=_xaPt2.z-_xaPt.z;
-  const lift=Math.abs(mvy);   // widen the "on top" band by how far the surface moved, so a fast lift can't drop you through it
-  if(feet < b.max.y-0.5-lift || feet > b.max.y+0.7+lift) return;
-  const sp=Math.hypot(mvx,mvy,mvz)/Math.max(dt,1e-4);
+  const lift=Math.abs(mvy);   // widen reach by how far the surface moved vertically
+  const onTop = (feet >= b.max.y-0.5-lift && feet <= b.max.y+0.7+lift);   // standing on the surface (rideable)
+  const bodyHit = !(b.max.y+lift < feet || b.min.y-lift > feet+1.85);     // a spinning/sweeping prop catches the body, not just the feet
+  if(!onTop && !bodyHit) return;
+  const localSp=Math.hypot(mvx,mvy,mvz)/Math.max(dt,1e-4), sp=Math.max(localSp, (peakSp||0)*0.7);   // spinner launches uniformly: borrow the prop's peak surface speed so the pivot/centre flings too, not just the fast ends
   if(sp > XA_LAUNCH){
     // Fling. A bottom-hinged plank's surface moves mostly UP, so the raw surface velocity alone launches you
     // nearly straight up. Add a kick along the plank's tilting face normal (which points forward+up once the
@@ -5781,19 +5783,23 @@ function _xaCarry(o, b, prevP, prevQ, dt){   // ride a moving/rotating prop whil
     const vy = Math.max(mvy/dt, _xaUp.y*sp) * LP;          // vertical pop from whichever is stronger
     player.vel.y = (vy>=0) ? Math.max(player.vel.y, vy, 4) : Math.max(player.vel.y, vy);
     player.onGround=false;
-  } else {
-    player.pos.x+=mvx; player.pos.y+=mvy; player.pos.z+=mvz;   // ride it (elevator / slow platform)
+  } else if(onTop){
+    player.pos.x+=mvx; player.pos.y+=mvy; player.pos.z+=mvz;   // ride it (elevator / slow platform) — only when standing on top
+  } else if(bodyHit){
+    player.pos.x+=mvx; player.pos.z+=mvz;   // slow side contact: the mover sweeps you along its motion (horizontal) instead of being a wall
   }
 }
-function _xaCarryBot(o, b, prevP, prevQ, dt, bot){   // same ride/launch as the player, but for an AI enemy standing on a moving prop
-  if(!b) return; const R=0.5, feet=bot.pos.y;
+function _xaCarryBot(o, b, prevP, prevQ, dt, bot, peakSp){   // same ride/launch as the player, but for an AI enemy standing on a moving prop
+  if(!b) return; const R=0.7, feet=bot.pos.y;
   if(bot.pos.x<b.min.x-R||bot.pos.x>b.max.x+R||bot.pos.z<b.min.z-R||bot.pos.z>b.max.z+R) return;
   _xaCur.copy(o.matrixWorld); _xaPrevM.compose(prevP, prevQ, o.scale); _xaDelta.multiplyMatrices(_xaCur, _xaPrevM.invert());
   _xaPt.set(bot.pos.x, feet, bot.pos.z); _xaPt2.copy(_xaPt).applyMatrix4(_xaDelta);
   const mvx=_xaPt2.x-_xaPt.x, mvy=_xaPt2.y-_xaPt.y, mvz=_xaPt2.z-_xaPt.z;
   const lift=Math.abs(mvy);
-  if(feet < b.max.y-0.5-lift || feet > b.max.y+0.7+lift) return;
-  const sp=Math.hypot(mvx,mvy,mvz)/Math.max(dt,1e-4);
+  const onTop = (feet >= b.max.y-0.5-lift && feet <= b.max.y+0.7+lift);
+  const bodyHit = !(b.max.y+lift < feet || b.min.y-lift > feet+1.8);
+  if(!onTop && !bodyHit) return;
+  const localSp=Math.hypot(mvx,mvy,mvz)/Math.max(dt,1e-4), sp=Math.max(localSp, (peakSp||0)*0.7);   // spinner launches uniformly: borrow the prop's peak surface speed so the pivot/centre flings too, not just the fast ends
   if(sp > XA_LAUNCH){
     const LP=(worldCfg && +worldCfg.launchPower)||1;
     _xaUp.set(0,1,0).applyQuaternion(o.quaternion);
@@ -5801,25 +5807,38 @@ function _xaCarryBot(o, b, prevP, prevQ, dt, bot){   // same ride/launch as the 
     const vy=Math.max(mvy/dt, _xaUp.y*sp)*LP;
     bot.vy=(vy>=0)?Math.max(bot.vy||0, vy, 4):Math.max(bot.vy||0, vy);
     bot.grounded=false;
-  } else {
-    bot.pos.x+=mvx; bot.pos.y+=mvy; bot.pos.z+=mvz;   // ride a slow platform
+  } else if(onTop){
+    bot.pos.x+=mvx; bot.pos.y+=mvy; bot.pos.z+=mvz;   // ride a slow platform (only when standing on top)
+  } else if(bodyHit){
+    bot.pos.x+=mvx; bot.pos.z+=mvz;   // slow side contact: swept along instead of blocked
   }
 }
-function _xaCarryEnemy(o, b, prevP, prevQ, dt, en){   // a fast-moving prop flings a single-player enemy off it (enemies hover, so launch-only)
-  if(!b) return; const R=0.6, feet=en.mesh.position.y-1.2;
+function _xaCarryEnemy(o, b, prevP, prevQ, dt, en, peakSp){   // a fast-moving prop flings a single-player enemy off it (enemies hover, so launch-only)
+  if(!b) return; const R=(en.mesh.userData.footprint||0.6)+0.5, feet=en.mesh.position.y-1.2;
   if(en.mesh.position.x<b.min.x-R||en.mesh.position.x>b.max.x+R||en.mesh.position.z<b.min.z-R||en.mesh.position.z>b.max.z+R) return;
   _xaCur.copy(o.matrixWorld); _xaPrevM.compose(prevP, prevQ, o.scale); _xaDelta.multiplyMatrices(_xaCur, _xaPrevM.invert());
   _xaPt.set(en.mesh.position.x, feet, en.mesh.position.z); _xaPt2.copy(_xaPt).applyMatrix4(_xaDelta);
   const mvx=_xaPt2.x-_xaPt.x, mvy=_xaPt2.y-_xaPt.y, mvz=_xaPt2.z-_xaPt.z;
   const lift=Math.abs(mvy);
-  if(feet < b.max.y-0.7-lift || feet > b.max.y+0.9+lift) return;
-  const sp=Math.hypot(mvx,mvy,mvz)/Math.max(dt,1e-4);
+  if(b.max.y+lift < feet || b.min.y-lift > feet+2.0) return;   // prop must vertically overlap the enemy's BODY column (handles side-swiping spinners, not just feet-on-top)
+  const localSp=Math.hypot(mvx,mvy,mvz)/Math.max(dt,1e-4), sp=Math.max(localSp, (peakSp||0)*0.7);   // spinner launches uniformly: borrow the prop's peak surface speed so the pivot/centre flings too, not just the fast ends
   if(sp > XA_LAUNCH){
     const LP=(worldCfg && +worldCfg.launchPower)||1;
     _xaUp.set(0,1,0).applyQuaternion(o.quaternion);
     en.evx=(_xaUp.x*sp + mvx/dt)*LP; en.evz=(_xaUp.z*sp + mvz/dt)*LP;
     const vy=Math.max(mvy/dt, _xaUp.y*sp)*LP; en.vy=(vy>=0)?Math.max(en.vy||0, vy, 4):Math.max(en.vy||0, vy); en.grounded=false;
+  } else {
+    en.mesh.position.x+=mvx; en.mesh.position.z+=mvz;   // slow side contact: swept along instead of blocked
   }
+}
+function _xaPeakSpeed(o, prevP, prevQ, b, dt){   // fastest surface speed ANYWHERE on the prop this frame (sampled at box corners) — a spinner's ends move fast even when its pivot/centre doesn't
+  if(!b) return 0;
+  _xaCur.copy(o.matrixWorld); _xaPrevM.compose(prevP, prevQ, o.scale); _xaDelta.multiplyMatrices(_xaCur, _xaPrevM.invert());
+  let mx=0;
+  for(const x of [b.min.x,b.max.x]) for(const y of [b.min.y,b.max.y]) for(const z of [b.min.z,b.max.z]){
+    _xaPt.set(x,y,z); _xaPt2.copy(_xaPt).applyMatrix4(_xaDelta); const d=_xaPt.distanceTo(_xaPt2); if(d>mx) mx=d;
+  }
+  return mx/Math.max(dt,1e-4);
 }
 function updateXAnim(dt){
   if(!gameOn || editorOpen || paused) return;
@@ -5844,9 +5863,10 @@ function updateXAnim(dt){
       // so gate the ride on THAT box. Re-gating on the just-rotated box (whose footprint collapses toward
       // the pivot as a plank tilts up) was ejecting the player mid-swing and dropping them through it.
       const _xaOldBox = o.userData.box;
-      if(player.onGround) _xaCarry(o, _xaOldBox, _xaPrevP, _xaPrevQ, dt);
-      if(bots && bots.length){ for(const _bt of bots){ if(!_bt.dead && _bt.grounded!==false) _xaCarryBot(o, _xaOldBox, _xaPrevP, _xaPrevQ, dt, _bt); } }
-      if(enemies && enemies.length){ for(const _en of enemies){ if(_en.grounded!==false) _xaCarryEnemy(o, _xaOldBox, _xaPrevP, _xaPrevQ, dt, _en); } }
+      const _peakSp = _xaPeakSpeed(o, _xaPrevP, _xaPrevQ, _xaOldBox, dt);
+      if(player.onGround) _xaCarry(o, _xaOldBox, _xaPrevP, _xaPrevQ, dt, _peakSp);
+      if(bots && bots.length){ for(const _bt of bots){ if(!_bt.dead && _bt.grounded!==false) _xaCarryBot(o, _xaOldBox, _xaPrevP, _xaPrevQ, dt, _bt, _peakSp); } }
+      if(enemies && enemies.length){ for(const _en of enemies){ if(_en.grounded!==false) _xaCarryEnemy(o, _xaOldBox, _xaPrevP, _xaPrevQ, dt, _en, _peakSp); } }
       if(colliders.indexOf(o)>=0||o.userData.box) refreshPropCollider(o);
     }
   }
@@ -8997,7 +9017,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 195 · 2026-06-07';
+const BUILD_VERSION = 'build 198 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
