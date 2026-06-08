@@ -9033,7 +9033,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 205 · 2026-06-07';
+const BUILD_VERSION = 'build 206 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11367,7 +11367,7 @@ function applyEditorMode(){
 // a manual mode click instead snaps editorActive to the mode's first target so its Transform shows something valid.
 function applyContextualSections(){
   if(!editorEl) return;
-  const CTX = { gizmo:['edGizmo'], material:['edMaterial'], object:['edShapes','edModels','edUrl','edPicker','edAnim','edLibrary'] };
+  const CTX = { gizmo:['edGizmo'], material:['edMaterial'], transform:['edFields'], object:['edShapes','edModels','edUrl','edPicker','edAnim','edLibrary'] };
   const modeSecs = MODE_SECTIONS[editorMode] || [];
   for(const key in CTX){
     if(modeSecs.indexOf(key)<0) continue;
