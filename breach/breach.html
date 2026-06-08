@@ -6203,7 +6203,7 @@ function loadSketchfabModel(uid, cb, errcb){
         for(const nm of names){ const ext=(nm.split('.').pop()||'').toLowerCase(); const mt= ext==='gltf'?'model/gltf+json': ext==='png'?'image/png': (ext==='jpg'||ext==='jpeg')?'image/jpeg':'application/octet-stream'; blobs[nm]=URL.createObjectURL(new Blob([files[nm]],{type:mt})); if(!main && (ext==='gltf'||ext==='glb')) main=nm; }
         if(!main) throw new Error('no .gltf/.glb inside the archive');
         const base=u=>decodeURIComponent(String(u)).split('?')[0].replace(/^.*[\/\\]/,''); const byBase={}; for(const nm of names) byBase[base(nm)]=blobs[nm];
-        const mgr=new THREE.LoadingManager(); mgr.setURLModifier(u=>{ if(/^blob:|^data:/.test(u)) return u; return byBase[base(u)]||u; });
+        const mgr=new THREE.LoadingManager(); mgr.setURLModifier(u=>{ if(/^data:/.test(u)) return u; const _m=byBase[base(u)]; return _m || u; });   // remap scene.bin / textures (resolved to blob:host/<name>) back to their real blobs; the main glTF's blob falls through
         const revoke=()=>{ for(const nm of names) try{ URL.revokeObjectURL(blobs[nm]); }catch(e){} };
         new THREE.GLTFLoader(mgr).load(blobs[main], (gltf)=>{ setTimeout(revoke, 6000); cb(gltf); }, undefined, e=>{ revoke(); errcb && errcb(e); });
       }))
@@ -9081,7 +9081,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 211 · 2026-06-07';
+const BUILD_VERSION = 'build 212 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
