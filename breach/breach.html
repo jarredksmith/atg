@@ -6172,13 +6172,16 @@ function sfSetToken(k){ try{ localStorage.setItem(SF_TOKEN_KEY, (k||'').trim());
 function sfEnabled(){ try{ return localStorage.getItem(SF_ON_KEY)==='1'; }catch(e){ return false; } }
 function sfSetEnabled(b){ try{ localStorage.setItem(SF_ON_KEY, b?'1':'0'); }catch(e){} }
 function sfThumb(m){ try{ const imgs=(m.thumbnails&&m.thumbnails.images)||[]; const s=imgs.filter(i=>i.width<=320).sort((a,b)=>b.width-a.width)[0]||imgs[0]; return s?s.url:''; }catch(e){ return ''; } }
-function sfSearch(query, cb, errcb){
+function sfMap(m){ return { uid:m.uid, title:m.name||'Untitled', thumb:sfThumb(m), animated:!!(m.animationCount), attribution:(m.name||'Model')+(m.user&&m.user.username?(' by '+m.user.username):'')+(m.license&&m.license.label?(' ['+m.license.label+']'):'')+' \u2014 via Sketchfab' }; }
+function sfFetchPage(url, cb, errcb){   // cb(results, nextPageUrl|null)
   const tok=sfGetToken();
-  const u='https://api.sketchfab.com/v3/search?type=models&downloadable=true&archives_flavours=false&count=24&q='+encodeURIComponent(query);
-  fetch(u, { headers: tok ? { Authorization:'Token '+tok } : {} })
+  fetch(url, { headers: tok ? { Authorization:'Token '+tok } : {} })
     .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status+(r.status===401?' \u2014 check your token':'')); return r.json(); })
-    .then(d=>{ const arr=(d.results||[]).map(m=>({ uid:m.uid, title:m.name||'Untitled', thumb:sfThumb(m), animated:!!(m.animationCount), attribution:(m.name||'Model')+(m.user&&m.user.username?(' by '+m.user.username):'')+(m.license&&m.license.label?(' ['+m.license.label+']'):'')+' \u2014 via Sketchfab' })); cb(arr); })
+    .then(d=>{ cb((d.results||[]).map(sfMap), d.next||null); })
     .catch(errcb);
+}
+function sfSearch(query, cb, errcb){
+  sfFetchPage('https://api.sketchfab.com/v3/search?type=models&downloadable=true&archives_flavours=false&count=24&q='+encodeURIComponent(query), cb, errcb);
 }
 let _fflateP=null;
 function ensureFflate(){
@@ -9081,7 +9084,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 212 · 2026-06-07';
+const BUILD_VERSION = 'build 213 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11745,7 +11748,7 @@ function performUndo(){
 
 // Reusable search UI (gun/enemy/loot/grenade/station/player). Calls onPick(model, statusEl) on a click.
 // Includes an "Animated only" filter (uses the model's animated flag when Poly Pizza exposes one).
-let sfLastQuery='', sfLastResults=[];
+let sfLastQuery='', sfLastResults=[], sfNextUrl=null;
 function _modelSource(){ try{ return (localStorage.getItem('breach_model_source')==='sf' && sfEnabled()) ? 'sf' : 'pp'; }catch(e){ return 'pp'; } }
 function _setModelSource(x){ try{ localStorage.setItem('breach_model_source', x); }catch(e){} }
 // Small bar atop every model search: enable Sketchfab (off by default), then a Poly Pizza / Sketchfab switch.
@@ -11778,15 +11781,17 @@ function renderSketchfabSearch(host, onPick){
   const sb=document.createElement('button'); sb.textContent='Search'; sb.style.flex='0 0 auto'; sRow.appendChild(q); sRow.appendChild(sb); host.appendChild(sRow);
   const status=document.createElement('div'); status.className='hint'; status.style.margin='2px 0'; host.appendChild(status);
   const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:4px;'; host.appendChild(grid);
+  const moreWrap=document.createElement('div'); moreWrap.style.cssText='margin-top:6px;text-align:center;'; host.appendChild(moreWrap);
   tb.onclick=()=>{ sfSetToken(tk.value); status.textContent='Token saved.'; };
-  function render(list){ grid.innerHTML=''; if(!list||!list.length){ status.textContent='No models found.'; return; } status.textContent=list.length+' result'+(list.length>1?'s':'')+' \u2014 click to use';
+  function render(list){ list=list||sfLastResults; grid.innerHTML=''; moreWrap.innerHTML=''; if(!list||!list.length){ status.textContent='No models found.'; return; } status.textContent=list.length+' showing'+(sfNextUrl?' (more available)':'')+' \u2014 click to use';
     for(const m of list){ const card=document.createElement('button'); card.style.cssText='display:flex;flex-direction:column;align-items:center;gap:2px;background:#0c1418;border:1px solid #24323a;border-radius:6px;padding:4px;cursor:pointer;overflow:hidden;'; card.title=m.attribution+(m.animated?'  \u00b7  animated':'');
       if(m.thumb){ const img=document.createElement('img'); img.src=m.thumb; img.loading='lazy'; img.style.cssText='width:100%;aspect-ratio:1;object-fit:cover;background:#06090b;border-radius:3px;'; card.appendChild(img); }
       const cap=document.createElement('div'); cap.textContent=(m.animated?'\u25b6 ':'')+m.title; cap.style.cssText='font-size:10px;color:#9fe6cf;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'; card.appendChild(cap);
       card.onclick=()=>{ status.textContent='Using \u201c'+m.title+'\u201d\u2026 (downloading)'; onPick({ title:m.title, glb:'sketchfab:'+m.uid, thumb:m.thumb, attribution:m.attribution, animated:m.animated }, status); };
-      grid.appendChild(card); } }
+      grid.appendChild(card); }
+    if(sfNextUrl){ const mb=document.createElement('button'); mb.textContent='Show more'; mb.style.cssText='padding:5px 16px;font-size:11px;'; mb.onclick=()=>{ mb.disabled=true; mb.textContent='Loading\u2026'; sfFetchPage(sfNextUrl, (more,next)=>{ sfLastResults=sfLastResults.concat(more); sfNextUrl=next; render(); }, err=>{ mb.disabled=false; mb.textContent='Show more'; status.textContent='Could not load more: '+((err&&err.message)||err); }); }; moreWrap.appendChild(mb); } }
   function doSearch(){ const term=q.value.trim(); if(!term){ status.textContent='Type something to search.'; return; } if(!sfGetToken()){ status.textContent='Add your Sketchfab token first.'; return; } sfLastQuery=term; status.textContent='Searching\u2026'; grid.innerHTML='';
-    sfSearch(term, list=>{ sfLastResults=list; render(list); }, err=>{ sfLastResults=[]; status.textContent='Search failed: '+((err&&err.message)||err); }); }
+    sfSearch(term, (list,next)=>{ sfLastResults=list; sfNextUrl=next; render(); }, err=>{ sfLastResults=[]; sfNextUrl=null; status.textContent='Search failed: '+((err&&err.message)||err); }); }
   sb.onclick=doSearch; q.addEventListener('keydown', e=>{ if(e.code==='Enter'){ e.preventDefault(); doSearch(); } });
   if(sfLastResults.length) render(sfLastResults);
 }
