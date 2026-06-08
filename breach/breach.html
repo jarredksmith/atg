@@ -43,7 +43,7 @@
   #editor .edModes { display:flex; gap:4px; margin-bottom:10px; }
   #editor .edMode { flex:1; text-align:center; padding:7px 3px; cursor:pointer; font:700 11px 'Chakra Petch',ui-monospace,monospace; letter-spacing:.5px;
     background:rgba(56,245,181,0.06); border:1px solid rgba(56,245,181,0.22); border-radius:6px; color:#7fb6a8; transition:background .12s,color .12s,border-color .12s; }
-  #editor .edMode:hover { background:rgba(56,245,181,0.16); color:#cfeee2; }
+  #editor .edMode:hover { filter:brightness(1.22); }
   #editor .edMode.active { background:rgba(56,245,181,0.26); border-color:#38f5b5; color:#eafff7; }
   #editor .tab {
     flex: 1; text-align: center; padding: 5px 0; cursor: pointer;
@@ -9023,7 +9023,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 200 · 2026-06-07';
+const BUILD_VERSION = 'build 201 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11266,7 +11266,7 @@ const editorTargets = {
     code(){ return '// ===== Player start ===== (saved in the level JSON under "pstart")'; }
   },
   extract: {
-    label: '📦 Extract',
+    label: 'Extract',
     isExtract: true,
     obj(){ refreshExtractMarker(); return extractZone; },
     code(){ return '// ===== Extraction point ===== (saved in the level JSON under "extract"; used by the Extraction objective)'; }
@@ -11295,21 +11295,25 @@ let editorActive = 'gun';
 // ---- Editor MODES: one primary switch that gates which target-tabs + sections are shown, so a new user
 // sees a handful of relevant controls instead of the whole panel at once. Each target/section lives in
 // exactly one mode. (Purely a visibility layer — every panel's editing logic is unchanged.)
-const EDITOR_MODES = ['build','scene','rules','kit','files'];
-const MODE_LABEL = { build:'Build', scene:'Scene', rules:'Rules', kit:'Weapons', files:'Save' };
+const EDITOR_MODES = ['build','scene','enemies','rules','kit','files'];
+const MODE_LABEL = { build:'Build', scene:'Scene', enemies:'Enemies', rules:'Rules', kit:'Weapons', files:'Save' };
+const MODE_COLOR = { build:'#38f5b5', scene:'#5db4ff', enemies:'#ff6b8a', rules:'#ffd166', kit:'#ff9b5b', files:'#b69cff' };   // per-mode accent so the buttons read as distinct sections
+function _hexRgba(hex,a){ const nn=parseInt(hex.replace('#',''),16); return 'rgba('+((nn>>16)&255)+','+((nn>>8)&255)+','+(nn&255)+','+a+')'; }
 const MODE_SECTIONS = {
-  build: ['gizmo','object','material','transform'],
-  scene: ['world'],
-  rules: ['game','enemies','loot'],
-  kit:   ['transform','sounds'],
-  files: ['levelfile','campaign'],
+  build:   ['gizmo','object','material','transform'],
+  scene:   ['world'],
+  enemies: ['enemies'],
+  rules:   ['game','loot'],
+  kit:     ['object','transform','sounds'],   // 'object' carries the weapon model import (#edUrl) for the gun/aim/grenade tabs
+  files:   ['levelfile','campaign'],
 };
 const MODE_TARGETS = {
-  build: ['props','lights','spawns','station','player','extract'],
-  scene: [],
-  rules: [],
-  kit:   ['gun','aim','grenade'],
-  files: [],
+  build:   ['props','lights','spawns','station','player','extract'],
+  scene:   [],
+  enemies: [],
+  rules:   [],
+  kit:     ['gun','aim','grenade'],
+  files:   [],
 };
 const TARGET_MODE = {};   // reverse: which mode owns each target tab
 for(const _m of EDITOR_MODES) for(const _t of MODE_TARGETS[_m]) TARGET_MODE[_t]=_m;
@@ -11324,7 +11328,13 @@ function applyEditorMode(){
   editorEl.querySelectorAll('#edTabs .tab').forEach(t=>{ t.style.display = (tgts.indexOf(t.dataset.key)>=0) ? '' : 'none'; });
   const tabRow = editorEl.querySelector('#edTabs'); if(tabRow) tabRow.style.display = tgts.length ? 'flex' : 'none';   // no target picker in Scene/Rules/Save
   const view = editorEl.querySelector('#edView'); if(view) view.style.display = (editorMode==='build'||editorMode==='scene') ? 'flex' : 'none';   // placement aids only where they help
-  editorEl.querySelectorAll('#edModes .edMode').forEach(b=>b.classList.toggle('active', b.dataset.mode===editorMode));
+  editorEl.querySelectorAll('#edModes .edMode').forEach(b=>{
+    const c = MODE_COLOR[b.dataset.mode] || '#38f5b5', on = b.dataset.mode===editorMode;
+    b.classList.toggle('active', on);
+    b.style.borderColor = on ? c : _hexRgba(c,0.32);
+    b.style.background  = on ? _hexRgba(c,0.24) : _hexRgba(c,0.06);
+    b.style.color       = on ? '#f4fffb' : c;
+  });
 }
 // Switch the primary mode. fromSelection=true keeps editorActive (we just clicked an object of this mode);
 // a manual mode click instead snaps editorActive to the mode's first target so its Transform shows something valid.
@@ -11830,7 +11840,7 @@ function buildEditorPanel(){
   })();
   // collapsible section headers (state persists in localStorage so it survives reopening the editor)
   let secState = {}; try{ secState = JSON.parse(localStorage.getItem('breach_editor_sections')||'{}') || {}; }catch(e){}
-  const defaultCollapsed = { material:true, enemies:true, loot:true, sounds:true, campaign:true };   // collapse secondary sections; primary ones (Gizmo/Object/Transform/World/Game/Level file) start open
+  const defaultCollapsed = { material:true, loot:true, sounds:true, campaign:true };   // collapse secondary sections; primary ones (incl. Enemies in its own mode) start open
   p.querySelectorAll('.edSection').forEach(s=>{
     const k = s.dataset.sec;
     const collapsed = (k in secState) ? secState[k]===true : !!defaultCollapsed[k];
