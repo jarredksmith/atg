@@ -47,6 +47,13 @@
   #editor .edModeLbl { font-size:10px; line-height:1; letter-spacing:.4px; }
   #editor .primBtn { display:flex; align-items:center; justify-content:center; gap:6px; }
   #editor .primBtn svg { width:15px; height:15px; flex:none; }
+  #editor .edSubSection { border:1px solid #1c2b30; border-radius:7px; margin:7px 0; overflow:hidden; }
+  #editor .edSubHead { display:flex; align-items:center; gap:7px; padding:8px 10px; cursor:pointer; font:700 11px 'Chakra Petch',ui-monospace,monospace; letter-spacing:.6px; color:#bfe9da; background:rgba(93,180,255,0.06); text-transform:uppercase; }
+  #editor .edSubHead:hover { background:rgba(93,180,255,0.12); }
+  #editor .edSubHead .edCaret { font-size:10px; transition:transform .12s; color:#5db4ff; }
+  #editor .edSubSection.collapsed .edCaret { transform:rotate(-90deg); }
+  #editor .edSubBody { padding:6px 11px 11px; }
+  #editor .edSubSection.collapsed .edSubBody { display:none; }
   #editor .edMode:hover { filter:brightness(1.25); }
   #editor .tab {
     flex: 1; text-align: center; padding: 5px 0; cursor: pointer;
@@ -9026,7 +9033,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 204 · 2026-06-07';
+const BUILD_VERSION = 'build 205 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11323,7 +11330,7 @@ const MODE_SECTIONS = {
   scene:   ['world'],
   enemies: ['enemies'],
   rules:   ['game','loot'],
-  kit:     ['object','transform','sounds'],   // 'object' carries the weapon model import (#edUrl) for the gun/aim/grenade tabs
+  kit:     ['object','transform'],   // 'object' carries the weapon model import + per-weapon shoot sound; music/SFX live in Scene
   files:   ['levelfile','campaign'],
 };
 const MODE_TARGETS = {
@@ -11845,7 +11852,6 @@ function buildEditorPanel(){
     + sec('Enemies', 'enemies', '<div id="edEnemies"></div>')
     + sec('Game / waves', 'game', '<div id="edGame"></div>')
     + sec('Loot', 'loot', '<div id="edLoot"></div>')
-    + sec('Sounds', 'sounds', '<div id="edSounds"></div>')
     + sec('Level file', 'levelfile',
         '<div class="row2"><button id="edSave">💾 Save</button><button id="edClear">Clear save</button></div>'
       + '<div class="row2" style="margin-top:6px"><button id="edShare">🔗 Copy share link</button></div>'
@@ -11967,7 +11973,7 @@ function renderEditorFields(){
   const gameHost    = editorEl.querySelector('#edGame');
   const lootHost    = editorEl.querySelector('#edLoot');
   const soundHost   = editorEl.querySelector('#edSounds');
-  if(soundHost) populateSoundEditor(soundHost);
+  // Sounds relocated: per-weapon shoot sound -> each weapon (Weapons tab); music + global SFX -> Scene > Audio
   if(worldHost){
     worldHost.innerHTML = '';
     if(enemyHost) enemyHost.innerHTML = '';
@@ -12003,100 +12009,68 @@ function renderEditorFields(){
       row.appendChild(inp); row.appendChild(ab); host.appendChild(row);
     };
 
-    // ===== WORLD section: movement, lighting, arena, sky, floor/walls =====
-    hint(worldHost, '<b>Movement</b> — applies live; saved with the level', '2px 0 4px');
-    slider(worldHost, 'Walk speed','walk', 4, 60, 1);
-    slider(worldHost, 'Run speed','run', 4, 100, 1);
-    slider(worldHost, 'Crouch speed','crouch', 1, 40, 1);
-    slider(worldHost, 'Jump','jump', 0, 30, 0.5);
-    slider(worldHost, 'Launch power','launchPower', 0.25, 4, 0.25);
-    slider(worldHost, 'Gravity','grav', 5, 80, 1);
-    hint(worldHost, '', '1px 0 8px').textContent = 'Crouch: hold Ctrl or C (R3 on a controller). Gravity change affects props on next Deploy.';
-
-    hint(worldHost, '<b>Lighting</b> — applies live; saved with the level');
-    slider(worldHost, 'Sun (directional)','sun', 0, 4, 0.05);
-    slider(worldHost, 'Sky (ambient fill)','sky', 0, 3, 0.05);
-    slider(worldHost, 'Brightness lift','ambient', 0, 2, 0.05);
-    const scRow=document.createElement('label'); scRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 8px;';
-    const scSp=document.createElement('span'); scSp.textContent='Sun color'; scSp.style.minWidth='86px';
-    const sc=document.createElement('input'); sc.type='color'; sc.value=hexStr(worldCfg.sunColor); sc.style.cssText='width:48px;height:24px;background:#0c1418;border:1px solid #2a3a42;border-radius:4px;cursor:pointer;';
-    sc.addEventListener('mousedown', ()=>pushUndoSnapshot());
-    sc.oninput=()=>{ worldCfg.sunColor = parseInt(sc.value.slice(1),16)||0; applyWorldCfg(); };
-    scRow.appendChild(scSp); scRow.appendChild(sc); worldHost.appendChild(scRow);
-
-    hint(worldHost, '<b>Arena</b> — playable half-size (rebuilds floor + walls live)', '10px 0 4px');
-    slider(worldHost, 'Arena size','arena', 15, 400, 1);
-
-    // camera & view
-    hint(worldHost, '<b>Camera &amp; view</b> — applies live; saved with the level', '10px 0 4px');
-    slider(worldHost, 'Field of view','fov', 50, 110, 1);
-    slider(worldHost, 'View distance','viewDist', 60, 2000, 10);
-    slider(worldHost, 'Fog density','fogDensity', 0, 0.08, 0.001);
-    colorRow(worldHost, 'Fog color', 'fogColor');
-    // grid toggle
-    const gridRow=document.createElement('label'); gridRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0;cursor:pointer;';
-    const gridCb=document.createElement('input'); gridCb.type='checkbox'; gridCb.checked=(worldCfg.grid!==false); gridCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
-    gridCb.onchange=()=>{ pushUndoSnapshot(); worldCfg.grid=gridCb.checked; applyWorldCfg(); };
-    const gridSp=document.createElement('span'); gridSp.textContent='Show ground grid';
-    gridRow.appendChild(gridCb); gridRow.appendChild(gridSp); worldHost.appendChild(gridRow);
-    hint(worldHost, '', '0 0 4px').textContent = 'Lower fog density = see farther into the dark. View distance is the hard cutoff where geometry stops drawing.';
-
-    // depth of field
-    const dofRow=document.createElement('label'); dofRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:8px 0 4px;cursor:pointer;';
-    const dofCb=document.createElement('input'); dofCb.type='checkbox'; dofCb.checked=(worldCfg.dof===true); dofCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
-    dofCb.onchange=()=>{ pushUndoSnapshot(); worldCfg.dof=dofCb.checked; applyWorldCfg(); renderEditorFields(); };
-    const dofSp=document.createElement('span'); dofSp.innerHTML='<b>Depth of field</b> — blur by distance';
-    dofRow.appendChild(dofCb); dofRow.appendChild(dofSp); worldHost.appendChild(dofRow);
-    if(worldCfg.dof===true){
-      slider(worldHost, 'Focus distance','dofFocus', 2, 120, 1);
-      slider(worldHost, 'In-focus range','dofRange', 1, 80, 1);
-      slider(worldHost, 'Blur strength','dofStrength', 0.1, 4, 0.1);
-      hint(worldHost, '', '0 0 4px').textContent = 'Focus distance = how far away stays sharp. In-focus range = depth kept sharp around it. Everything else blurs.';
-    }
-
-    hint(worldHost, '<b>Sky</b> — equirectangular panorama as <b>.jpg or .png</b> (not .hdr). Lights reflections too. Blank = flat color.', '10px 0 4px');
-    texRow(worldHost, 'https://…/sky.jpg (equirectangular)', 'sky_hdri');
-    // one-tap presets — verified 2:1 equirectangular JPGs that load directly (CORS-open, no proxy needed)
-    const skyPresets = [
-      ['Park',     'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/2294472375_24a3b8ef46_o.jpg'],
-      ['Mountain', 'https://raw.githubusercontent.com/aframevr/aframe/master/examples/boilerplate/panorama/puydesancy.jpg'],
-      ['Room',     'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/kandao3.jpg'],
-      ['None',     ''],
-    ];
-    const presetRow = document.createElement('div'); presetRow.style.cssText='display:flex;flex-wrap:wrap;gap:5px;margin:2px 0 4px;';
-    for(const [label, purl] of skyPresets){
-      const b = document.createElement('button'); b.textContent = label; b.style.cssText = 'flex:0 0 auto;padding:4px 10px;font-size:11px;';
-      b.onclick = ()=>{
-        pushUndoSnapshot();
-        worldCfg.sky_hdri = purl;
-        applyWorldCfg();
-        renderEditorFields();   // re-render so the URL field shows the chosen preset
-      };
-      presetRow.appendChild(b);
-    }
-    worldHost.appendChild(presetRow);
-    const skStatus=document.createElement('div'); skStatus.id='edSkyStatus'; skStatus.className='hint'; skStatus.style.cssText='margin:-2px 0 6px;font-size:10px;'; worldHost.appendChild(skStatus);
-
-    hint(worldHost, '<b>Floor</b> — color, finish + optional tiling texture', '10px 0 4px');
-    colorRow(worldHost, 'Floor color', 'floorColor');
-    slider(worldHost, 'Floor roughness','floorRough', 0, 1, 0.05);
-    slider(worldHost, 'Floor metalness','floorMetal', 0, 1, 0.05);
-    texRow(worldHost, 'https://…/floor.jpg (tiles)', 'floorTex');
-    slider(worldHost, 'Floor tile W','floorTileU', 0, 80, 0.5);
-    slider(worldHost, 'Floor tile H','floorTileV', 0, 80, 0.5);
-    slider(worldHost, 'Floor rotate°','floorRot', 0, 360, 5);
-    { const fh=document.createElement('div'); worldHost.appendChild(fh); renderTexSearch(fh, (maps)=>{ pushUndoSnapshot(); worldCfg.floorTex=maps.map||''; worldCfg.floorTexN=maps.normal||''; worldCfg.floorTexR=maps.rough||''; applyWorldCfg(); renderEditorFields(); }); }
-
-    hint(worldHost, '<b>Walls</b> — color, finish + optional tiling texture');
-    colorRow(worldHost, 'Wall color', 'wallColor');
-    slider(worldHost, 'Wall roughness','wallRough', 0, 1, 0.05);
-    slider(worldHost, 'Wall metalness','wallMetal', 0, 1, 0.05);
-    texRow(worldHost, 'https://…/wall.jpg (tiles)', 'wallTex');
-    slider(worldHost, 'Wall tile W','wallTileU', 0, 80, 0.5);
-    slider(worldHost, 'Wall tile H','wallTileV', 0, 80, 0.5);
-    slider(worldHost, 'Wall rotate°','wallRot', 0, 360, 5);
-    { const wh=document.createElement('div'); worldHost.appendChild(wh); renderTexSearch(wh, (maps)=>{ pushUndoSnapshot(); worldCfg.wallTex=maps.map||''; worldCfg.wallTexN=maps.normal||''; worldCfg.wallTexR=maps.rough||''; applyWorldCfg(); renderEditorFields(); }); }
-    hint(worldHost, '', '0 0 6px').textContent = 'Tile W/H = repeats across width / height (0 = auto). Lower roughness = shinier; metalness adds sheen. Rotate spins the texture (planks/bricks a new way).';
+    // ===== WORLD split into collapsible sub-sections =====
+    const _wss = (()=>{ try{ return JSON.parse(localStorage.getItem('breach_world_sections')||'{}')||{}; }catch(e){ return {}; } })();
+    const subSec = (title, key, collapsedDefault)=>{
+      const sec=document.createElement('div'); sec.className='edSubSection';
+      const collapsed = (key in _wss) ? _wss[key]===true : !!collapsedDefault;
+      if(collapsed) sec.classList.add('collapsed');
+      const head=document.createElement('div'); head.className='edSubHead';
+      head.innerHTML='<span class="edCaret">\u25be</span>'+title;
+      const body=document.createElement('div'); body.className='edSubBody';
+      head.onclick=()=>{ sec.classList.toggle('collapsed'); _wss[key]=sec.classList.contains('collapsed'); try{ localStorage.setItem('breach_world_sections', JSON.stringify(_wss)); }catch(e){} };
+      sec.appendChild(head); sec.appendChild(body); worldHost.appendChild(sec); return body;
+    };
+    { const b=subSec('Movement','move',false);
+      slider(b,'Walk speed','walk',4,60,1); slider(b,'Run speed','run',4,100,1); slider(b,'Crouch speed','crouch',1,40,1);
+      slider(b,'Jump','jump',0,30,0.5); slider(b,'Launch power','launchPower',0.25,4,0.25); slider(b,'Gravity','grav',5,80,1);
+      hint(b,'','1px 0 2px').textContent='Crouch: hold Ctrl or C (R3 on a controller). Gravity change affects props on next Deploy.'; }
+    { const b=subSec('Lighting','light',true);
+      slider(b,'Sun (directional)','sun',0,4,0.05); slider(b,'Sky (ambient fill)','sky',0,3,0.05); slider(b,'Brightness lift','ambient',0,2,0.05);
+      const scRow=document.createElement('label'); scRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 4px;';
+      const scSp=document.createElement('span'); scSp.textContent='Sun color'; scSp.style.minWidth='86px';
+      const sc=document.createElement('input'); sc.type='color'; sc.value=hexStr(worldCfg.sunColor); sc.style.cssText='width:48px;height:24px;background:#0c1418;border:1px solid #2a3a42;border-radius:4px;cursor:pointer;';
+      sc.addEventListener('mousedown', ()=>pushUndoSnapshot()); sc.oninput=()=>{ worldCfg.sunColor=parseInt(sc.value.slice(1),16)||0; applyWorldCfg(); };
+      scRow.appendChild(scSp); scRow.appendChild(sc); b.appendChild(scRow); }
+    { const b=subSec('Camera \u0026 view','cam',true);
+      slider(b,'Field of view','fov',50,110,1); slider(b,'View distance','viewDist',60,2000,10); slider(b,'Fog density','fogDensity',0,0.08,0.001); colorRow(b,'Fog color','fogColor');
+      const gridRow=document.createElement('label'); gridRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0;cursor:pointer;';
+      const gridCb=document.createElement('input'); gridCb.type='checkbox'; gridCb.checked=(worldCfg.grid!==false); gridCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+      gridCb.onchange=()=>{ pushUndoSnapshot(); worldCfg.grid=gridCb.checked; applyWorldCfg(); };
+      const gridSp=document.createElement('span'); gridSp.textContent='Show ground grid'; gridRow.appendChild(gridCb); gridRow.appendChild(gridSp); b.appendChild(gridRow);
+      hint(b,'','0 0 4px').textContent='Lower fog density = see farther into the dark. View distance is the hard cutoff where geometry stops drawing.';
+      const dofRow=document.createElement('label'); dofRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:8px 0 4px;cursor:pointer;';
+      const dofCb=document.createElement('input'); dofCb.type='checkbox'; dofCb.checked=(worldCfg.dof===true); dofCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+      dofCb.onchange=()=>{ pushUndoSnapshot(); worldCfg.dof=dofCb.checked; applyWorldCfg(); renderEditorFields(); };
+      const dofSp=document.createElement('span'); dofSp.innerHTML='<b>Depth of field</b> \u2014 blur by distance'; dofRow.appendChild(dofCb); dofRow.appendChild(dofSp); b.appendChild(dofRow);
+      if(worldCfg.dof===true){ slider(b,'Focus distance','dofFocus',2,120,1); slider(b,'In-focus range','dofRange',1,80,1); slider(b,'Blur strength','dofStrength',0.1,4,0.1);
+        hint(b,'','0 0 4px').textContent='Focus distance = how far away stays sharp. In-focus range = depth kept sharp around it. Everything else blurs.'; } }
+    { const b=subSec('Sky','sky',true);
+      hint(b,'Equirectangular panorama as <b>.jpg or .png</b> (not .hdr). Lights reflections too. Blank = flat color.','2px 0 4px');
+      texRow(b,'https://\u2026/sky.jpg (equirectangular)','sky_hdri');
+      const skyPresets=[['Park','https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/2294472375_24a3b8ef46_o.jpg'],['Mountain','https://raw.githubusercontent.com/aframevr/aframe/master/examples/boilerplate/panorama/puydesancy.jpg'],['Room','https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/kandao3.jpg'],['None','']];
+      const presetRow=document.createElement('div'); presetRow.style.cssText='display:flex;flex-wrap:wrap;gap:5px;margin:2px 0 4px;';
+      for(const [label,purl] of skyPresets){ const bn=document.createElement('button'); bn.textContent=label; bn.style.cssText='flex:0 0 auto;padding:4px 10px;font-size:11px;'; bn.onclick=()=>{ pushUndoSnapshot(); worldCfg.sky_hdri=purl; applyWorldCfg(); renderEditorFields(); }; presetRow.appendChild(bn); }
+      b.appendChild(presetRow);
+      const skStatus=document.createElement('div'); skStatus.id='edSkyStatus'; skStatus.className='hint'; skStatus.style.cssText='margin:-2px 0 6px;font-size:10px;'; b.appendChild(skStatus); }
+    { const b=subSec('Floor','floor',true);
+      colorRow(b,'Floor color','floorColor'); slider(b,'Floor roughness','floorRough',0,1,0.05); slider(b,'Floor metalness','floorMetal',0,1,0.05);
+      texRow(b,'https://\u2026/floor.jpg (tiles)','floorTex'); slider(b,'Floor tile W','floorTileU',0,80,0.5); slider(b,'Floor tile H','floorTileV',0,80,0.5); slider(b,'Floor rotate\u00b0','floorRot',0,360,5);
+      { const fh=document.createElement('div'); b.appendChild(fh); renderTexSearch(fh,(maps)=>{ pushUndoSnapshot(); worldCfg.floorTex=maps.map||''; worldCfg.floorTexN=maps.normal||''; worldCfg.floorTexR=maps.rough||''; applyWorldCfg(); renderEditorFields(); }); } }
+    { const b=subSec('Walls','walls',true);
+      colorRow(b,'Wall color','wallColor'); slider(b,'Wall roughness','wallRough',0,1,0.05); slider(b,'Wall metalness','wallMetal',0,1,0.05);
+      texRow(b,'https://\u2026/wall.jpg (tiles)','wallTex'); slider(b,'Wall tile W','wallTileU',0,80,0.5); slider(b,'Wall tile H','wallTileV',0,80,0.5); slider(b,'Wall rotate\u00b0','wallRot',0,360,5);
+      { const wh=document.createElement('div'); b.appendChild(wh); renderTexSearch(wh,(maps)=>{ pushUndoSnapshot(); worldCfg.wallTex=maps.map||''; worldCfg.wallTexN=maps.normal||''; worldCfg.wallTexR=maps.rough||''; applyWorldCfg(); renderEditorFields(); }); }
+      hint(b,'','4px 0 2px').textContent='Tile W/H = repeats across width / height (0 = auto). Lower roughness = shinier; metalness adds sheen. Rotate spins the texture (planks/bricks a new way).'; }
+    { const b=subSec('Arena','arena',true);
+      hint(b,'Playable half-size (rebuilds floor + walls live)','2px 0 4px'); slider(b,'Arena size','arena',15,400,1); }
+    { const b=subSec('Audio','audio',true);
+      if(!audioSettings.sounds) audioSettings.sounds=_emptySounds(); if(!audioSettings.sounds.shoot) audioSettings.sounds.shoot={};
+      hint(b,'Music + game sound effects. Per-weapon shoot sounds live on each weapon in the Weapons tab.','2px 0 6px');
+      b.appendChild(_sndRow('Music track (loops)', ()=>audioSettings.musicUrl||'', v=>{ audioSettings.musicUrl=v||''; if(_musicOn){ stopMusic(); startMusic(); } }));
+      for(const [lab,key] of [['Reload','reload'],['Grenade explosion','explode'],['Coin pickup','coin'],['Hit marker','hit'],['Enemy kill','kill'],['Player hurt','hurt']]){
+        b.appendChild(_sndRow(lab, ()=>audioSettings.sounds[key], v=>{ audioSettings.sounds[key]=v; })); }
+      b.appendChild(renderFreesoundBrowser(b, ()=>renderEditorFields())); }
 
     // ===== ENEMIES section =====
     const eHost = enemyHost || worldHost;
@@ -12759,6 +12733,13 @@ function renderEditorFields(){
       urlHost.appendChild(psHead);
       const psHost=document.createElement('div'); urlHost.appendChild(psHost);
       renderModelSearch(psHost, (m, st)=>{ inp.value=m.glb; if(tgt.setUrl) tgt.setUrl(m.glb); if(st) st.textContent='Using "'+m.title+'" — credit: '+(m.attribution||''); }, { placeholder:'e.g. pistol, robot, barrel' });
+    }
+    if(tgt===editorTargets.gun){   // per-weapon shoot sound (moved here from the old Sounds tab)
+      if(!audioSettings.sounds) audioSettings.sounds=_emptySounds(); if(!audioSettings.sounds.shoot) audioSettings.sounds.shoot={};
+      const wn=(WEAPONS[curWep]&&WEAPONS[curWep].name)?WEAPONS[curWep].name:curWep;
+      const sh=document.createElement('div'); sh.className='hint'; sh.style.margin='10px 0 2px'; sh.innerHTML='<b>Shoot sound</b> \u2014 '+wn+' (saved on this device)'; urlHost.appendChild(sh);
+      urlHost.appendChild(_sndRow('Shoot \u00b7 '+wn, ()=>audioSettings.sounds.shoot[curWep], v=>{ if(v) audioSettings.sounds.shoot[curWep]=v; else delete audioSettings.sounds.shoot[curWep]; }));
+      urlHost.appendChild(renderFreesoundBrowser(urlHost, ()=>renderEditorFields(), { label:'Shoot \u00b7 '+wn, set:v=>{ if(v) audioSettings.sounds.shoot[curWep]=v; else delete audioSettings.sounds.shoot[curWep]; } }));
     }
     if(tgt===editorTargets.player){   // avatar animation states (mirror the enemy state machine)
       const acHead=document.createElement('div'); acHead.className='hint'; acHead.style.margin='10px 0 2px'; acHead.innerHTML='<b>Animation states</b> — auto-matched by clip name; override per state. Walk/run switch with the avatar\u2019s movement in-game.';
@@ -13762,7 +13743,7 @@ function _fsAssignSlots(){
   for(const [lab,key] of [['Reload','reload'],['Grenade','explode'],['Coin','coin'],['Hit marker','hit'],['Enemy kill','kill'],['Player hurt','hurt']]){ out.push({ label:lab, set:u=>{ audioSettings.sounds[key]=u; } }); }
   return out;
 }
-function renderFreesoundBrowser(host, refresh){
+function renderFreesoundBrowser(host, refresh, directTarget){
   const I='background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:11px;';
   const B='background:rgba(56,245,181,.16);border:1px solid #38f5b5;color:#eafff7;border-radius:4px;cursor:pointer;padding:3px 8px;font-size:11px;';
   const wrap=document.createElement('div'); wrap.style.cssText='margin-top:14px;border-top:1px solid #233;padding-top:10px;';
@@ -13776,7 +13757,7 @@ function renderFreesoundBrowser(host, refresh){
   sRow.appendChild(q); sRow.appendChild(go); wrap.appendChild(sRow);
   const status=document.createElement('div'); status.className='hint'; status.style.margin='0 0 6px'; wrap.appendChild(status);
   const list=document.createElement('div'); list.style.cssText='display:flex;flex-direction:column;gap:6px;max-height:300px;overflow:auto;'; wrap.appendChild(list);
-  const slots=_fsAssignSlots();
+  const slots = directTarget ? null : _fsAssignSlots();
   function renderResults(arr){
     list.innerHTML='';
     if(!arr || !arr.length){ status.textContent='No results.'; return; }
@@ -13789,11 +13770,17 @@ function renderFreesoundBrowser(host, refresh){
       info.appendChild(nm); info.appendChild(meta);
       const play=document.createElement('button'); play.textContent='\u25b6'; play.title='Preview'; play.style.cssText='flex:0 0 auto;width:26px;'+B;
       play.onclick=()=>{ try{ if(_fsAudio){ _fsAudio.pause(); } _fsAudio=new Audio(snd.preview); _fsAudio.volume=Math.min(1,(audioSettings.sfx||1)); _fsAudio.play(); }catch(e){} };
-      const sel=document.createElement('select'); sel.style.cssText='flex:0 0 auto;max-width:118px;'+I;
-      const ph=document.createElement('option'); ph.value=''; ph.textContent='Assign to\u2026'; sel.appendChild(ph);
-      slots.forEach((sl,i)=>{ const o=document.createElement('option'); o.value=String(i); o.textContent=sl.label; sel.appendChild(o); });
-      sel.onchange=()=>{ const i=+sel.value; sel.value=''; if(!(i>=0)||i!==i) return; slots[i].set(snd.preview); saveAudioSettings(); initAudio(); loadSound(snd.preview); status.textContent='Assigned to '+slots[i].label+' \u2713'; if(refresh) refresh(); };
-      card.appendChild(info); card.appendChild(play); card.appendChild(sel);
+      if(directTarget){
+        const useb=document.createElement('button'); useb.textContent='Use'; useb.style.cssText='flex:0 0 auto;'+B;
+        useb.onclick=()=>{ directTarget.set(snd.preview); saveAudioSettings(); initAudio(); loadSound(snd.preview); status.textContent='Assigned \u2713'; if(refresh) refresh(); };
+        card.appendChild(info); card.appendChild(play); card.appendChild(useb);
+      } else {
+        const sel=document.createElement('select'); sel.style.cssText='flex:0 0 auto;max-width:118px;'+I;
+        const ph=document.createElement('option'); ph.value=''; ph.textContent='Assign to\u2026'; sel.appendChild(ph);
+        slots.forEach((sl,i)=>{ const o=document.createElement('option'); o.value=String(i); o.textContent=sl.label; sel.appendChild(o); });
+        sel.onchange=()=>{ const i=+sel.value; sel.value=''; if(!(i>=0)||i!==i) return; slots[i].set(snd.preview); saveAudioSettings(); initAudio(); loadSound(snd.preview); status.textContent='Assigned to '+slots[i].label+' \u2713'; if(refresh) refresh(); };
+        card.appendChild(info); card.appendChild(play); card.appendChild(sel);
+      }
       list.appendChild(card);
     }
   }
