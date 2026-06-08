@@ -8459,6 +8459,7 @@ function explodeGrenade(g){
       if(en.hp<=0) killEnemy(en);
     }
   }
+  { const d=player.pos.distanceTo(pos); if(d<R){ const f=1-d/R, kx=player.pos.x-pos.x, kz=player.pos.z-pos.z, kh=Math.hypot(kx,kz)||1, LP=(worldCfg&&+worldCfg.launchPower)||1, kb=(8+R*1.2)*f*LP; player.extVel.x+=kx/kh*kb; player.extVel.z+=kz/kh*kb; player.vel.y=Math.max(player.vel.y,(5+R*0.6)*f*LP); player.onGround=false; } }   // grenade-jump: your own grenade flings you (no self-damage)
   scene.remove(g.mesh);
 }
 const explosions = [];
@@ -8486,7 +8487,7 @@ function explodeAt(pos, R, dmg, byId){
     for(const id in NET.players){ const rp=NET.players[id]; if(!rp||!rp.posEye) continue; if(sameTeam(byId,+id)) continue; if(rp.hp!=null&&rp.hp<=0) continue; const d=rp.posEye.distanceTo(pos); if(d<R) sendToPlayer(+id, {t:'pvpHit', d:dmg*(1-d/R), from:byId}); }
   }
   // the local (host) player — environmental hazard hits you too
-  { const d=player.pos.distanceTo(pos); if(d<R){ const pd=dmg*(1-d/R); if(!pvpMode()) applyEnemyDamageToSelf(pd, pos.x, pos.z); else if(!duelDead) applyPvpDamage(pd, byId); } }
+  { const d=player.pos.distanceTo(pos); if(d<R){ const f=1-d/R, pd=dmg*f, kx=player.pos.x-pos.x, kz=player.pos.z-pos.z, kh=Math.hypot(kx,kz)||1, LP=(worldCfg&&+worldCfg.launchPower)||1, kb=(8+R*1.2)*f*LP; player.extVel.x+=kx/kh*kb; player.extVel.z+=kz/kh*kb; player.vel.y=Math.max(player.vel.y,(5+R*0.6)*f*LP); player.onGround=false; if(!pvpMode()) applyEnemyDamageToSelf(pd, pos.x, pos.z); else if(!duelDead) applyPvpDamage(pd, byId); } }   // explosions launch you too (rocket / prop blasts), on top of the damage
   // chain reaction: damage nearby breakable props (explosive ones detonate; the _shattered guard stops loops)
   for(const o of dynamicProps.slice()){ if(!o.userData || o.userData._shattered || o.userData.breakable===false || !o.userData.phys) continue; const d=o.position.distanceTo(pos); if(d>0.01 && d<R) damageProp(o, dmg*(1-d/R), null, null, 6, byId); }
 }
@@ -8994,7 +8995,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 192 · 2026-06-07';
+const BUILD_VERSION = 'build 193 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
