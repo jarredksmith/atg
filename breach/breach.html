@@ -39,22 +39,6 @@
   #editor h3 { margin: 0 0 6px; font-size: 13px; color: #38f5b5; letter-spacing: .04em; }
   #editor .hint { color: #5a7d72; font-size: 11px; margin-bottom: 10px; }
   #editor .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
-  /* primary mode switch — groups the panel so only the relevant tabs+sections show at once */
-  #editor .edModes { display:flex; gap:2px; margin-bottom:12px; border-bottom:2px solid rgba(56,245,181,0.28); }
-  #editor .edMode { flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; text-align:center; padding:7px 2px 8px; cursor:pointer; font:700 11px 'Chakra Petch',ui-monospace,monospace; letter-spacing:.4px;
-    background:transparent; border:1px solid transparent; border-bottom:none; border-radius:7px 7px 0 0; color:#7fb6a8; margin-bottom:-2px; transition:background .12s,color .12s,opacity .12s; }
-  #editor .edMode svg { width:17px; height:17px; display:block; }
-  #editor .edModeLbl { font-size:10px; line-height:1; letter-spacing:.4px; }
-  #editor .primBtn { display:flex; align-items:center; justify-content:center; gap:6px; }
-  #editor .primBtn svg { width:15px; height:15px; flex:none; }
-  #editor .edSubSection { border:1px solid #1c2b30; border-radius:7px; margin:7px 0; overflow:hidden; }
-  #editor .edSubHead { display:flex; align-items:center; gap:7px; padding:8px 10px; cursor:pointer; font:700 11px 'Chakra Petch',ui-monospace,monospace; letter-spacing:.6px; color:#bfe9da; background:rgba(93,180,255,0.06); text-transform:uppercase; }
-  #editor .edSubHead:hover { background:rgba(93,180,255,0.12); }
-  #editor .edSubHead .edCaret { font-size:10px; transition:transform .12s; color:#5db4ff; }
-  #editor .edSubSection.collapsed .edCaret { transform:rotate(-90deg); }
-  #editor .edSubBody { padding:6px 11px 11px; }
-  #editor .edSubSection.collapsed .edSubBody { display:none; }
-  #editor .edMode:hover { filter:brightness(1.25); }
   #editor .tab {
     flex: 1; text-align: center; padding: 5px 0; cursor: pointer;
     background: rgba(56,245,181,0.08); border: 1px solid rgba(56,245,181,0.25);
@@ -318,9 +302,9 @@
   .lobbyCode{ font-size:26px; letter-spacing:.22em; font-weight:700; color:#38f5b5; text-align:center; margin:2px 0; }
   .lobbyCode:empty{ display:none; }
   #lobbyPlayers{ display:flex; flex-direction:column; gap:6px; margin-top:10px; }
-  .lobbyRow{ display:flex; align-items:center; gap:10px; padding:8px 11px; border-radius:9px; background:rgba(255,255,255,.07); font-size:14px; color:#eafff7; font-weight:500; }
+  .lobbyRow{ display:flex; align-items:center; gap:10px; padding:8px 11px; border-radius:9px; background:rgba(255,255,255,.05); font-size:14px; }
   .lobbyDot{ width:14px; height:14px; border-radius:50%; flex:none; box-shadow:inset 0 0 4px rgba(0,0,0,.5); }
-  .lobbyHostTag{ margin-left:auto; font-size:10px; opacity:1; color:#7fe0c6; font-weight:600; letter-spacing:.12em; }
+  .lobbyHostTag{ margin-left:auto; font-size:10px; opacity:.55; letter-spacing:.12em; }
   #mpGames{ display:flex; flex-direction:column; gap:5px; max-height:170px; overflow:auto; }
   .gameRow{ display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:8px; background:rgba(255,255,255,.05); font-size:13px; }
   .gameRow .gmode{ font-size:10px; letter-spacing:.09em; opacity:.6; }
@@ -429,9 +413,9 @@
   .mpSection.coop .mpTitle { color:#38f5b5; }
   .mpSection.duel .mpTitle { color:#ff5da2; }
   .mpSection.join .mpTitle { color:#9fd8ff; }
-  .mpDesc { color:#cdeadf; font-size:12px; line-height:1.5; margin-bottom:10px; }   /* global (not just inside .mpSection) so the lobby + char-picker hints are legible, not black */
+  .mpSection .mpDesc { color:#7fa99c; font-size:12px; line-height:1.5; margin-bottom:10px; }
   .mpSection .mpActions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  .mpHint { color:#a9d2c6; font-size:12px; }
+  .mpHint { color:#5a7d72; font-size:12px; }
   .mpBtn.coop { background:rgba(56,245,181,0.18); }
   .mpBtn.duel { color:#ff8fc2; border-color:rgba(255,93,162,0.5); background:rgba(255,93,162,0.14); }
   .mpBtn.duel:hover { background:rgba(255,93,162,0.26); }
@@ -5495,12 +5479,6 @@ moon.shadow.mapSize.set(IS_COARSE ? 1024 : 2048, IS_COARSE ? 1024 : 2048);
 moon.shadow.camera.near = 1; moon.shadow.camera.far = 200;
 moon.shadow.camera.left = -80; moon.shadow.camera.right = 80;
 moon.shadow.camera.top = 80; moon.shadow.camera.bottom = -80;
-// Kill shadow acne (the striped self-shadowing bands on flat faces): normalBias offsets the shadow
-// lookup along the surface normal by ~1 world unit, which clears banding on large planes like the marble
-// and stair treads; the small negative depth bias handles grazing angles. Keep normalBias modest so thin
-// contact shadows don't detach (peter-panning).
-moon.shadow.bias = -0.0004;
-moon.shadow.normalBias = 1.2;
 scene.add(moon);
 
 // ---------- Light budget ----------
@@ -5778,7 +5756,7 @@ function broadcastXAnim(i){ const o=propModels[i]; const dest=(o&&o.userData.xa)
   else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send({t:'xa', i, dest}); }catch(e){} } }
 const _xaCur=new THREE.Matrix4(), _xaPrevM=new THREE.Matrix4(), _xaDelta=new THREE.Matrix4(), _xaPt=new THREE.Vector3(), _xaPt2=new THREE.Vector3(), _xaPrevP=new THREE.Vector3(), _xaPrevQ=new THREE.Quaternion(), _xaUp=new THREE.Vector3();
 const XA_LAUNCH=9;   // surface speed (m/s) past which a moving prop FLINGS the player (trebuchet/launcher) instead of carrying them (elevator)
-function _xaCarry(o, b, prevP, prevQ, dt, peakSp){   // ride a moving/rotating prop while standing on it; a fast surface launches you off it
+function _xaCarry(o, b, prevP, prevQ, dt){   // ride a moving/rotating prop while standing on it; a fast surface launches you off it
   if(!b) return; const R=player.radius||0.4, feet=player.pos.y-EYE;
   if(player.pos.x<b.min.x-R||player.pos.x>b.max.x+R||player.pos.z<b.min.z-R||player.pos.z>b.max.z+R) return;
   // how the player's contact point moves with the prop's FULL transform this frame (translation + rotation)
@@ -5788,11 +5766,9 @@ function _xaCarry(o, b, prevP, prevQ, dt, peakSp){   // ride a moving/rotating p
   _xaPt.set(player.pos.x, feet, player.pos.z);
   _xaPt2.copy(_xaPt).applyMatrix4(_xaDelta);
   const mvx=_xaPt2.x-_xaPt.x, mvy=_xaPt2.y-_xaPt.y, mvz=_xaPt2.z-_xaPt.z;
-  const lift=Math.abs(mvy);   // widen reach by how far the surface moved vertically
-  const onTop = (feet >= b.max.y-0.5-lift && feet <= b.max.y+0.7+lift);   // standing on the surface (rideable)
-  const bodyHit = !(b.max.y+lift < feet || b.min.y-lift > feet+1.85);     // a spinning/sweeping prop catches the body, not just the feet
-  if(!onTop && !bodyHit) return;
-  const localSp=Math.hypot(mvx,mvy,mvz)/Math.max(dt,1e-4), sp=Math.max(localSp, (peakSp||0)*0.7);   // spinner launches uniformly: borrow the prop's peak surface speed so the pivot/centre flings too, not just the fast ends
+  const lift=Math.abs(mvy);   // widen the "on top" band by how far the surface moved, so a fast lift can't drop you through it
+  if(feet < b.max.y-0.5-lift || feet > b.max.y+0.7+lift) return;
+  const sp=Math.hypot(mvx,mvy,mvz)/Math.max(dt,1e-4);
   if(sp > XA_LAUNCH){
     // Fling. A bottom-hinged plank's surface moves mostly UP, so the raw surface velocity alone launches you
     // nearly straight up. Add a kick along the plank's tilting face normal (which points forward+up once the
@@ -5805,23 +5781,19 @@ function _xaCarry(o, b, prevP, prevQ, dt, peakSp){   // ride a moving/rotating p
     const vy = Math.max(mvy/dt, _xaUp.y*sp) * LP;          // vertical pop from whichever is stronger
     player.vel.y = (vy>=0) ? Math.max(player.vel.y, vy, 4) : Math.max(player.vel.y, vy);
     player.onGround=false;
-  } else if(onTop){
-    player.pos.x+=mvx; player.pos.y+=mvy; player.pos.z+=mvz;   // ride it (elevator / slow platform) — only when standing on top
-  } else if(bodyHit){
-    player.pos.x+=mvx; player.pos.z+=mvz;   // slow side contact: the mover sweeps you along its motion (horizontal) instead of being a wall
+  } else {
+    player.pos.x+=mvx; player.pos.y+=mvy; player.pos.z+=mvz;   // ride it (elevator / slow platform)
   }
 }
-function _xaCarryBot(o, b, prevP, prevQ, dt, bot, peakSp){   // same ride/launch as the player, but for an AI enemy standing on a moving prop
-  if(!b) return; const R=0.7, feet=bot.pos.y;
+function _xaCarryBot(o, b, prevP, prevQ, dt, bot){   // same ride/launch as the player, but for an AI enemy standing on a moving prop
+  if(!b) return; const R=0.5, feet=bot.pos.y;
   if(bot.pos.x<b.min.x-R||bot.pos.x>b.max.x+R||bot.pos.z<b.min.z-R||bot.pos.z>b.max.z+R) return;
   _xaCur.copy(o.matrixWorld); _xaPrevM.compose(prevP, prevQ, o.scale); _xaDelta.multiplyMatrices(_xaCur, _xaPrevM.invert());
   _xaPt.set(bot.pos.x, feet, bot.pos.z); _xaPt2.copy(_xaPt).applyMatrix4(_xaDelta);
   const mvx=_xaPt2.x-_xaPt.x, mvy=_xaPt2.y-_xaPt.y, mvz=_xaPt2.z-_xaPt.z;
   const lift=Math.abs(mvy);
-  const onTop = (feet >= b.max.y-0.5-lift && feet <= b.max.y+0.7+lift);
-  const bodyHit = !(b.max.y+lift < feet || b.min.y-lift > feet+1.8);
-  if(!onTop && !bodyHit) return;
-  const localSp=Math.hypot(mvx,mvy,mvz)/Math.max(dt,1e-4), sp=Math.max(localSp, (peakSp||0)*0.7);   // spinner launches uniformly: borrow the prop's peak surface speed so the pivot/centre flings too, not just the fast ends
+  if(feet < b.max.y-0.5-lift || feet > b.max.y+0.7+lift) return;
+  const sp=Math.hypot(mvx,mvy,mvz)/Math.max(dt,1e-4);
   if(sp > XA_LAUNCH){
     const LP=(worldCfg && +worldCfg.launchPower)||1;
     _xaUp.set(0,1,0).applyQuaternion(o.quaternion);
@@ -5829,38 +5801,25 @@ function _xaCarryBot(o, b, prevP, prevQ, dt, bot, peakSp){   // same ride/launch
     const vy=Math.max(mvy/dt, _xaUp.y*sp)*LP;
     bot.vy=(vy>=0)?Math.max(bot.vy||0, vy, 4):Math.max(bot.vy||0, vy);
     bot.grounded=false;
-  } else if(onTop){
-    bot.pos.x+=mvx; bot.pos.y+=mvy; bot.pos.z+=mvz;   // ride a slow platform (only when standing on top)
-  } else if(bodyHit){
-    bot.pos.x+=mvx; bot.pos.z+=mvz;   // slow side contact: swept along instead of blocked
+  } else {
+    bot.pos.x+=mvx; bot.pos.y+=mvy; bot.pos.z+=mvz;   // ride a slow platform
   }
 }
-function _xaCarryEnemy(o, b, prevP, prevQ, dt, en, peakSp){   // a fast-moving prop flings a single-player enemy off it (enemies hover, so launch-only)
-  if(!b) return; const R=(en.mesh.userData.footprint||0.6)+0.5, feet=en.mesh.position.y-1.2;
+function _xaCarryEnemy(o, b, prevP, prevQ, dt, en){   // a fast-moving prop flings a single-player enemy off it (enemies hover, so launch-only)
+  if(!b) return; const R=0.6, feet=en.mesh.position.y-1.2;
   if(en.mesh.position.x<b.min.x-R||en.mesh.position.x>b.max.x+R||en.mesh.position.z<b.min.z-R||en.mesh.position.z>b.max.z+R) return;
   _xaCur.copy(o.matrixWorld); _xaPrevM.compose(prevP, prevQ, o.scale); _xaDelta.multiplyMatrices(_xaCur, _xaPrevM.invert());
   _xaPt.set(en.mesh.position.x, feet, en.mesh.position.z); _xaPt2.copy(_xaPt).applyMatrix4(_xaDelta);
   const mvx=_xaPt2.x-_xaPt.x, mvy=_xaPt2.y-_xaPt.y, mvz=_xaPt2.z-_xaPt.z;
   const lift=Math.abs(mvy);
-  if(b.max.y+lift < feet || b.min.y-lift > feet+2.0) return;   // prop must vertically overlap the enemy's BODY column (handles side-swiping spinners, not just feet-on-top)
-  const localSp=Math.hypot(mvx,mvy,mvz)/Math.max(dt,1e-4), sp=Math.max(localSp, (peakSp||0)*0.7);   // spinner launches uniformly: borrow the prop's peak surface speed so the pivot/centre flings too, not just the fast ends
+  if(feet < b.max.y-0.7-lift || feet > b.max.y+0.9+lift) return;
+  const sp=Math.hypot(mvx,mvy,mvz)/Math.max(dt,1e-4);
   if(sp > XA_LAUNCH){
     const LP=(worldCfg && +worldCfg.launchPower)||1;
     _xaUp.set(0,1,0).applyQuaternion(o.quaternion);
     en.evx=(_xaUp.x*sp + mvx/dt)*LP; en.evz=(_xaUp.z*sp + mvz/dt)*LP;
     const vy=Math.max(mvy/dt, _xaUp.y*sp)*LP; en.vy=(vy>=0)?Math.max(en.vy||0, vy, 4):Math.max(en.vy||0, vy); en.grounded=false;
-  } else {
-    en.mesh.position.x+=mvx; en.mesh.position.z+=mvz;   // slow side contact: swept along instead of blocked
   }
-}
-function _xaPeakSpeed(o, prevP, prevQ, b, dt){   // fastest surface speed ANYWHERE on the prop this frame (sampled at box corners) — a spinner's ends move fast even when its pivot/centre doesn't
-  if(!b) return 0;
-  _xaCur.copy(o.matrixWorld); _xaPrevM.compose(prevP, prevQ, o.scale); _xaDelta.multiplyMatrices(_xaCur, _xaPrevM.invert());
-  let mx=0;
-  for(const x of [b.min.x,b.max.x]) for(const y of [b.min.y,b.max.y]) for(const z of [b.min.z,b.max.z]){
-    _xaPt.set(x,y,z); _xaPt2.copy(_xaPt).applyMatrix4(_xaDelta); const d=_xaPt.distanceTo(_xaPt2); if(d>mx) mx=d;
-  }
-  return mx/Math.max(dt,1e-4);
 }
 function updateXAnim(dt){
   if(!gameOn || editorOpen || paused) return;
@@ -5885,76 +5844,14 @@ function updateXAnim(dt){
       // so gate the ride on THAT box. Re-gating on the just-rotated box (whose footprint collapses toward
       // the pivot as a plank tilts up) was ejecting the player mid-swing and dropping them through it.
       const _xaOldBox = o.userData.box;
-      const _peakSp = _xaPeakSpeed(o, _xaPrevP, _xaPrevQ, _xaOldBox, dt);
-      if(player.onGround) _xaCarry(o, _xaOldBox, _xaPrevP, _xaPrevQ, dt, _peakSp);
-      if(bots && bots.length){ for(const _bt of bots){ if(!_bt.dead && _bt.grounded!==false) _xaCarryBot(o, _xaOldBox, _xaPrevP, _xaPrevQ, dt, _bt, _peakSp); } }
-      if(enemies && enemies.length){ for(const _en of enemies){ if(_en.grounded!==false) _xaCarryEnemy(o, _xaOldBox, _xaPrevP, _xaPrevQ, dt, _en, _peakSp); } }
+      if(player.onGround) _xaCarry(o, _xaOldBox, _xaPrevP, _xaPrevQ, dt);
+      if(bots && bots.length){ for(const _bt of bots){ if(!_bt.dead && _bt.grounded!==false) _xaCarryBot(o, _xaOldBox, _xaPrevP, _xaPrevQ, dt, _bt); } }
+      if(enemies && enemies.length){ for(const _en of enemies){ if(_en.grounded!==false) _xaCarryEnemy(o, _xaOldBox, _xaPrevP, _xaPrevQ, dt, _en); } }
       if(colliders.indexOf(o)>=0||o.userData.box) refreshPropCollider(o);
     }
   }
 }
 const _pcV = new THREE.Vector3();
-// True if this prop is an imported model (URL / Poly Pizza / Sketchfab / .glb) rather than a built-in
-// primitive. Imported models are concave (stairs, archways), so a single bounding box is a poor player
-// collider even though Rapier already has their exact trimesh for dynamic objects.
-function isModelSrc(src){ return typeof src==='string' && (/^(https?:|blob:|data:|sketchfab:)/i.test(src) || /\.(glb|gltf)(\?|$)/i.test(src)); }
-const _mgA=new THREE.Vector3(), _mgB=new THREE.Vector3(), _mgC=new THREE.Vector3();
-// Approximate a concave model's solid volume as a grid of per-column boxes built from its REAL triangles
-// (world space). Each occupied column gets one box spanning the min..max height of the triangles in it.
-// An open archway column ends up with only the high arch-stone box (skipped as overhead by clearAt), so
-// the player walks through; a solid wall column spans floor..top, so it stays a wall; stair treads become
-// a staircase of low boxes the player can step up. Returns null to fall back to per-mesh boxes.
-function buildModelGridBoxes(obj, overall){
-  if(!overall) return null;
-  const sx=overall.max.x-overall.min.x, sy=overall.max.y-overall.min.y, sz=overall.max.z-overall.min.z;
-  if(!(sx>0)||!(sz>0)||!(sy>0)||!isFinite(sx)||!isFinite(sz)||!isFinite(sy)) return null;
-  const span=Math.max(sx,sz);
-  let cell=span/20; cell=Math.max(0.35, Math.min(cell, 1.2));        // finer columns -> walls hug geometry, opening stays wide
-  const nx=Math.max(1, Math.min(64, Math.ceil(sx/cell)));
-  const nz=Math.max(1, Math.min(64, Math.ceil(sz/cell)));
-  const cw=sx/nx, cd=sz/nz, ox=overall.min.x, oz=overall.min.z, oy=overall.min.y;
-  const K=Math.max(8, Math.min(48, Math.round(sy/0.2)));            // vertical occupancy slots (~0.2u each)
-  const sh=sy/K, N=nx*nz;
-  const occ=new Uint8Array(N*K);                                    // occ[(gx*nz+gz)*K + slot] = solid
-  let tris=0, bail=false;
-  obj.traverse(o=>{
-    if(bail || !o.isMesh || o.visible===false || !o.geometry) return;
-    const pos=o.geometry.attributes && o.geometry.attributes.position; if(!pos||!pos.count) return;
-    o.updateWorldMatrix(true,false);
-    const idx=o.geometry.index, tc=idx?idx.count:pos.count;
-    for(let t=0;t+2<tc;t+=3){
-      if(++tris>200000){ bail=true; return; }                      // pathological mesh: fall back to AABB
-      const a=idx?idx.getX(t):t, b=idx?idx.getX(t+1):t+1, c=idx?idx.getX(t+2):t+2;
-      _mgA.fromBufferAttribute(pos,a).applyMatrix4(o.matrixWorld);
-      _mgB.fromBufferAttribute(pos,b).applyMatrix4(o.matrixWorld);
-      _mgC.fromBufferAttribute(pos,c).applyMatrix4(o.matrixWorld);
-      const miX=Math.min(_mgA.x,_mgB.x,_mgC.x), maX=Math.max(_mgA.x,_mgB.x,_mgC.x);
-      const miZ=Math.min(_mgA.z,_mgB.z,_mgC.z), maZ=Math.max(_mgA.z,_mgB.z,_mgC.z);
-      const miY=Math.min(_mgA.y,_mgB.y,_mgC.y), maY=Math.max(_mgA.y,_mgB.y,_mgC.y);
-      const gx0=Math.max(0,Math.min(nx-1,Math.floor((miX-ox)/cw))), gx1=Math.max(0,Math.min(nx-1,Math.floor((maX-ox)/cw)));
-      const gz0=Math.max(0,Math.min(nz-1,Math.floor((miZ-oz)/cd))), gz1=Math.max(0,Math.min(nz-1,Math.floor((maZ-oz)/cd)));
-      const s0=Math.max(0,Math.min(K-1,Math.floor((miY-oy)/sh))), s1=Math.max(0,Math.min(K-1,Math.floor((maY-oy)/sh)));
-      for(let gx=gx0;gx<=gx1;gx++) for(let gz=gz0;gz<=gz1;gz++){ const base=(gx*nz+gz)*K; for(let sl=s0;sl<=s1;sl++) occ[base+sl]=1; }
-    }
-  });
-  if(bail || !tris) return null;
-  // Per column, emit ONE box per contiguous vertical run of solid slots. A column under the archway holds a
-  // low threshold run and a high crown run with an EMPTY gap between them, so the player's body band passes
-  // through; a solid wall column is one floor-to-top run; stair treads are single low runs you step up.
-  const boxes=[]; const ey=1e-3;
-  for(let gx=0;gx<nx;gx++) for(let gz=0;gz<nz;gz++){
-    const base=(gx*nz+gz)*K;
-    const x0=ox+gx*cw, x1=ox+(gx+1)*cw, z0=oz+gz*cd, z1=oz+(gz+1)*cd;
-    let sl=0;
-    while(sl<K){
-      if(!occ[base+sl]){ sl++; continue; }
-      let run=sl; while(run<K && occ[base+run]) run++;             // solid run [sl, run)
-      boxes.push(new THREE.Box3(new THREE.Vector3(x0-ey, oy+sl*sh, z0-ey), new THREE.Vector3(x1+ey, oy+run*sh, z1+ey)));
-      sl=run;
-    }
-  }
-  return boxes.length ? boxes : null;
-}
 function refreshPropCollider(obj){
   obj.updateMatrixWorld(true);
   // overall box (selection highlight, proximity, physics shape sizing)
@@ -5971,9 +5868,7 @@ function refreshPropCollider(obj){
     for(let i=0;i<pos.count;i++){ _pcV.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld); b.expandByPoint(_pcV); }
     if(isFinite(b.min.x) && isFinite(b.max.x)) boxes.push(b);
   });
-  let finalBoxes = boxes.length ? boxes : [obj.userData.box];
-  if(isModelSrc(obj.userData.src)){ const grid = buildModelGridBoxes(obj, obj.userData.box); if(grid && grid.length) finalBoxes = grid; }
-  obj.userData.boxes = finalBoxes;   // imported models: per-column grid so concave shape (stairs/archway) is walkable
+  obj.userData.boxes = boxes.length ? boxes : [obj.userData.box];
   obj.userData.climbable = true;
 }
 // A built-in box primitive (used when src === 'box'): a 1×1×1 crate you scale via the transform.
@@ -6220,7 +6115,6 @@ function gltfManager(){
 }
 function loadGLTFCached(url, cb, errcb){
   if(gltfCache[url]){ cb(gltfCache[url]); return; }
-  if(url && url.indexOf('sketchfab:')===0){ loadSketchfabModel(url.slice(10), (gltf)=>{ gltfCache[url]=gltf; cb(gltf); }, errcb); return; }
   if(!THREE.GLTFLoader){ errcb && errcb(new Error('GLTFLoader unavailable')); return; }
   const mgr = gltfManager();
   if(mgr){
@@ -6230,56 +6124,6 @@ function loadGLTFCached(url, cb, errcb){
   } else {
     new THREE.GLTFLoader().load(proxied(url), (gltf)=>{ gltfCache[url]=gltf; cb(gltf); }, undefined, errcb);   // fallback: main file only
   }
-}
-// ---------- Sketchfab (optional model source) ----------
-// Auth is the user's personal API token (sketchfab.com -> Settings -> Password & API). Search is public-ish;
-// downloading requires the token. Models arrive as a zipped glTF, so we unzip (fflate, lazy-loaded) and feed
-// the entries to GLTFLoader via blob URLs. A prop's src is stored as 'sketchfab:<uid>' so it re-resolves on load.
-const SF_TOKEN_KEY='breach_sketchfab_token', SF_ON_KEY='breach_sketchfab_on';
-function sfGetToken(){ try{ return (localStorage.getItem(SF_TOKEN_KEY)||'').trim(); }catch(e){ return ''; } }
-function sfSetToken(k){ try{ localStorage.setItem(SF_TOKEN_KEY, (k||'').trim()); }catch(e){} }
-function sfEnabled(){ try{ return localStorage.getItem(SF_ON_KEY)==='1'; }catch(e){ return false; } }
-function sfSetEnabled(b){ try{ localStorage.setItem(SF_ON_KEY, b?'1':'0'); }catch(e){} }
-function sfThumb(m){ try{ const imgs=(m.thumbnails&&m.thumbnails.images)||[]; const s=imgs.filter(i=>i.width<=320).sort((a,b)=>b.width-a.width)[0]||imgs[0]; return s?s.url:''; }catch(e){ return ''; } }
-function sfMap(m){ return { uid:m.uid, title:m.name||'Untitled', thumb:sfThumb(m), animated:!!(m.animationCount), attribution:(m.name||'Model')+(m.user&&m.user.username?(' by '+m.user.username):'')+(m.license&&m.license.label?(' ['+m.license.label+']'):'')+' \u2014 via Sketchfab' }; }
-function sfFetchPage(url, cb, errcb){   // cb(results, nextPageUrl|null)
-  const tok=sfGetToken();
-  fetch(url, { headers: tok ? { Authorization:'Token '+tok } : {} })
-    .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status+(r.status===401?' \u2014 check your token':'')); return r.json(); })
-    .then(d=>{ cb((d.results||[]).map(sfMap), d.next||null); })
-    .catch(errcb);
-}
-function sfSearch(query, cb, errcb){
-  sfFetchPage('https://api.sketchfab.com/v3/search?type=models&downloadable=true&archives_flavours=false&count=24&q='+encodeURIComponent(query), cb, errcb);
-}
-let _fflateP=null;
-function ensureFflate(){
-  if(window.fflate && window.fflate.unzipSync) return Promise.resolve(window.fflate);
-  if(_fflateP) return _fflateP;
-  const urls=['https://cdnjs.cloudflare.com/ajax/libs/fflate/0.8.2/umd/index.js','https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js'];
-  _fflateP=new Promise((res,rej)=>{ let i=0; const go=()=>{ if(i>=urls.length){ rej(new Error('could not load the unzip helper (fflate) from CDN')); return; } const sc=document.createElement('script'); sc.src=urls[i++]; sc.onload=()=>{ if(window.fflate && window.fflate.unzipSync) res(window.fflate); else go(); }; sc.onerror=go; document.head.appendChild(sc); }; go(); });
-  return _fflateP;
-}
-function _sfFetchArchive(z){
-  const grab=(u,lbl)=> fetch(u).catch(()=>{ throw new Error('archive fetch failed'+lbl+' (CORS/network)'); }).then(r=>{ if(!r.ok) throw new Error('archive HTTP '+r.status+lbl); return r.arrayBuffer(); });
-  return grab(z, '').catch(()=> grab(proxied(z), ' via proxy'));   // signed CDN URLs rarely allow CORS, so fall back through the proxy
-}
-function loadSketchfabModel(uid, cb, errcb){
-  const tok=sfGetToken(); if(!tok){ errcb && errcb(new Error('Add your Sketchfab API token first')); return; }
-  fetch('https://api.sketchfab.com/v3/models/'+uid+'/download', { headers:{ Authorization:'Token '+tok } })
-    .catch(()=>{ throw new Error('download request blocked (CORS/network) at api.sketchfab.com'); })
-    .then(r=>{ if(!r.ok) throw new Error('download HTTP '+r.status+(r.status===401?' (check token)':r.status===403?' (login / not downloadable)':'')); return r.json(); })
-    .then(d=>{ const z=d.gltf&&d.gltf.url; if(!z) throw new Error('no downloadable glTF for this model'); return _sfFetchArchive(z); })
-    .then(buf=> ensureFflate().catch(()=>{ throw new Error('could not load the unzip helper (fflate) from CDN'); }).then(ff=>{
-        const files=ff.unzipSync(new Uint8Array(buf)); const names=Object.keys(files); const blobs={}; let main=null;
-        for(const nm of names){ const ext=(nm.split('.').pop()||'').toLowerCase(); const mt= ext==='gltf'?'model/gltf+json': ext==='png'?'image/png': (ext==='jpg'||ext==='jpeg')?'image/jpeg':'application/octet-stream'; blobs[nm]=URL.createObjectURL(new Blob([files[nm]],{type:mt})); if(!main && (ext==='gltf'||ext==='glb')) main=nm; }
-        if(!main) throw new Error('no .gltf/.glb inside the archive');
-        const base=u=>decodeURIComponent(String(u)).split('?')[0].replace(/^.*[\/\\]/,''); const byBase={}; for(const nm of names) byBase[base(nm)]=blobs[nm];
-        const mgr=new THREE.LoadingManager(); mgr.setURLModifier(u=>{ if(/^data:/.test(u)) return u; const _m=byBase[base(u)]; return _m || u; });   // remap scene.bin / textures (resolved to blob:host/<name>) back to their real blobs; the main glTF's blob falls through
-        const revoke=()=>{ for(const nm of names) try{ URL.revokeObjectURL(blobs[nm]); }catch(e){} };
-        new THREE.GLTFLoader(mgr).load(blobs[main], (gltf)=>{ setTimeout(revoke, 6000); cb(gltf); }, undefined, e=>{ revoke(); errcb && errcb(e); });
-      }))
-    .catch(e=>{ errcb && errcb(e); });
 }
 // Stable per-prop network id for live multiplayer prop sync. Prefix namespaces by peer so ids never
 // collide across machines: 's' at startup/single-player, 'h' once hosting, 'c<id>' once joined.
@@ -7389,11 +7233,9 @@ let _puId = 1;
 // level has none, spawnPowerups() falls back to the auto buff layout. Markers are an editor-only preview.
 let pickupSpots = (savedLevel && Array.isArray(savedLevel.pickups)) ? savedLevel.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : [];
 let newPickupKind = 'health';
-let pickupsOn = !(savedLevel && savedLevel.pickupsOn === false);   // off => no pickups at all (not even the default fallback set)
 let pickupModels = (savedLevel && savedLevel.pickupModels && typeof savedLevel.pickupModels==='object') ? JSON.parse(JSON.stringify(savedLevel.pickupModels)) : {};   // kind -> {url, scale}: custom model in place of the floating icon
 let pickupMarkers = [];
 function refreshPickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m); } pickupMarkers.length=0;
-  if(typeof pickupsOn!=='undefined' && !pickupsOn) return;   // pickups disabled: no editor markers
   for(const sp of pickupSpots){ const g=buildPowerupMesh(sp.kind); g.position.set(sp.x,0,sp.z); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.pickupMarker=true; scene.add(g); pickupMarkers.push(g); } }
 function setPickupMarkersVisible(v){ for(const m of pickupMarkers) m.visible=v; }
 function disposePickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m); } pickupMarkers.length=0; }
@@ -7440,7 +7282,6 @@ function clearPowerups(){ for(const p of powerups){ if(p.mesh) scene.remove(p.me
 function spawnPowerups(){
   clearPowerups();
   if(NET.mode==='client') return;   // clients receive pads via the world snapshot
-  if(!pickupsOn) return;             // pickups disabled for this level
   const spots = (pickupSpots && pickupSpots.length) ? pickupSpots : powerupLayout();
   for(const spot of spots){
     const mesh = buildPowerupMesh(spot.kind); mesh.position.set(spot.x, 0, spot.z); scene.add(mesh);
@@ -7868,7 +7709,6 @@ function loadLevelFromNet(level){
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns) buildSpawnMarker(sp); } setSpawnMarkersVisible(editorOpen);
-  pickupsOn = (level.pickupsOn !== false);
   pickupSpots = Array.isArray(level.pickups) ? level.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : []; pickupModels = (level.pickupModels && typeof level.pickupModels==='object') ? JSON.parse(JSON.stringify(level.pickupModels)) : {}; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }   // adopt the host's sky / ground / fog
   // per-player characters: the client keeps its own avatar; the host's character arrives via the welcome 'char' field
@@ -9157,7 +8997,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 219 · 2026-06-08';
+const BUILD_VERSION = 'build 195 · 2026-06-07';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9246,13 +9086,9 @@ const AIM_DEFAULT = { x:ADS_AIM.x, y:ADS_AIM.y, z:ADS_AIM.z, rx:ADS_ROT.x*180/Ma
 const aimByWep = {};
 function getWeaponAim(key){ if(!aimByWep[key]) aimByWep[key]=Object.assign({}, AIM_DEFAULT); return aimByWep[key]; }
 function applyWeaponAim(key){ const a=getWeaponAim(key); ADS_AIM.set(a.x,a.y,a.z); ADS_ROT.set(a.rx*Math.PI/180, a.ry*Math.PI/180, a.rz*Math.PI/180); adsFovLive = a.fov; }
-// apply saved aim pose if present — restore the FULL per-weapon map, not just one pose
-if(savedLevel && savedLevel.aimWep){
-  for(const k in savedLevel.aimWep) aimByWep[k]=Object.assign({}, AIM_DEFAULT, savedLevel.aimWep[k]);   // each weapon keeps its own ADS pose across reloads
-}
+// apply saved aim pose if present
 if(savedLevel && savedLevel.aim && savedLevel.aim.state){
   const a = savedLevel.aim.state, D2R = Math.PI/180;
-  if(!savedLevel.aimWep){ for(const k of Object.keys(WEAPONS)) aimByWep[k]=Object.assign({}, AIM_DEFAULT, a); }   // legacy levels: seed every weapon from the single saved pose
   ADS_AIM.set(a.x, a.y, a.z); ADS_ROT.set(a.rx*D2R, a.ry*D2R, a.rz*D2R); adsFovLive = a.fov;
 }
 const HIP_SENS = 0.0022, ADS_SENS = 0.0012;  // slower look while aiming for precision
@@ -11404,7 +11240,7 @@ const editorTargets = {
     code(){ return '// ===== Player start ===== (saved in the level JSON under "pstart")'; }
   },
   extract: {
-    label: 'Extract',
+    label: '📦 Extract',
     isExtract: true,
     obj(){ refreshExtractMarker(); return extractZone; },
     code(){ return '// ===== Extraction point ===== (saved in the level JSON under "extract"; used by the Extraction objective)'; }
@@ -11430,97 +11266,6 @@ const editorTargets = {
   },
 };
 let editorActive = 'gun';
-// ---- Editor MODES: one primary switch that gates which target-tabs + sections are shown, so a new user
-// sees a handful of relevant controls instead of the whole panel at once. Each target/section lives in
-// exactly one mode. (Purely a visibility layer — every panel's editing logic is unchanged.)
-const EDITOR_MODES = ['build','scene','enemies','rules','kit','files'];
-const MODE_LABEL = { build:'Build', scene:'Scene', enemies:'Enemies', rules:'Rules', kit:'Weapons', files:'Save' };
-const MODE_COLOR = { build:'#38f5b5', scene:'#5db4ff', enemies:'#ff6b8a', rules:'#ffd166', kit:'#ff9b5b', files:'#b69cff' };   // per-mode accent so the buttons read as distinct sections
-function _hexRgba(hex,a){ const nn=parseInt(hex.replace('#',''),16); return 'rgba('+((nn>>16)&255)+','+((nn>>8)&255)+','+(nn&255)+','+a+')'; }
-const SHOW_MODEL_LIBRARY = false;   // hardcoded model-library chips hidden for now (to be rebuilt); flip true to restore
-const _svgIcon = (inner)=>'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+inner+'</svg>';
-const MODE_ICON = {
-  build:   _svgIcon('<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>'),
-  scene:   _svgIcon('<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>'),
-  enemies: _svgIcon('<circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M8 20v1a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-1a2 2 0 0 0 1.56-3.25 8 8 0 1 0-11.12 0A2 2 0 0 0 8 20Z"/>'),
-  rules:   _svgIcon('<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>'),
-  kit:     _svgIcon('<circle cx="12" cy="12" r="9"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/>'),
-  files:   _svgIcon('<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>'),
-};
-const PRIM_ICON = {
-  box:      _svgIcon('<path d="M12 3 21 7.5v9L12 21 3 16.5v-9L12 3Z"/><path d="M3 7.5 12 12l9-4.5"/><path d="M12 12v9"/>'),
-  sphere:   _svgIcon('<circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="9" ry="3.4"/>'),
-  cylinder: _svgIcon('<ellipse cx="12" cy="6" rx="7" ry="2.6"/><path d="M5 6v12M19 6v12"/><ellipse cx="12" cy="18" rx="7" ry="2.6"/>'),
-  cone:     _svgIcon('<ellipse cx="12" cy="18" rx="7.5" ry="2.6"/><path d="M12 3 4.5 18M12 3l7.5 15"/>'),
-};
-const MODE_SECTIONS = {
-  build:   ['gizmo','object','material','transform'],
-  scene:   ['world'],
-  enemies: ['enemies'],
-  rules:   ['game','loot'],
-  kit:     ['object','transform'],   // 'object' carries the weapon model import + per-weapon shoot sound; music/SFX live in Scene
-  files:   ['levelfile','campaign'],
-};
-const MODE_TARGETS = {
-  build:   ['props','lights','spawns','station','player','pstart','extract'],
-  scene:   [],
-  enemies: [],
-  rules:   [],
-  kit:     ['gun','aim','grenade'],
-  files:   [],
-};
-const TARGET_MODE = {};   // reverse: which mode owns each target tab
-for(const _m of EDITOR_MODES) for(const _t of MODE_TARGETS[_m]) TARGET_MODE[_t]=_m;
-let editorMode = 'build';
-try{ const _sm = localStorage.getItem('breach_editor_mode'); if(_sm && EDITOR_MODES.indexOf(_sm)>=0) editorMode = _sm; }catch(e){}
-// Show only this mode's target-tabs + sections; hide the rest. Highlights the active mode button.
-function applyEditorMode(){
-  if(!editorEl) return;
-  const secs = MODE_SECTIONS[editorMode] || [];
-  editorEl.querySelectorAll('.edSection').forEach(sx=>{ sx.style.display = (secs.indexOf(sx.dataset.sec)>=0) ? '' : 'none'; });
-  const tgts = MODE_TARGETS[editorMode] || [];
-  editorEl.querySelectorAll('#edTabs .tab').forEach(t=>{ t.style.display = (tgts.indexOf(t.dataset.key)>=0) ? '' : 'none'; });
-  const tabRow = editorEl.querySelector('#edTabs'); if(tabRow) tabRow.style.display = tgts.length ? 'flex' : 'none';   // no target picker in Scene/Rules/Save
-  const view = editorEl.querySelector('#edView'); if(view) view.style.display = 'flex';   // global view toolbar (sits above the tabs)
-  editorEl.querySelectorAll('#edModes .edMode').forEach(b=>{
-    const c = MODE_COLOR[b.dataset.mode] || '#38f5b5', on = b.dataset.mode===editorMode;
-    b.classList.toggle('active', on);
-    b.style.borderColor = on ? c : 'transparent';
-    b.style.background  = on ? _hexRgba(c,0.20) : 'transparent';
-    b.style.color       = on ? '#f4fffb' : c;
-    b.style.opacity     = on ? '1' : '0.5';
-  });
-}
-// Switch the primary mode. fromSelection=true keeps editorActive (we just clicked an object of this mode);
-// a manual mode click instead snaps editorActive to the mode's first target so its Transform shows something valid.
-function applyContextualSections(){
-  if(!editorEl) return;
-  const CTX = { gizmo:['edGizmo'], object:['edShapes','edModels','edUrl','edPicker','edAnim','edLibrary'] };
-  const modeSecs = MODE_SECTIONS[editorMode] || [];
-  for(const key in CTX){
-    if(modeSecs.indexOf(key)<0) continue;
-    const el = editorEl.querySelector('.edSection[data-sec="'+key+'"]'); if(!el) continue;
-    const has = CTX[key].some(id=>{ const h=editorEl.querySelector('#'+id); return h && h.innerHTML.trim()!==''; });
-    el.style.display = has ? '' : 'none';
-  }
-}
-function setEditorMode(mode, fromSelection){
-  if(EDITOR_MODES.indexOf(mode)<0) mode='build';
-  editorMode = mode;
-  try{ localStorage.setItem('breach_editor_mode', mode); }catch(e){}
-  if(!fromSelection){
-    const ts = MODE_TARGETS[mode];
-    if(ts.length && ts.indexOf(editorActive)<0){
-      editorActive = ts[0];
-      if(editorActive==='gun' && editorTargets.gun.syncFromWeapon) editorTargets.gun.syncFromWeapon();
-      if(editorActive==='grenade' && editorTargets.grenade.sync) editorTargets.grenade.sync();
-    }
-  }
-  applyEditorMode();
-  renderEditorFields();
-}
-// Clicking an object in the scene sets editorActive; jump to the mode that owns that target so its panels show.
-function syncModeToActive(){ const owner = TARGET_MODE[editorActive]; if(owner && owner!==editorMode) setEditorMode(owner, true); }
 let editorEl = null;
 
 // Default animation behavior applied to newly added animated props (editor toggle controls it).
@@ -11536,42 +11281,16 @@ function swapSelectedProp(url){
   spawnProp(url, t, (obj)=>{ editorActive='props'; editorTargets.props.idx = propModels.indexOf(obj); selProps=[obj]; renderEditorFields(); }, undefined, mode);
 }
 // Add a new object (a 'box' primitive or a model URL) in front of the player, using the current default anim mode.
-// Centered "loading model" overlay — the small status line in the search panel is easy to miss, so model
-// loads (Poly Pizza / Sketchfab, which can take a few seconds through the proxy + unzip) show this too.
-let _propLoaderEl = null;
-function showPropLoader(label){
-  if(!_propLoaderEl){
-    const el = document.createElement('div'); el.id='propLoader';
-    el.style.cssText = 'position:fixed;inset:0;z-index:9000;display:flex;align-items:center;justify-content:center;pointer-events:none;';
-    el.innerHTML = '<div style="background:rgba(6,12,14,0.85);border:1px solid rgba(56,245,181,0.4);border-radius:12px;padding:18px 26px;min-width:240px;text-align:center;box-shadow:0 8px 40px rgba(0,0,0,0.6);">'
-      + '<div id="propLoaderLabel" style="color:#eafff7;font:600 14px/1.3 ui-monospace,monospace;margin-bottom:12px;letter-spacing:0.4px;">Loading\u2026</div>'
-      + '<div style="width:220px;height:7px;background:#0c1418;border:1px solid #1c2b30;border-radius:6px;overflow:hidden;">'
-      + '<div style="width:38%;height:100%;background:linear-gradient(90deg,transparent,#38f5b5,transparent);animation:propLoadSlide 1.05s ease-in-out infinite;"></div>'
-      + '</div></div>';
-    document.body.appendChild(el);
-    const st = document.createElement('style'); st.textContent = '@keyframes propLoadSlide{0%{transform:translateX(-110%)}100%{transform:translateX(420%)}}';
-    document.head.appendChild(st);
-    _propLoaderEl = el;
-  }
-  const lab = _propLoaderEl.querySelector('#propLoaderLabel'); if(lab) lab.textContent = label || 'Loading\u2026';
-  _propLoaderEl.style.display = 'flex';
-}
-function hidePropLoader(){ if(_propLoaderEl) _propLoaderEl.style.display = 'none'; }
 function addSceneProp(src, meta){
   meta = meta || {};
   pushUndoSnapshot();
   const fwd = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
   const px = player.pos.x + fwd.x*5, pz = player.pos.z + fwd.z*5;
-  const async = !isPrimitive(src);                              // primitives finalize synchronously: no overlay
-  let _done=false, _to=null;
-  const _finish = ()=>{ if(_done) return; _done=true; if(_to) clearTimeout(_to); hidePropLoader(); };
-  if(async){ showPropLoader(meta.name ? ('Loading \u201c'+meta.name+'\u201d\u2026') : 'Loading model\u2026'); _to=setTimeout(_finish, 60000); }   // safety: never stuck if a callback is missed
   spawnProp(src, [px, 0, pz, 0, 0, 0, 1], (obj)=>{
     if(meta.attribution) obj.userData.attribution = meta.attribution;   // credit (CC-BY models)
     editorActive='props'; editorTargets.props.idx = propModels.indexOf(obj); selProps=[obj]; renderEditorFields();
     if(meta.onAdded) meta.onAdded(obj);
-    _finish();
-  }, undefined, newPropAnimMode, null, (err)=>{ _finish(); if(meta.onError) meta.onError(err); });
+  }, undefined, newPropAnimMode, null, meta.onError);
 }
 function deleteSelectedProp(){
   pushUndoSnapshot();
@@ -11730,7 +11449,6 @@ function serializeLevel(){
     props:   propModels.filter(o=>o && !o.userData.runtime).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
-    pickupsOn: pickupsOn,
     pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind })),
     pickupModels: Object.keys(pickupModels).reduce((a,k)=>{ const m=pickupModels[k]; if(m&&m.url){ a[k]={ url:m.url, scale:m.scale||1 }; } return a; }, {}),
     game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave },
@@ -11848,62 +11566,7 @@ function performUndo(){
 
 // Reusable search UI (gun/enemy/loot/grenade/station/player). Calls onPick(model, statusEl) on a click.
 // Includes an "Animated only" filter (uses the model's animated flag when Poly Pizza exposes one).
-let sfLastQuery='', sfLastResults=[], sfNextUrl=null;
-function _modelSource(){ try{ return (localStorage.getItem('breach_model_source')==='sf' && sfEnabled()) ? 'sf' : 'pp'; }catch(e){ return 'pp'; } }
-function _setModelSource(x){ try{ localStorage.setItem('breach_model_source', x); }catch(e){} }
-// Small bar atop every model search: enable Sketchfab (off by default), then a Poly Pizza / Sketchfab switch.
-function _modelSourceBar(host, rerender){
-  const wrap=document.createElement('div'); wrap.style.cssText='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 6px;';
-  if(!sfEnabled()){
-    const lab=document.createElement('label'); lab.style.cssText='display:flex;align-items:center;gap:6px;color:#8fb6aa;font-size:11px;cursor:pointer;';
-    const cb=document.createElement('input'); cb.type='checkbox'; cb.style.cssText='width:14px;height:14px;accent-color:#38f5b5;flex:none;';
-    cb.onchange=()=>{ sfSetEnabled(cb.checked); if(cb.checked) _setModelSource('sf'); rerender(); };
-    const sp=document.createElement('span'); sp.textContent='Also search Sketchfab (needs a free account + API token)';
-    lab.appendChild(cb); lab.appendChild(sp); wrap.appendChild(lab);
-  } else {
-    const mk=(key,label,color)=>{ const b=document.createElement('button'); b.textContent=label; const on=_modelSource()===key;
-      b.style.cssText='flex:0 0 auto;padding:3px 12px;font-size:11px;border-radius:6px;border:1px solid '+(on?color:'transparent')+';background:'+(on?_hexRgba(color,0.18):'transparent')+';color:'+(on?'#f4fffb':color)+';cursor:pointer;';
-      b.onclick=()=>{ _setModelSource(key); rerender(); }; return b; };
-    const sw=document.createElement('div'); sw.style.cssText='display:flex;gap:4px;'; sw.appendChild(mk('pp','Poly Pizza','#38f5b5')); sw.appendChild(mk('sf','Sketchfab','#1caad9')); wrap.appendChild(sw);
-    const off=document.createElement('button'); off.textContent='hide'; off.title='Hide the Sketchfab option'; off.style.cssText='flex:0 0 auto;margin-left:auto;padding:3px 8px;font-size:10px;border-radius:6px;border:1px solid #2a3a42;background:transparent;color:#6f968b;cursor:pointer;'; off.onclick=()=>{ sfSetEnabled(false); _setModelSource('pp'); rerender(); }; wrap.appendChild(off);
-  }
-  host.appendChild(wrap); return wrap;
-}
-// Sketchfab search panel: token field, query, thumbnail grid. onPick(model, statusEl) with model.glb = 'sketchfab:<uid>'.
-function renderSketchfabSearch(host, onPick){
-  host.innerHTML='';
-  const tRow=document.createElement('div'); tRow.style.cssText='display:flex;gap:5px;margin-bottom:5px;';
-  const tk=document.createElement('input'); tk.type='password'; tk.placeholder='Sketchfab API token'; tk.value=sfGetToken(); tk.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
-  const tb=document.createElement('button'); tb.textContent='Save'; tb.style.flex='0 0 auto'; tRow.appendChild(tk); tRow.appendChild(tb); host.appendChild(tRow);
-  const tHint=document.createElement('div'); tHint.className='hint'; tHint.style.cssText='margin:-1px 0 6px;font-size:10px;'; tHint.innerHTML='Get a token at sketchfab.com \u2192 Settings \u2192 Password &amp; API. Needed to search + download.'; host.appendChild(tHint);
-  const sRow=document.createElement('div'); sRow.className='row2'; sRow.style.marginBottom='4px';
-  const q=document.createElement('input'); q.type='text'; q.placeholder='search Sketchfab\u2026'; q.value=sfLastQuery; q.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
-  const sb=document.createElement('button'); sb.textContent='Search'; sb.style.flex='0 0 auto'; sRow.appendChild(q); sRow.appendChild(sb); host.appendChild(sRow);
-  const status=document.createElement('div'); status.className='hint'; status.style.margin='2px 0'; host.appendChild(status);
-  const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:4px;'; host.appendChild(grid);
-  const moreWrap=document.createElement('div'); moreWrap.style.cssText='margin-top:6px;text-align:center;'; host.appendChild(moreWrap);
-  tb.onclick=()=>{ sfSetToken(tk.value); status.textContent='Token saved.'; };
-  function render(list){ list=list||sfLastResults; grid.innerHTML=''; moreWrap.innerHTML=''; if(!list||!list.length){ status.textContent='No models found.'; return; } status.textContent=list.length+' showing'+(sfNextUrl?' (more available)':'')+' \u2014 click to use';
-    for(const m of list){ const card=document.createElement('button'); card.style.cssText='display:flex;flex-direction:column;align-items:center;gap:2px;background:#0c1418;border:1px solid #24323a;border-radius:6px;padding:4px;cursor:pointer;overflow:hidden;'; card.title=m.attribution+(m.animated?'  \u00b7  animated':'');
-      if(m.thumb){ const img=document.createElement('img'); img.src=m.thumb; img.loading='lazy'; img.style.cssText='width:100%;aspect-ratio:1;object-fit:cover;background:#06090b;border-radius:3px;'; card.appendChild(img); }
-      const cap=document.createElement('div'); cap.textContent=(m.animated?'\u25b6 ':'')+m.title; cap.style.cssText='font-size:10px;color:#9fe6cf;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'; card.appendChild(cap);
-      card.onclick=()=>{ status.textContent='Using \u201c'+m.title+'\u201d\u2026 (downloading)'; onPick({ title:m.title, glb:'sketchfab:'+m.uid, thumb:m.thumb, attribution:m.attribution, animated:m.animated }, status); };
-      grid.appendChild(card); }
-    if(sfNextUrl){ const mb=document.createElement('button'); mb.textContent='Show more'; mb.style.cssText='padding:5px 16px;font-size:11px;'; mb.onclick=()=>{ mb.disabled=true; mb.textContent='Loading\u2026'; sfFetchPage(sfNextUrl, (more,next)=>{ sfLastResults=sfLastResults.concat(more); sfNextUrl=next; render(); }, err=>{ mb.disabled=false; mb.textContent='Show more'; status.textContent='Could not load more: '+((err&&err.message)||err); }); }; moreWrap.appendChild(mb); } }
-  function doSearch(){ const term=q.value.trim(); if(!term){ status.textContent='Type something to search.'; return; } if(!sfGetToken()){ status.textContent='Add your Sketchfab token first.'; return; } sfLastQuery=term; status.textContent='Searching\u2026'; grid.innerHTML='';
-    sfSearch(term, (list,next)=>{ sfLastResults=list; sfNextUrl=next; render(); }, err=>{ sfLastResults=[]; sfNextUrl=null; status.textContent='Search failed: '+((err&&err.message)||err); }); }
-  sb.onclick=doSearch; q.addEventListener('keydown', e=>{ if(e.code==='Enter'){ e.preventDefault(); doSearch(); } });
-  if(sfLastResults.length) render(sfLastResults);
-}
-// Wrapper: Poly Pizza by default; Sketchfab when enabled + selected. Single-slot search (gun/station/grenade).
 function renderModelSearch(host, onPick, opts){
-  host.innerHTML='';
-  _modelSourceBar(host, ()=>renderModelSearch(host, onPick, opts));
-  const body=document.createElement('div'); host.appendChild(body);
-  if(sfEnabled() && _modelSource()==='sf') renderSketchfabSearch(body, onPick);
-  else renderModelSearchPP(body, onPick, opts);
-}
-function renderModelSearchPP(host, onPick, opts){
   opts = opts || {}; host.innerHTML='';
   const sRow=document.createElement('div'); sRow.className='row2'; sRow.style.marginBottom='4px';
   const q=document.createElement('input'); q.type='text'; q.placeholder=opts.placeholder||'search free models…'; q.value=ppLastQuery;
@@ -11916,11 +11579,10 @@ function renderModelSearchPP(host, onPick, opts){
   fRow.appendChild(anim); fRow.appendChild(fSp); host.appendChild(fRow);
   const status=document.createElement('div'); status.className='hint'; status.style.margin='2px 0'; host.appendChild(status);
   const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:4px;'; host.appendChild(grid);
-  const moreWrap=document.createElement('div'); moreWrap.style.cssText='margin-top:6px;text-align:center;'; host.appendChild(moreWrap);
-  let raw=[], _page=1, _more=false;
+  let raw=[];
   function render(){
     const list = anim.checked ? raw.filter(m=>m.animated===true) : raw;
-    grid.innerHTML=''; moreWrap.innerHTML='';
+    grid.innerHTML='';
     if(!raw.length){ status.textContent='No models found.'; return; }
     if(!list.length){ status.textContent='No animated models in these results.'; return; }
     status.textContent = list.length + ' result' + (list.length>1?'s':'') + ' — click to use';
@@ -11933,11 +11595,10 @@ function renderModelSearchPP(host, onPick, opts){
       card.onclick=()=>{ status.textContent='Using "'+m.title+'"…'; onPick(m, status); };
       grid.appendChild(card);
     }
-    if(_more){ const mb=document.createElement('button'); mb.textContent='Show more'; mb.style.cssText='padding:5px 16px;font-size:11px;'; mb.onclick=()=>{ mb.disabled=true; mb.textContent='Loading…'; _page++; ppSearch(ppLastQuery, (list)=>{ const ids=new Set(raw.map(m=>m.id)); const add=list.filter(m=>!ids.has(m.id)); raw=raw.concat(add); _more = add.length>0 && list.length>=24; render(); }, ()=>{ mb.disabled=false; mb.textContent='Show more'; }, _page); }; moreWrap.appendChild(mb); }
   }
   anim.onchange=render;
-  function doSearch(){ const term=q.value.trim(); if(!term){ status.textContent='Type something to search.'; return; } ppLastQuery=term; _page=1; status.textContent='Searching…'; grid.innerHTML='';
-    ppSearch(term, (list,total)=>{ raw=list; _more = list.length>=24 && (total==null || raw.length<total); render(); }, err=>{ raw=[]; _more=false; const msg=(err&&err.message)||String(err); status.textContent = (!ppProxy() && /failed|load|network/i.test(msg)) ? 'Search blocked by CORS — the Poly Pizza proxy isn\u2019t reachable.' : ('Search failed: '+msg); }, 1); }
+  function doSearch(){ const term=q.value.trim(); if(!term){ status.textContent='Type something to search.'; return; } ppLastQuery=term; status.textContent='Searching…'; grid.innerHTML='';
+    ppSearch(term, list=>{ raw=list; render(); }, err=>{ raw=[]; const msg=(err&&err.message)||String(err); status.textContent = (!ppProxy() && /failed|load|network/i.test(msg)) ? 'Search blocked by CORS — the Poly Pizza proxy isn\u2019t reachable.' : ('Search failed: '+msg); }); }
   sBtn.onclick=doSearch; q.addEventListener('keydown', e=>{ if(e.code==='Enter'){ e.preventDefault(); doSearch(); } });
   if(raw.length) render();
 }
@@ -11959,25 +11620,17 @@ function ppParseModel(m){
   if(!attribution){ const c=m.Creator||m.creator||{}; const cn=c.Username||c.username||c.Name||c.name; const lic=m.Licence||m.License||m.licence||m.license; attribution = title + (cn?(' by '+cn):'') + (lic?(' ['+lic+']'):'') + ' — via Poly Pizza'; }
   return { id:m.ID||m.id||m.Id, title, thumb, glb, attribution, animated: !!(m.Animated || m.animated || (m.AnimationCount>0) || (m.animations && m.animations.length) || (m.Animations && m.Animations.length)) };
 }
-function ppSearch(query, cb, errcb, page){
+function ppSearch(query, cb, errcb){
   const key = ppGetKey();
   if(!key){ errcb(new Error('Enter your Poly Pizza API key first')); return; }
-  const apiUrl = 'https://api.poly.pizza/v1.1/search/' + encodeURIComponent(query) + '?Limit=24' + (page>1 ? ('&Page='+page) : '');
+  const apiUrl = 'https://api.poly.pizza/v1.1/search/' + encodeURIComponent(query);
   fetch(proxied(apiUrl), { headers:{ 'x-auth-token': key } })   // proxied() routes through the Worker if one is set
     .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status + (r.status===401||r.status===403 ? ' — check your API key' : '')); return r.json(); })
-    .then(d=>{ const arr = d.results||d.Results||d.models||d.Models||(Array.isArray(d)?d:[]); const total=(typeof d.total==='number')?d.total:(typeof d.Total==='number'?d.Total:null); cb(arr.map(ppParseModel).filter(Boolean), total); })
+    .then(d=>{ const arr = d.results||d.Results||d.models||d.Models||(Array.isArray(d)?d:[]); cb(arr.map(ppParseModel).filter(Boolean)); })
     .catch(errcb);
 }
 // Render the browser into a host element (only on the Props tab). Caches query+results across re-renders.
 function renderModelBrowser(host){
-  host.innerHTML='';
-  _modelSourceBar(host, ()=>renderModelBrowser(host));
-  const body=document.createElement('div'); host.appendChild(body);
-  if(sfEnabled() && _modelSource()==='sf'){
-    renderSketchfabSearch(body, (m,st)=>{ if(st) st.textContent='Loading \u201c'+m.title+'\u201d\u2026'; addSceneProp(m.glb, { name:m.title, attribution:m.attribution, onAdded:()=>{ if(st) st.textContent='Added \u201c'+m.title+'\u201d. Move/scale it with the gizmo.'; if(typeof renderModelCredits==='function') renderModelCredits(); }, onError:(err)=>{ if(st) st.textContent='Could not load \u201c'+m.title+'\u201d \u2014 '+((err&&err.message)||'download blocked'); } }); });
-  } else renderModelBrowserPP(body);
-}
-function renderModelBrowserPP(host){
   host.innerHTML = '';
   const head = document.createElement('div'); head.className='hint'; head.style.margin='8px 0 4px';
   head.innerHTML = '<b>Poly Pizza</b> — search thousands of free models, click one to add it.';
@@ -11994,11 +11647,9 @@ function renderModelBrowserPP(host){
 
   const status = document.createElement('div'); status.className='hint'; status.style.margin='2px 0'; host.appendChild(status);
   const grid = document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:4px;'; host.appendChild(grid);
-  const moreWrap=document.createElement('div'); moreWrap.style.cssText='margin-top:6px;text-align:center;'; host.appendChild(moreWrap);
-  let _bpage=1, _bmore=false;
 
   function renderResults(list){
-    grid.innerHTML=''; moreWrap.innerHTML='';
+    grid.innerHTML='';
     if(!list.length){ status.textContent='No models found.'; return; }
     status.textContent = list.length + ' result' + (list.length>1?'s':'') + ' — click to add';
     for(const m of list){
@@ -12009,16 +11660,15 @@ function renderModelBrowserPP(host){
       const cap=document.createElement('div'); cap.textContent=m.title; cap.style.cssText='font-size:10px;color:#9fe6cf;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'; card.appendChild(cap);
       card.onclick=()=>{
         status.textContent = 'Loading "' + m.title + '"…';
-        addSceneProp(m.glb, { name:m.title, attribution:m.attribution, onAdded:()=>{ status.textContent = 'Added "' + m.title + '". Move/scale it with the gizmo.'; renderModelCredits(); }, onError:()=>{ status.innerHTML = 'Could not load "' + m.title + '" — its host may block cross-origin loading (CORS). Try another, or re-host the .glb alongside your game.'; } });
+        addSceneProp(m.glb, { attribution:m.attribution, onAdded:()=>{ status.textContent = 'Added "' + m.title + '". Move/scale it with the gizmo.'; renderModelCredits(); }, onError:()=>{ status.innerHTML = 'Could not load "' + m.title + '" — its host may block cross-origin loading (CORS). Try another, or re-host the .glb alongside your game.'; } });
       };
       grid.appendChild(card);
     }
-    if(_bmore){ const mb=document.createElement('button'); mb.textContent='Show more'; mb.style.cssText='padding:5px 16px;font-size:11px;'; mb.onclick=()=>{ mb.disabled=true; mb.textContent='Loading…'; _bpage++; ppSearch(ppLastQuery, (list)=>{ const ids=new Set(ppLastResults.map(m=>m.id)); const add=list.filter(m=>!ids.has(m.id)); ppLastResults=ppLastResults.concat(add); _bmore = add.length>0 && list.length>=24; renderResults(ppLastResults); }, ()=>{ mb.disabled=false; mb.textContent='Show more'; }, _bpage); }; moreWrap.appendChild(mb); }
   }
   function doSearch(){
     const term = q.value.trim(); if(!term){ status.textContent='Type something to search.'; return; }
-    ppLastQuery = term; _bpage=1; status.textContent='Searching…'; grid.innerHTML='';
-    ppSearch(term, (list,total)=>{ ppLastResults = list; _bmore = list.length>=24 && (total==null || ppLastResults.length<total); renderResults(list); }, (err)=>{ ppLastResults=[]; _bmore=false; const msg=(err&&err.message)||String(err); status.innerHTML = (!ppProxy() && /failed|load|network/i.test(msg)) ? 'Search blocked by CORS — Poly Pizza needs the proxy. Deploy polypizza-proxy.js as a Cloudflare Worker and paste its URL above.' : ('Search failed: ' + msg); }, 1);
+    ppLastQuery = term; status.textContent='Searching…'; grid.innerHTML='';
+    ppSearch(term, (list)=>{ ppLastResults = list; renderResults(list); }, (err)=>{ ppLastResults=[]; const msg=(err&&err.message)||String(err); status.innerHTML = (!ppProxy() && /failed|load|network/i.test(msg)) ? 'Search blocked by CORS — Poly Pizza needs the proxy. Deploy polypizza-proxy.js as a Cloudflare Worker and paste its URL above.' : ('Search failed: ' + msg); });
   }
   sBtn.onclick = doSearch;
   q.addEventListener('keydown', e=>{ if(e.code==='Enter'){ e.preventDefault(); doSearch(); } });
@@ -12064,17 +11714,17 @@ function buildEditorPanel(){
     + '<h3>LEVEL / TRANSFORM EDITOR</h3>'
     + '<div class="hint">Click an object to select it. <b>Shift+click</b> props to multi-select. Use <b>Move / Rotate / Scale</b> + the handles, or type values. <b>Shift+D</b> duplicates, <b>Delete</b> removes. Drag the left edge to resize. Press <b>P</b> to close.</div>'
     + '<div class="row2" style="margin:0 0 8px"><button id="edPlay" style="background:rgba(56,245,181,0.22);color:#eafff7;font-weight:600">▶ Play level</button><button id="edMenu">⌂ Main menu</button></div>'
-    + '<div class="row2" id="edView" style="margin-bottom:10px"></div>'
-    + '<div class="edModes" id="edModes"></div>'
     + '<div class="tabs" id="edTabs"></div>'
+    + '<div class="row2" id="edView" style="margin-bottom:8px"></div>'
     + sec('Gizmo', 'gizmo', '<div id="edGizmo"></div>')
-    + sec('Object &amp; selection', 'object', '<div id="edShapes"></div><div id="edModels"></div><div id="edUrl"></div><div id="edPicker"></div><div id="edAnim"></div><div id="edLibrary"></div>')
+    + sec('Object &amp; selection', 'object', '<div id="edPicker"></div><div id="edLibrary"></div><div id="edModels"></div><div id="edAnim"></div><div id="edUrl"></div>')
     + sec('Material', 'material', '<div id="edMaterial"></div>')
     + sec('Transform', 'transform', '<div id="edFields"></div>')
     + sec('World', 'world', '<div id="edWorld"></div>')
     + sec('Enemies', 'enemies', '<div id="edEnemies"></div>')
     + sec('Game / waves', 'game', '<div id="edGame"></div>')
     + sec('Loot', 'loot', '<div id="edLoot"></div>')
+    + sec('Sounds', 'sounds', '<div id="edSounds"></div>')
     + sec('Level file', 'levelfile',
         '<div class="row2"><button id="edSave">💾 Save</button><button id="edClear">Clear save</button></div>'
       + '<div class="row2" style="margin-top:6px"><button id="edShare">🔗 Copy share link</button></div>'
@@ -12100,7 +11750,7 @@ function buildEditorPanel(){
   })();
   // collapsible section headers (state persists in localStorage so it survives reopening the editor)
   let secState = {}; try{ secState = JSON.parse(localStorage.getItem('breach_editor_sections')||'{}') || {}; }catch(e){}
-  const defaultCollapsed = { material:true, loot:true, sounds:true, campaign:true };   // collapse secondary sections; primary ones (incl. Enemies in its own mode) start open
+  const defaultCollapsed = { material:true, world:true, enemies:true, loot:true, sounds:true, levelfile:true, campaign:true };   // keep Gizmo/Object/Transform open by default
   p.querySelectorAll('.edSection').forEach(s=>{
     const k = s.dataset.sec;
     const collapsed = (k in secState) ? secState[k]===true : !!defaultCollapsed[k];
@@ -12118,8 +11768,6 @@ function buildEditorPanel(){
     b.onclick = ()=>{ editorActive = key; if(key==='gun' && editorTargets.gun.syncFromWeapon) editorTargets.gun.syncFromWeapon(); if(key==='grenade' && editorTargets.grenade.sync) editorTargets.grenade.sync(); renderEditorFields(); };
     tabs.appendChild(b);
   }
-  const modeRow = p.querySelector('#edModes');
-  if(modeRow){ for(const m of EDITOR_MODES){ const mb=document.createElement('div'); mb.className='edMode'; mb.dataset.mode=m; mb.innerHTML=(MODE_ICON[m]||'')+'<span class="edModeLbl">'+MODE_LABEL[m]+'</span>'; mb.title=MODE_LABEL[m]; mb.onclick=()=>setEditorMode(m); modeRow.appendChild(mb); } }
   p.querySelector('#edReset').onclick = ()=>{ resetEditorTarget(editorActive); };
   p.querySelector('#edPlay').onclick = ()=>{ startGame(); };           // test the live-built level immediately (no save/reload)
   p.querySelector('#edMenu').onclick = ()=>{ editorToMenu(); };        // back to the start overlay
@@ -12178,7 +11826,7 @@ function buildEditorPanel(){
     };
     reader.readAsText(file);
   };
-  setEditorMode(editorMode);   // apply mode visibility + render (replaces the bare initial render)
+  renderEditorFields();
 }
 
 function renderEditorFields(){
@@ -12196,7 +11844,7 @@ function renderEditorFields(){
   const gameHost    = editorEl.querySelector('#edGame');
   const lootHost    = editorEl.querySelector('#edLoot');
   const soundHost   = editorEl.querySelector('#edSounds');
-  // Sounds relocated: per-weapon shoot sound -> each weapon (Weapons tab); music + global SFX -> Scene > Audio
+  if(soundHost) populateSoundEditor(soundHost);
   if(worldHost){
     worldHost.innerHTML = '';
     if(enemyHost) enemyHost.innerHTML = '';
@@ -12232,68 +11880,100 @@ function renderEditorFields(){
       row.appendChild(inp); row.appendChild(ab); host.appendChild(row);
     };
 
-    // ===== WORLD split into collapsible sub-sections =====
-    const _wss = (()=>{ try{ return JSON.parse(localStorage.getItem('breach_world_sections')||'{}')||{}; }catch(e){ return {}; } })();
-    const subSec = (title, key, collapsedDefault)=>{
-      const sec=document.createElement('div'); sec.className='edSubSection';
-      const collapsed = (key in _wss) ? _wss[key]===true : !!collapsedDefault;
-      if(collapsed) sec.classList.add('collapsed');
-      const head=document.createElement('div'); head.className='edSubHead';
-      head.innerHTML='<span class="edCaret">\u25be</span>'+title;
-      const body=document.createElement('div'); body.className='edSubBody';
-      head.onclick=()=>{ sec.classList.toggle('collapsed'); _wss[key]=sec.classList.contains('collapsed'); try{ localStorage.setItem('breach_world_sections', JSON.stringify(_wss)); }catch(e){} };
-      sec.appendChild(head); sec.appendChild(body); worldHost.appendChild(sec); return body;
-    };
-    { const b=subSec('Movement','move',false);
-      slider(b,'Walk speed','walk',4,60,1); slider(b,'Run speed','run',4,100,1); slider(b,'Crouch speed','crouch',1,40,1);
-      slider(b,'Jump','jump',0,30,0.5); slider(b,'Launch power','launchPower',0.25,4,0.25); slider(b,'Gravity','grav',5,80,1);
-      hint(b,'','1px 0 2px').textContent='Crouch: hold Ctrl or C (R3 on a controller). Gravity change affects props on next Deploy.'; }
-    { const b=subSec('Lighting','light',true);
-      slider(b,'Sun (directional)','sun',0,4,0.05); slider(b,'Sky (ambient fill)','sky',0,3,0.05); slider(b,'Brightness lift','ambient',0,2,0.05);
-      const scRow=document.createElement('label'); scRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 4px;';
-      const scSp=document.createElement('span'); scSp.textContent='Sun color'; scSp.style.minWidth='86px';
-      const sc=document.createElement('input'); sc.type='color'; sc.value=hexStr(worldCfg.sunColor); sc.style.cssText='width:48px;height:24px;background:#0c1418;border:1px solid #2a3a42;border-radius:4px;cursor:pointer;';
-      sc.addEventListener('mousedown', ()=>pushUndoSnapshot()); sc.oninput=()=>{ worldCfg.sunColor=parseInt(sc.value.slice(1),16)||0; applyWorldCfg(); };
-      scRow.appendChild(scSp); scRow.appendChild(sc); b.appendChild(scRow); }
-    { const b=subSec('Camera \u0026 view','cam',true);
-      slider(b,'Field of view','fov',50,110,1); slider(b,'View distance','viewDist',60,2000,10); slider(b,'Fog density','fogDensity',0,0.08,0.001); colorRow(b,'Fog color','fogColor');
-      const gridRow=document.createElement('label'); gridRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0;cursor:pointer;';
-      const gridCb=document.createElement('input'); gridCb.type='checkbox'; gridCb.checked=(worldCfg.grid!==false); gridCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
-      gridCb.onchange=()=>{ pushUndoSnapshot(); worldCfg.grid=gridCb.checked; applyWorldCfg(); };
-      const gridSp=document.createElement('span'); gridSp.textContent='Show ground grid'; gridRow.appendChild(gridCb); gridRow.appendChild(gridSp); b.appendChild(gridRow);
-      hint(b,'','0 0 4px').textContent='Lower fog density = see farther into the dark. View distance is the hard cutoff where geometry stops drawing.';
-      const dofRow=document.createElement('label'); dofRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:8px 0 4px;cursor:pointer;';
-      const dofCb=document.createElement('input'); dofCb.type='checkbox'; dofCb.checked=(worldCfg.dof===true); dofCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
-      dofCb.onchange=()=>{ pushUndoSnapshot(); worldCfg.dof=dofCb.checked; applyWorldCfg(); renderEditorFields(); };
-      const dofSp=document.createElement('span'); dofSp.innerHTML='<b>Depth of field</b> \u2014 blur by distance'; dofRow.appendChild(dofCb); dofRow.appendChild(dofSp); b.appendChild(dofRow);
-      if(worldCfg.dof===true){ slider(b,'Focus distance','dofFocus',2,120,1); slider(b,'In-focus range','dofRange',1,80,1); slider(b,'Blur strength','dofStrength',0.1,4,0.1);
-        hint(b,'','0 0 4px').textContent='Focus distance = how far away stays sharp. In-focus range = depth kept sharp around it. Everything else blurs.'; } }
-    { const b=subSec('Sky','sky',true);
-      hint(b,'Equirectangular panorama as <b>.jpg or .png</b> (not .hdr). Lights reflections too. Blank = flat color.','2px 0 4px');
-      texRow(b,'https://\u2026/sky.jpg (equirectangular)','sky_hdri');
-      const skyPresets=[['Park','https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/2294472375_24a3b8ef46_o.jpg'],['Mountain','https://raw.githubusercontent.com/aframevr/aframe/master/examples/boilerplate/panorama/puydesancy.jpg'],['Room','https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/kandao3.jpg'],['None','']];
-      const presetRow=document.createElement('div'); presetRow.style.cssText='display:flex;flex-wrap:wrap;gap:5px;margin:2px 0 4px;';
-      for(const [label,purl] of skyPresets){ const bn=document.createElement('button'); bn.textContent=label; bn.style.cssText='flex:0 0 auto;padding:4px 10px;font-size:11px;'; bn.onclick=()=>{ pushUndoSnapshot(); worldCfg.sky_hdri=purl; applyWorldCfg(); renderEditorFields(); }; presetRow.appendChild(bn); }
-      b.appendChild(presetRow);
-      const skStatus=document.createElement('div'); skStatus.id='edSkyStatus'; skStatus.className='hint'; skStatus.style.cssText='margin:-2px 0 6px;font-size:10px;'; b.appendChild(skStatus); }
-    { const b=subSec('Floor','floor',true);
-      colorRow(b,'Floor color','floorColor'); slider(b,'Floor roughness','floorRough',0,1,0.05); slider(b,'Floor metalness','floorMetal',0,1,0.05);
-      texRow(b,'https://\u2026/floor.jpg (tiles)','floorTex'); slider(b,'Floor tile W','floorTileU',0,80,0.5); slider(b,'Floor tile H','floorTileV',0,80,0.5); slider(b,'Floor rotate\u00b0','floorRot',0,360,5);
-      { const fh=document.createElement('div'); b.appendChild(fh); renderTexSearch(fh,(maps)=>{ pushUndoSnapshot(); worldCfg.floorTex=maps.map||''; worldCfg.floorTexN=maps.normal||''; worldCfg.floorTexR=maps.rough||''; applyWorldCfg(); renderEditorFields(); }); } }
-    { const b=subSec('Walls','walls',true);
-      colorRow(b,'Wall color','wallColor'); slider(b,'Wall roughness','wallRough',0,1,0.05); slider(b,'Wall metalness','wallMetal',0,1,0.05);
-      texRow(b,'https://\u2026/wall.jpg (tiles)','wallTex'); slider(b,'Wall tile W','wallTileU',0,80,0.5); slider(b,'Wall tile H','wallTileV',0,80,0.5); slider(b,'Wall rotate\u00b0','wallRot',0,360,5);
-      { const wh=document.createElement('div'); b.appendChild(wh); renderTexSearch(wh,(maps)=>{ pushUndoSnapshot(); worldCfg.wallTex=maps.map||''; worldCfg.wallTexN=maps.normal||''; worldCfg.wallTexR=maps.rough||''; applyWorldCfg(); renderEditorFields(); }); }
-      hint(b,'','4px 0 2px').textContent='Tile W/H = repeats across width / height (0 = auto). Lower roughness = shinier; metalness adds sheen. Rotate spins the texture (planks/bricks a new way).'; }
-    { const b=subSec('Arena','arena',true);
-      hint(b,'Playable half-size (rebuilds floor + walls live)','2px 0 4px'); slider(b,'Arena size','arena',15,400,1); }
-    { const b=subSec('Audio','audio',true);
-      if(!audioSettings.sounds) audioSettings.sounds=_emptySounds(); if(!audioSettings.sounds.shoot) audioSettings.sounds.shoot={};
-      hint(b,'Music + game sound effects. Per-weapon shoot sounds live on each weapon in the Weapons tab.','2px 0 6px');
-      b.appendChild(_sndRow('Music track (loops)', ()=>audioSettings.musicUrl||'', v=>{ audioSettings.musicUrl=v||''; if(_musicOn){ stopMusic(); startMusic(); } }));
-      for(const [lab,key] of [['Reload','reload'],['Grenade explosion','explode'],['Coin pickup','coin'],['Hit marker','hit'],['Enemy kill','kill'],['Player hurt','hurt']]){
-        b.appendChild(_sndRow(lab, ()=>audioSettings.sounds[key], v=>{ audioSettings.sounds[key]=v; })); }
-      b.appendChild(renderFreesoundBrowser(b, ()=>renderEditorFields())); }
+    // ===== WORLD section: movement, lighting, arena, sky, floor/walls =====
+    hint(worldHost, '<b>Movement</b> — applies live; saved with the level', '2px 0 4px');
+    slider(worldHost, 'Walk speed','walk', 4, 60, 1);
+    slider(worldHost, 'Run speed','run', 4, 100, 1);
+    slider(worldHost, 'Crouch speed','crouch', 1, 40, 1);
+    slider(worldHost, 'Jump','jump', 0, 30, 0.5);
+    slider(worldHost, 'Launch power','launchPower', 0.25, 4, 0.25);
+    slider(worldHost, 'Gravity','grav', 5, 80, 1);
+    hint(worldHost, '', '1px 0 8px').textContent = 'Crouch: hold Ctrl or C (R3 on a controller). Gravity change affects props on next Deploy.';
+
+    hint(worldHost, '<b>Lighting</b> — applies live; saved with the level');
+    slider(worldHost, 'Sun (directional)','sun', 0, 4, 0.05);
+    slider(worldHost, 'Sky (ambient fill)','sky', 0, 3, 0.05);
+    slider(worldHost, 'Brightness lift','ambient', 0, 2, 0.05);
+    const scRow=document.createElement('label'); scRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 8px;';
+    const scSp=document.createElement('span'); scSp.textContent='Sun color'; scSp.style.minWidth='86px';
+    const sc=document.createElement('input'); sc.type='color'; sc.value=hexStr(worldCfg.sunColor); sc.style.cssText='width:48px;height:24px;background:#0c1418;border:1px solid #2a3a42;border-radius:4px;cursor:pointer;';
+    sc.addEventListener('mousedown', ()=>pushUndoSnapshot());
+    sc.oninput=()=>{ worldCfg.sunColor = parseInt(sc.value.slice(1),16)||0; applyWorldCfg(); };
+    scRow.appendChild(scSp); scRow.appendChild(sc); worldHost.appendChild(scRow);
+
+    hint(worldHost, '<b>Arena</b> — playable half-size (rebuilds floor + walls live)', '10px 0 4px');
+    slider(worldHost, 'Arena size','arena', 15, 400, 1);
+
+    // camera & view
+    hint(worldHost, '<b>Camera &amp; view</b> — applies live; saved with the level', '10px 0 4px');
+    slider(worldHost, 'Field of view','fov', 50, 110, 1);
+    slider(worldHost, 'View distance','viewDist', 60, 2000, 10);
+    slider(worldHost, 'Fog density','fogDensity', 0, 0.08, 0.001);
+    colorRow(worldHost, 'Fog color', 'fogColor');
+    // grid toggle
+    const gridRow=document.createElement('label'); gridRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0;cursor:pointer;';
+    const gridCb=document.createElement('input'); gridCb.type='checkbox'; gridCb.checked=(worldCfg.grid!==false); gridCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+    gridCb.onchange=()=>{ pushUndoSnapshot(); worldCfg.grid=gridCb.checked; applyWorldCfg(); };
+    const gridSp=document.createElement('span'); gridSp.textContent='Show ground grid';
+    gridRow.appendChild(gridCb); gridRow.appendChild(gridSp); worldHost.appendChild(gridRow);
+    hint(worldHost, '', '0 0 4px').textContent = 'Lower fog density = see farther into the dark. View distance is the hard cutoff where geometry stops drawing.';
+
+    // depth of field
+    const dofRow=document.createElement('label'); dofRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:8px 0 4px;cursor:pointer;';
+    const dofCb=document.createElement('input'); dofCb.type='checkbox'; dofCb.checked=(worldCfg.dof===true); dofCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+    dofCb.onchange=()=>{ pushUndoSnapshot(); worldCfg.dof=dofCb.checked; applyWorldCfg(); renderEditorFields(); };
+    const dofSp=document.createElement('span'); dofSp.innerHTML='<b>Depth of field</b> — blur by distance';
+    dofRow.appendChild(dofCb); dofRow.appendChild(dofSp); worldHost.appendChild(dofRow);
+    if(worldCfg.dof===true){
+      slider(worldHost, 'Focus distance','dofFocus', 2, 120, 1);
+      slider(worldHost, 'In-focus range','dofRange', 1, 80, 1);
+      slider(worldHost, 'Blur strength','dofStrength', 0.1, 4, 0.1);
+      hint(worldHost, '', '0 0 4px').textContent = 'Focus distance = how far away stays sharp. In-focus range = depth kept sharp around it. Everything else blurs.';
+    }
+
+    hint(worldHost, '<b>Sky</b> — equirectangular panorama as <b>.jpg or .png</b> (not .hdr). Lights reflections too. Blank = flat color.', '10px 0 4px');
+    texRow(worldHost, 'https://…/sky.jpg (equirectangular)', 'sky_hdri');
+    // one-tap presets — verified 2:1 equirectangular JPGs that load directly (CORS-open, no proxy needed)
+    const skyPresets = [
+      ['Park',     'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/2294472375_24a3b8ef46_o.jpg'],
+      ['Mountain', 'https://raw.githubusercontent.com/aframevr/aframe/master/examples/boilerplate/panorama/puydesancy.jpg'],
+      ['Room',     'https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/kandao3.jpg'],
+      ['None',     ''],
+    ];
+    const presetRow = document.createElement('div'); presetRow.style.cssText='display:flex;flex-wrap:wrap;gap:5px;margin:2px 0 4px;';
+    for(const [label, purl] of skyPresets){
+      const b = document.createElement('button'); b.textContent = label; b.style.cssText = 'flex:0 0 auto;padding:4px 10px;font-size:11px;';
+      b.onclick = ()=>{
+        pushUndoSnapshot();
+        worldCfg.sky_hdri = purl;
+        applyWorldCfg();
+        renderEditorFields();   // re-render so the URL field shows the chosen preset
+      };
+      presetRow.appendChild(b);
+    }
+    worldHost.appendChild(presetRow);
+    const skStatus=document.createElement('div'); skStatus.id='edSkyStatus'; skStatus.className='hint'; skStatus.style.cssText='margin:-2px 0 6px;font-size:10px;'; worldHost.appendChild(skStatus);
+
+    hint(worldHost, '<b>Floor</b> — color, finish + optional tiling texture', '10px 0 4px');
+    colorRow(worldHost, 'Floor color', 'floorColor');
+    slider(worldHost, 'Floor roughness','floorRough', 0, 1, 0.05);
+    slider(worldHost, 'Floor metalness','floorMetal', 0, 1, 0.05);
+    texRow(worldHost, 'https://…/floor.jpg (tiles)', 'floorTex');
+    slider(worldHost, 'Floor tile W','floorTileU', 0, 80, 0.5);
+    slider(worldHost, 'Floor tile H','floorTileV', 0, 80, 0.5);
+    slider(worldHost, 'Floor rotate°','floorRot', 0, 360, 5);
+    { const fh=document.createElement('div'); worldHost.appendChild(fh); renderTexSearch(fh, (maps)=>{ pushUndoSnapshot(); worldCfg.floorTex=maps.map||''; worldCfg.floorTexN=maps.normal||''; worldCfg.floorTexR=maps.rough||''; applyWorldCfg(); renderEditorFields(); }); }
+
+    hint(worldHost, '<b>Walls</b> — color, finish + optional tiling texture');
+    colorRow(worldHost, 'Wall color', 'wallColor');
+    slider(worldHost, 'Wall roughness','wallRough', 0, 1, 0.05);
+    slider(worldHost, 'Wall metalness','wallMetal', 0, 1, 0.05);
+    texRow(worldHost, 'https://…/wall.jpg (tiles)', 'wallTex');
+    slider(worldHost, 'Wall tile W','wallTileU', 0, 80, 0.5);
+    slider(worldHost, 'Wall tile H','wallTileV', 0, 80, 0.5);
+    slider(worldHost, 'Wall rotate°','wallRot', 0, 360, 5);
+    { const wh=document.createElement('div'); worldHost.appendChild(wh); renderTexSearch(wh, (maps)=>{ pushUndoSnapshot(); worldCfg.wallTex=maps.map||''; worldCfg.wallTexN=maps.normal||''; worldCfg.wallTexR=maps.rough||''; applyWorldCfg(); renderEditorFields(); }); }
+    hint(worldHost, '', '0 0 6px').textContent = 'Tile W/H = repeats across width / height (0 = auto). Lower roughness = shinier; metalness adds sheen. Rotate spins the texture (planks/bricks a new way).';
 
     // ===== ENEMIES section =====
     const eHost = enemyHost || worldHost;
@@ -12415,11 +12095,6 @@ function renderEditorFields(){
     }
     // ===== Pickups: weapons / ammo / health / buffs placed on the map =====
     hint(gHost, '<b>Pickups</b> \u2014 items players grab on the map', '12px 0 4px');
-    { const poLab=document.createElement('label'); poLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 6px;cursor:pointer;';
-      const poCb=document.createElement('input'); poCb.type='checkbox'; poCb.checked=pickupsOn; poCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
-      poCb.onchange=()=>{ pushUndoSnapshot(); pickupsOn=poCb.checked; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers(); renderEditorFields(); };
-      const poSp=document.createElement('span'); poSp.textContent='Spawn pickups'; poLab.appendChild(poCb); poLab.appendChild(poSp); gHost.appendChild(poLab); }
-    if(!pickupsOn){ hint(gHost,'','2px 0 6px').textContent='Pickups are off \u2014 no health/buff diamonds spawn (placed spots below are kept for when you turn this back on).'; }
     { const krow=document.createElement('div'); krow.className='row2'; krow.style.flexWrap='wrap';
       const KINDS=[['health','+Health'],['ammo','+Ammo'],['rifle','Rifle'],['smg','SMG'],['shotgun','Shotgun'],['launcher','Rocket'],['grenade','Grenade'],['damage','2x Dmg'],['speed','Speed'],['shield','Shield']];
       const ksel=document.createElement('select'); ksel.style.cssText='flex:1;min-width:90px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
@@ -12670,7 +12345,7 @@ function renderEditorFields(){
   const gz = editorEl.querySelector('#edGizmo');
   if(gz){
     gz.innerHTML = '';
-    const selectable = (editorActive==='station') || (editorActive==='props' && !!editorTargets.props.obj()) || (editorActive==='lights' && !!editorTargets.lights.obj());
+    const selectable = (editorActive==='props' || editorActive==='station' || editorActive==='lights');
     if(selectable){
       const head = document.createElement('div'); head.className='hint'; head.style.margin='2px 0 3px'; head.innerHTML='<b>Gizmo</b> — drag the handles in the scene · keys <b>1 2 3</b>' + (isGroupSel() ? (' · <b style="color:#38f5b5">'+activeSel().length+' selected (group)</b>') : '');
       gz.appendChild(head);
@@ -12701,7 +12376,7 @@ function renderEditorFields(){
   const lib = editorEl.querySelector('#edLibrary');
   if(lib){
     lib.innerHTML = '';
-    if(SHOW_MODEL_LIBRARY && tgt.addable && tgt.urlField){   // the Props target (hidden for now)
+    if(tgt.addable && tgt.urlField){   // the Props target
       const head = document.createElement('div'); head.className='hint'; head.style.margin='4px 0 4px';
       head.innerHTML = '<b>Model library</b> — click to add (drops in front of you, then move/scale it). Needs network.';
       lib.appendChild(head);
@@ -12962,13 +12637,6 @@ function renderEditorFields(){
       const psHost=document.createElement('div'); urlHost.appendChild(psHost);
       renderModelSearch(psHost, (m, st)=>{ inp.value=m.glb; if(tgt.setUrl) tgt.setUrl(m.glb); if(st) st.textContent='Using "'+m.title+'" — credit: '+(m.attribution||''); }, { placeholder:'e.g. pistol, robot, barrel' });
     }
-    if(tgt===editorTargets.gun){   // per-weapon shoot sound (moved here from the old Sounds tab)
-      if(!audioSettings.sounds) audioSettings.sounds=_emptySounds(); if(!audioSettings.sounds.shoot) audioSettings.sounds.shoot={};
-      const wn=(WEAPONS[curWep]&&WEAPONS[curWep].name)?WEAPONS[curWep].name:curWep;
-      const sh=document.createElement('div'); sh.className='hint'; sh.style.margin='10px 0 2px'; sh.innerHTML='<b>Shoot sound</b> \u2014 '+wn+' (saved on this device)'; urlHost.appendChild(sh);
-      urlHost.appendChild(_sndRow('Shoot \u00b7 '+wn, ()=>audioSettings.sounds.shoot[curWep], v=>{ if(v) audioSettings.sounds.shoot[curWep]=v; else delete audioSettings.sounds.shoot[curWep]; }));
-      urlHost.appendChild(renderFreesoundBrowser(urlHost, ()=>renderEditorFields(), { label:'Shoot \u00b7 '+wn, set:v=>{ if(v) audioSettings.sounds.shoot[curWep]=v; else delete audioSettings.sounds.shoot[curWep]; } }));
-    }
     if(tgt===editorTargets.player){   // avatar animation states (mirror the enemy state machine)
       const acHead=document.createElement('div'); acHead.className='hint'; acHead.style.margin='10px 0 2px'; acHead.innerHTML='<b>Animation states</b> — auto-matched by clip name; override per state. Walk/run switch with the avatar\u2019s movement in-game.';
       urlHost.appendChild(acHead);
@@ -12990,20 +12658,15 @@ function renderEditorFields(){
       const pHint=document.createElement('div'); pHint.className='hint'; pHint.style.margin='3px 0 0'; pHint.textContent='Preview avatar is in front of you. Tap a state to test its clip; in-game it switches automatically with movement.';
       urlHost.appendChild(pHint);
     }
-  }
-  // Add-shape primitives rendered at the TOP of the object section (its own host)
-  const shapesHost = editorEl.querySelector('#edShapes');
-  if(shapesHost){
-    shapesHost.innerHTML='';
-    if(tgt.addable && tgt.urlField){   // Props only (Lights/Spawns are addable but have no urlField)
-      const shapeHead = document.createElement('div'); shapeHead.className='hint'; shapeHead.style.margin='2px 0 3px'; shapeHead.innerHTML='<b>Add shape</b> — drops in front of you, then move/scale it';
-      shapesHost.appendChild(shapeHead);
+    if(tgt.addable){
+      const shapeHead = document.createElement('div'); shapeHead.className='hint'; shapeHead.style.margin='8px 0 3px'; shapeHead.innerHTML='<b>Add shape</b> — drops in front of you, then move/scale it';
+      urlHost.appendChild(shapeHead);
       const srow = document.createElement('div'); srow.className='row2';
       for(const [src,label] of [['box','Box'],['sphere','Sphere'],['cylinder','Cylinder'],['cone','Cone']]){
-        const b=document.createElement('button'); b.className='primBtn'; b.innerHTML=(PRIM_ICON[src]||'')+'<span>+ '+label+'</span>'; b.onclick=()=>{ addSceneProp(src); };
+        const b=document.createElement('button'); b.textContent=label; b.onclick=()=>{ addSceneProp(src); };
         srow.appendChild(b);
       }
-      shapesHost.appendChild(srow);
+      urlHost.appendChild(srow);
     }
   }
   // ---- Material section (selected shape primitive only): color, texture+tiling, emissive light ----
@@ -13011,9 +12674,7 @@ function renderEditorFields(){
   if(matHost){
     matHost.innerHTML = '';
     const selObj = (editorActive==='props' && editorTargets.props.obj) ? editorTargets.props.obj() : null;
-    const matOn = !!(selObj && isShapePrimitive(selObj.userData.src));
-    const matSec = matHost.closest('.edSection'); if(matSec) matSec.style.display = matOn ? '' : 'none';   // only shape primitives have material
-    if(matOn){
+    if(selObj && isShapePrimitive(selObj.userData.src)){
       const toHex = n => '#' + ('000000'+(n>>>0).toString(16)).slice(-6);
 
       // base color
@@ -13129,8 +12790,6 @@ function renderEditorFields(){
   const host = editorEl.querySelector('#edFields');
   host.innerHTML = '';
   editorFieldInputs = [];
-  { const xfSec = host.closest('.edSection'); const xfInMode=(MODE_SECTIONS[editorMode]||[]).indexOf('transform')>=0;
-    if(xfSec) xfSec.style.display = (xfInMode && tgt.fields && tgt.fields.length) ? '' : 'none'; }   // no fields (Extract) -> hide
   for(const fld of (tgt.fields || [])){
     const wrap = document.createElement('div'); wrap.className='field';
     const lab = document.createElement('label');
@@ -13170,7 +12829,6 @@ function renderEditorFields(){
   // live preview the aimed pose while the Aim tab is open, and highlight the selected scene object
   editorAimPreview = (editorOpen && editorActive==='aim');
   updateSelectionHighlight();
-  applyContextualSections();   // hide Gizmo/Material/Object when the selection gives them nothing to show
   updateEditorOut();
 }
 // push the active target's state back into the on-screen slider/number inputs (e.g. after a gizmo drag)
@@ -13598,7 +13256,7 @@ renderer.domElement.addEventListener('click', (e)=>{
     } else {
       selProps = obj ? [obj] : [];
     }
-    editorActive='props'; syncModeToActive(); renderEditorFields();
+    editorActive='props'; renderEditorFields();
   } else if(picked==='lights'){
     const g = lightModels[editorTargets.lights.idx];
     if(e.shiftKey && g){
@@ -13610,8 +13268,8 @@ renderer.domElement.addEventListener('click', (e)=>{
     } else {
       selLights = g ? [g] : [];
     }
-    editorActive='lights'; syncModeToActive(); renderEditorFields();
-  } else if(picked){ selProps.length=0; selLights.length=0; editorActive=picked; syncModeToActive(); renderEditorFields(); }
+    editorActive='lights'; renderEditorFields();
+  } else if(picked){ selProps.length=0; selLights.length=0; editorActive=picked; renderEditorFields(); }
 });
 
 function updateEditorOut(){
@@ -13683,7 +13341,6 @@ function toggleEditor(){
     if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(true);
     const mm=$('minimap'); if(mm) mm.style.display='none';        // declutter combat HUD while editing
     const wp=$('wavePanel'); if(wp) wp.style.display='none';
-    if(typeof applyEditorMode==='function') applyEditorMode();
     renderEditorFields();
   } else {
     if(editorEl) editorEl.style.display = 'none';
@@ -13975,7 +13632,7 @@ function _fsAssignSlots(){
   for(const [lab,key] of [['Reload','reload'],['Grenade','explode'],['Coin','coin'],['Hit marker','hit'],['Enemy kill','kill'],['Player hurt','hurt']]){ out.push({ label:lab, set:u=>{ audioSettings.sounds[key]=u; } }); }
   return out;
 }
-function renderFreesoundBrowser(host, refresh, directTarget){
+function renderFreesoundBrowser(host, refresh){
   const I='background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:11px;';
   const B='background:rgba(56,245,181,.16);border:1px solid #38f5b5;color:#eafff7;border-radius:4px;cursor:pointer;padding:3px 8px;font-size:11px;';
   const wrap=document.createElement('div'); wrap.style.cssText='margin-top:14px;border-top:1px solid #233;padding-top:10px;';
@@ -13989,7 +13646,7 @@ function renderFreesoundBrowser(host, refresh, directTarget){
   sRow.appendChild(q); sRow.appendChild(go); wrap.appendChild(sRow);
   const status=document.createElement('div'); status.className='hint'; status.style.margin='0 0 6px'; wrap.appendChild(status);
   const list=document.createElement('div'); list.style.cssText='display:flex;flex-direction:column;gap:6px;max-height:300px;overflow:auto;'; wrap.appendChild(list);
-  const slots = directTarget ? null : _fsAssignSlots();
+  const slots=_fsAssignSlots();
   function renderResults(arr){
     list.innerHTML='';
     if(!arr || !arr.length){ status.textContent='No results.'; return; }
@@ -14002,17 +13659,11 @@ function renderFreesoundBrowser(host, refresh, directTarget){
       info.appendChild(nm); info.appendChild(meta);
       const play=document.createElement('button'); play.textContent='\u25b6'; play.title='Preview'; play.style.cssText='flex:0 0 auto;width:26px;'+B;
       play.onclick=()=>{ try{ if(_fsAudio){ _fsAudio.pause(); } _fsAudio=new Audio(snd.preview); _fsAudio.volume=Math.min(1,(audioSettings.sfx||1)); _fsAudio.play(); }catch(e){} };
-      if(directTarget){
-        const useb=document.createElement('button'); useb.textContent='Use'; useb.style.cssText='flex:0 0 auto;'+B;
-        useb.onclick=()=>{ directTarget.set(snd.preview); saveAudioSettings(); initAudio(); loadSound(snd.preview); status.textContent='Assigned \u2713'; if(refresh) refresh(); };
-        card.appendChild(info); card.appendChild(play); card.appendChild(useb);
-      } else {
-        const sel=document.createElement('select'); sel.style.cssText='flex:0 0 auto;max-width:118px;'+I;
-        const ph=document.createElement('option'); ph.value=''; ph.textContent='Assign to\u2026'; sel.appendChild(ph);
-        slots.forEach((sl,i)=>{ const o=document.createElement('option'); o.value=String(i); o.textContent=sl.label; sel.appendChild(o); });
-        sel.onchange=()=>{ const i=+sel.value; sel.value=''; if(!(i>=0)||i!==i) return; slots[i].set(snd.preview); saveAudioSettings(); initAudio(); loadSound(snd.preview); status.textContent='Assigned to '+slots[i].label+' \u2713'; if(refresh) refresh(); };
-        card.appendChild(info); card.appendChild(play); card.appendChild(sel);
-      }
+      const sel=document.createElement('select'); sel.style.cssText='flex:0 0 auto;max-width:118px;'+I;
+      const ph=document.createElement('option'); ph.value=''; ph.textContent='Assign to\u2026'; sel.appendChild(ph);
+      slots.forEach((sl,i)=>{ const o=document.createElement('option'); o.value=String(i); o.textContent=sl.label; sel.appendChild(o); });
+      sel.onchange=()=>{ const i=+sel.value; sel.value=''; if(!(i>=0)||i!==i) return; slots[i].set(snd.preview); saveAudioSettings(); initAudio(); loadSound(snd.preview); status.textContent='Assigned to '+slots[i].label+' \u2713'; if(refresh) refresh(); };
+      card.appendChild(info); card.appendChild(play); card.appendChild(sel);
       list.appendChild(card);
     }
   }
