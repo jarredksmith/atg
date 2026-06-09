@@ -6971,6 +6971,14 @@ function showWeaponModel(key){
       _gunLoading[key] = false;
       if(gunModelByWep[key]){ try{ gun.remove(gunModelByWep[key]); }catch(e){} const om=gunModelByWep[key].userData && gunModelByWep[key].userData.mixer; if(om){ const mi=mixers.indexOf(om); if(mi>=0) mixers.splice(mi,1); } }   // never keep two models for one weapon
       const model = THREE.cloneSkinned(gltf.scene);
+      if(WEAPONS[key] && WEAPONS[key].model && !WEAPONS[key].view){
+        // Picked models come in arbitrary units, so the default gun scale makes them invisible or screen-filling.
+        // Auto-frame: map the longest axis to a sane viewmodel size at the standard offset, then the user fine-tunes.
+        const _bb=new THREE.Box3().setFromObject(model), _sz=new THREE.Vector3(); _bb.getSize(_sz);
+        const maxd=Math.max(_sz.x,_sz.y,_sz.z)||1, fit=0.5/maxd;
+        WEAPONS[key].view = { px:GUN_OFFSET.x, py:GUN_OFFSET.y, pz:GUN_OFFSET.z, rx:GUN_ROT.x*DEG, ry:GUN_ROT.y*DEG, rz:GUN_ROT.z*DEG, s:fit, mzx:GUN_OFFSET.x, mzy:GUN_OFFSET.y+0.04, mzz:GUN_OFFSET.z-1.02 };
+        if(editorOpen && editorActive==='gun' && editorTargets.gun.syncFromWeapon){ editorTargets.gun.syncFromWeapon(); if(typeof updateFieldDisplays==='function') updateFieldDisplays(); }
+      }
       applyWepView(model, key);
       model.traverse(o=>{ if(o.isMesh){ o.castShadow=false; o.frustumCulled=false; o.renderOrder=999; if(o.material){ o.material.depthTest=true; } } });
       gun.add(model);
@@ -6991,7 +6999,7 @@ function loadGunModel(){ showWeaponModel(curWep); }
 // to set the shared default gun url (legacy single-gun behavior) that weapons fall back to.
 function swapGunModel(url, key){
   if(key){
-    const w = WEAPONS[key]; if(w) w.model = url || '';
+    const w = WEAPONS[key]; if(w){ if((w.model||'')!==(url||'')) w.view = null; w.model = url || ''; }   // new URL -> auto-frame the fresh model
     if(gunModelByWep[key]){ gun.remove(gunModelByWep[key]); const m=gunModelByWep[key].userData && gunModelByWep[key].userData.mixer; if(m){ const mi=mixers.indexOf(m); if(mi>=0) mixers.splice(mi,1); } gunModelByWep[key]=null; } _gunLoading[key]=false;
     if(key === curWep) showWeaponModel(key);
   } else {
@@ -9158,7 +9166,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 222 · 2026-06-08';
+const BUILD_VERSION = 'build 223 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
