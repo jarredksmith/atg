@@ -9699,7 +9699,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 238 · 2026-06-08';
+const BUILD_VERSION = 'build 239 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12698,11 +12698,13 @@ function ppSearch(query, cb, errcb, page){
 // ---------- Poly Haven HDRI browser: search CC0 HDR panoramas and apply as the sky (full HDR lighting) ----------
 let _phHdris = null, _phLastQuery = '';
 function phApi(path, cb, errcb){
-  // api.polyhaven.com asks for a unique User-Agent (a header browsers can't set), so route through the CORS
-  // proxy/Worker which can add it server-side. Per Poly Haven's docs it also works without one for now.
-  fetch(proxied('https://api.polyhaven.com'+path))
-    .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
-    .then(cb).catch(errcb);
+  // Poly Haven's API usually sends permissive CORS, so try it DIRECTLY first (no proxy, no User-Agent issue,
+  // browser sends its own allowed UA). Only fall back through the Worker if the browser blocks the read --
+  // and if the Worker's allowlist doesn't include api.polyhaven.com that fallback 403s, which is the signal
+  // to either add the host to the proxy or rely on the direct path.
+  const direct='https://api.polyhaven.com'+path;
+  const get=(u,next)=> fetch(u).then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); }).then(cb).catch(next);
+  get(direct, ()=> get(proxied(direct), errcb));
 }
 function _phHint(err){ const m=(err&&err.message)||String(err||''); return m?(' ('+m+')'):''; }
 function openHdriBrowser(){
