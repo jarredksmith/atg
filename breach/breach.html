@@ -665,6 +665,7 @@
     <h2>PAUSED</h2>
     <button id="pauseResume" class="pBtnPrimary">Resume</button>
     <button id="pauseEditHud" class="pBtnGhost" style="display:none">✿ Customize controls</button>
+    <button id="pauseMoveMode" class="pBtnGhost">Movement: Classic</button>
     <div class="pauseAudio">
       <label class="paLbl"><input type="checkbox" id="muteCb"> Mute all</label>
       <label class="paLbl">🔊 Master<input type="range" id="volMaster" min="0" max="100" value="80"></label>
@@ -6344,6 +6345,10 @@ function finalizeProp(obj, src, t, gltf, slot, animMode, mat, nid){
 const dynamicProps = [];   // prop meshes flagged dynamic (userData.phys = { id, body })
 let nextDynId = 1;
 let physWorld = null;
+// --- experimental: Rapier kinematic-character-controller movement (toggle; classic stays the default) ---
+let playerPhysMode = (()=>{ try{ return localStorage.getItem('breach_player_phys')==='1'; }catch(e){ return false; } })();
+let playerBody=null, playerCollider=null, playerCtrl=null, _kccBroken=false;
+const PLAYER_CAP_R = 0.45;   // capsule radius for KCC world collision (narrower than player.radius so archways fit)
 let physAccum = 0;
 // Spawn one scene object from a descriptor; onReady(obj) fires once it's in the world.
 // mat (optional) = { col, tex, texRepeat:[u,v], emit:{c,i} } for primitive material settings.
@@ -9209,7 +9214,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 229 · 2026-06-08';
+const BUILD_VERSION = 'build 230 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9645,7 +9650,40 @@ function destroyPhysWorld(){
   if(physWorld){ try{ physWorld.free(); }catch(e){} physWorld = null; }
   for(const o of dynamicProps){ if(o.userData.phys) o.userData.phys.body = null; }
   for(const o of colliders){ if(o.userData && o.userData._kbody) o.userData._kbody = null; }
+  playerBody = playerCollider = playerCtrl = null;   // KCC bodies belonged to the freed world
   physAccum = 0;
+}
+// Build the player's kinematic capsule + character controller once per physics world. Returns false when
+// unavailable (no world / older Rapier) so movement cleanly falls back to the classic resolver.
+function ensurePlayerKCC(){
+  if(_kccBroken || !physWorld || !RAPIER) return false;
+  if(playerCtrl && playerBody && playerCollider) return true;
+  const hh = Math.max(0.05, (PLAYER_HEIGHT - 2*PLAYER_CAP_R)/2);
+  const feetY = player.pos.y - EYE;
+  playerBody = physWorld.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(player.pos.x, feetY + PLAYER_HEIGHT/2, player.pos.z));
+  playerCollider = physWorld.createCollider(RAPIER.ColliderDesc.capsule(hh, PLAYER_CAP_R).setFriction(0).setRestitution(0), playerBody);
+  playerCtrl = physWorld.createCharacterController(0.08);
+  if(playerCtrl.setUp) playerCtrl.setUp({x:0,y:1,z:0});
+  playerCtrl.enableAutostep(STEP, PLAYER_CAP_R*0.6, true);     // climb stairs / ledges up to one STEP
+  playerCtrl.enableSnapToGround(0.5);                          // stay glued to slopes & stairs going down
+  playerCtrl.setMaxSlopeClimbAngle(55*Math.PI/180);
+  playerCtrl.setMinSlopeSlideAngle(38*Math.PI/180);
+  if(playerCtrl.setApplyImpulsesToDynamicBodies) playerCtrl.setApplyImpulsesToDynamicBodies(true);
+  return true;
+}
+// One frame of movement via Rapier: slides along walls, climbs ramps/stairs, fits through openings, all
+// against the exact trimesh the dynamic props collide with. Throwing here is caught and reverts to classic.
+function moveKCC(dt){
+  const half = PLAYER_HEIGHT/2;
+  playerBody.setTranslation({ x:player.pos.x, y:(player.pos.y - EYE) + half, z:player.pos.z }, true);   // sync to actual pos (spawn/knockback/teleport)
+  const desired = { x:(player.vel.x+player.extVel.x)*dt, y:player.vel.y*dt, z:(player.vel.z+player.extVel.z)*dt };
+  playerCtrl.computeColliderMovement(playerCollider, desired);
+  const mv = playerCtrl.computedMovement();
+  player.pos.x += mv.x; player.pos.y += mv.y; player.pos.z += mv.z;
+  if(playerCtrl.computedGrounded()){ player.onGround = true; if(player.vel.y < 0) player.vel.y = 0; }
+  else player.onGround = false;
+  playerBody.setTranslation({ x:player.pos.x, y:(player.pos.y - EYE) + half, z:player.pos.z }, true);   // leave the collider where we ended up
+  const kd = Math.max(0, 1 - (player.onGround ? 6 : 0.6)*dt); player.extVel.x *= kd; player.extVel.z *= kd;
 }
 function setPropDynamic(obj, on){
   if(!obj) return;
@@ -10984,6 +11022,13 @@ function loop(){
   // one-shot vertical knock from physics props (e.g. a fast body launching the player)
   if(player.extVel.y){ player.vel.y += player.extVel.y; player.onGround=false; player.extVel.y = 0; }
 
+  // --- player collision: experimental Rapier character controller, otherwise the classic resolver ---
+  let _usedKCC=false;
+  if(playerPhysMode && !editorOpen && physWorld){
+    try{ if(ensurePlayerKCC()){ moveKCC(dt); _usedKCC=true; } }
+    catch(e){ console.warn('player physics mode failed -> classic', e); _kccBroken=true; playerPhysMode=false; }
+  }
+  if(!_usedKCC){
   // apply horizontal movement (input + decaying knockback) with step/ramp/wall handling
   const feetY = player.pos.y - EYE;
   moveHorizontal(player.pos.x, player.pos.z, (player.vel.x+player.extVel.x)*dt, (player.vel.z+player.extVel.z)*dt, feetY);
@@ -11010,6 +11055,7 @@ function loop(){
   } else {
     player.onGround = false;
   }
+  }   // end classic-movement branch
   // footsteps: paced by horizontal speed, only while grounded and actually moving (not sliding/airborne)
   if(gameOn && player.onGround && !sliding){
     const hspd = Math.hypot(player.vel.x, player.vel.z);
@@ -14329,6 +14375,7 @@ function openPause(){
   paused = true; firing = false; ads = false;
   safeExitPointerLock();
   const eh=document.getElementById('pauseEditHud'); if(eh) eh.style.display = isTouch ? '' : 'none';
+  const mm0=document.getElementById('pauseMoveMode'); if(mm0) mm0.textContent='Movement: '+(playerPhysMode?'Physics (beta)':'Classic');
   const pm=document.getElementById('pauseMenu'); if(pm) pm.classList.remove('hidden');
 }
 function resumeGame(){
@@ -14356,6 +14403,7 @@ function bindPauseMenu(){
   const pb=document.getElementById('pauseBtn'); if(pb) pb.onclick=openPause;
   const r=document.getElementById('pauseResume'); if(r) r.onclick=resumeGame;
   const eh=document.getElementById('pauseEditHud'); if(eh) eh.onclick=()=>{ const pm=document.getElementById('pauseMenu'); if(pm) pm.classList.add('hidden'); enterTouchEdit(); };
+  const mm=document.getElementById('pauseMoveMode'); if(mm){ const upd=()=>{ mm.textContent='Movement: '+(playerPhysMode?'Physics (beta)':'Classic'); }; upd(); mm.onclick=()=>{ playerPhysMode=!playerPhysMode; _kccBroken=false; try{ localStorage.setItem('breach_player_phys', playerPhysMode?'1':'0'); }catch(e){} upd(); }; }
   const x=document.getElementById('pauseExit'); if(x) x.onclick=exitToMenu;
   const mc=document.getElementById('muteCb'); if(mc){ mc.checked=audioSettings.muted; mc.onchange=()=>{ audioSettings.muted=mc.checked; applyAudioSettings(); saveAudioSettings(); }; }
   const vM=document.getElementById('volMaster'); if(vM){ vM.value=Math.round(audioSettings.master*100); vM.oninput=()=>{ audioSettings.master=(+vM.value)/100; applyAudioSettings(); saveAudioSettings(); }; }
