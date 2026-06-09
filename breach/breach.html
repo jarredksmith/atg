@@ -7060,7 +7060,7 @@ const player = {
 };
 const EYE = 1.7;            // standing camera height above the surface the player stands on
 // ---- World movement settings (editable in the editor's World panel; saved with the level) ----
-const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, launchPower:1, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorRough:0.95, floorMetal:0.1, floorTex:'', floorTexN:'', floorTexR:'', floorTile:0, floorTileU:0, floorTileV:0, floorRot:0, wallColor:0x1a242b, wallRough:0.8, wallMetal:0.2, wallTex:'', wallTexN:'', wallTexR:'', wallTile:0, wallTileU:0, wallTileV:0, wallRot:0, sky_hdri:'', skyBright:1, fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4 };
+const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, launchPower:1, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorRough:0.95, floorMetal:0.1, floorTex:'', floorTexN:'', floorTexR:'', floorTile:0, floorTileU:0, floorTileV:0, floorRot:0, wallColor:0x1a242b, wallRough:0.8, wallMetal:0.2, wallTex:'', wallTexN:'', wallTexR:'', wallTile:0, wallTileU:0, wallTileV:0, wallRot:0, sky_hdri:'', skyBright:1, skyRot:0, fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4 };
 let worldCfg = Object.assign({}, DEFAULT_WORLD, (savedLevel && savedLevel.world) || {});
 
 // Apply (or clear) a tiling texture on a shared material. Stores the current url on the material under
@@ -7094,8 +7094,73 @@ function applySurfaceTexture(mat, url, urlKey, repU, repV, normalUrl, roughUrl, 
 // Equirectangular sky / image-based lighting. Pass a panorama image URL (jpg/png; many "HDRI" panos are
 // distributed as jpg). Sets it as the scene background AND environment (so models pick up reflections),
 // processed through a PMREM render target for correct lighting. Empty string restores the flat color.
-let _skyHdriUrl = null, _skyPMREM = null, _skyEnvRT = null;
+let _skyHdriUrl = null, _skyPMREM = null, _skyEnvRT = null, _skyOrigTex = null, _skyOrigKind = null, _skyRotTex = null, _skyRotTimer = null;
 let _arenaRebuildQueued = false;
+
+// --- HDRI sky orientation: rotate the equirectangular panorama horizontally (yaw) by shifting its pixel
+// columns with wraparound, then rebuild both the background and the PMREM lighting from the rotated copy
+// so the sky and its reflections stay in sync. HDR keeps full float range (we shift the raw data buffer);
+// LDR panoramas shift via a canvas. Everything is wrapped so a failure falls back to the unrotated sky.
+function _shiftEquirectColumns(src, w, h, comp, dx){
+  const out = new src.constructor(src.length);
+  dx = ((dx % w) + w) % w;
+  for(let y=0;y<h;y++){
+    const row = y*w*comp;
+    for(let x=0;x<w;x++){
+      const sx = (x - dx + w) % w, di = row + x*comp, si = row + sx*comp;
+      for(let c=0;c<comp;c++) out[di+c] = src[si+c];
+    }
+  }
+  return out;
+}
+function _buildSkyPMREM(tex){
+  if(!THREE.PMREMGenerator) return;
+  if(!_skyPMREM){ _skyPMREM = new THREE.PMREMGenerator(renderer); _skyPMREM.compileEquirectangularShader(); }
+  if(_skyEnvRT){ _skyEnvRT.dispose && _skyEnvRT.dispose(); }
+  _skyEnvRT = _skyPMREM.fromEquirectangular(tex);
+  scene.environment = _skyEnvRT.texture;   // image-based lighting / reflections
+}
+function _orientEquirect(srcTex, deg, isHdr){
+  const rot = ((deg % 360) + 360) % 360;
+  if(rot < 0.01) return srcTex;                       // no rotation -> use the original texture as-is
+  const img = srcTex.image; if(!img || !img.width) return srcTex;
+  const w = img.width, h = img.height, dx = Math.round(rot/360*w);
+  if(isHdr && img.data){
+    const comp = (img.data.length/(w*h))|0;
+    const out = _shiftEquirectColumns(img.data, w, h, comp, dx);
+    const t = new THREE.DataTexture(out, w, h, srcTex.format, srcTex.type);
+    t.mapping = THREE.EquirectangularReflectionMapping; t.minFilter = THREE.LinearFilter; t.magFilter = THREE.LinearFilter;
+    t.generateMipmaps = false; t.flipY = srcTex.flipY; if('colorSpace' in t) t.colorSpace = srcTex.colorSpace; t.needsUpdate = true;
+    return t;
+  }
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const cx = cv.getContext('2d'); cx.drawImage(img, 0, 0, w, h);
+  const id = cx.getImageData(0, 0, w, h);
+  id.data.set(_shiftEquirectColumns(id.data, w, h, 4, dx)); cx.putImageData(id, 0, 0);
+  const t = new THREE.CanvasTexture(cv); t.mapping = THREE.EquirectangularReflectionMapping;
+  if('colorSpace' in t) t.colorSpace = THREE.SRGBColorSpace; else if('encoding' in t) t.encoding = 3001; t.needsUpdate = true;
+  return t;
+}
+function _applyOrientedSky(statusFn){
+  if(!_skyOrigTex) return;
+  const isHdr = _skyOrigKind === 'hdr';
+  try{
+    const deg = (worldCfg && +worldCfg.skyRot) || 0;
+    const tex = _orientEquirect(_skyOrigTex, deg, isHdr);
+    if(_skyRotTex && _skyRotTex !== tex && _skyRotTex !== _skyOrigTex && _skyRotTex.dispose){ try{ _skyRotTex.dispose(); }catch(_){ } }
+    _skyRotTex = (tex !== _skyOrigTex) ? tex : null;
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    scene.background = tex; _buildSkyPMREM(tex);
+    if(statusFn) statusFn(isHdr ? 'HDR sky loaded \u2713' : 'Sky loaded \u2713');
+  }catch(e){ console.warn('Sky orient failed:', e && e.message); try{ scene.background = _skyOrigTex; _buildSkyPMREM(_skyOrigTex); }catch(_){ } if(statusFn) statusFn('Sky loaded (rotation skipped)'); }
+}
+// Re-orient the already-loaded sky when only the rotation changed (debounced so live-dragging the slider
+// doesn't regenerate the lighting every frame).
+function applySkyRotation(){
+  if(!_skyOrigTex) return;
+  if(_skyRotTimer) clearTimeout(_skyRotTimer);
+  _skyRotTimer = setTimeout(()=>{ _skyRotTimer = null; _applyOrientedSky(null); }, 140);
+}
 function applySkyHdri(url){
   url = (url||'').trim();
   if(_skyHdriUrl === url) return;
@@ -7104,6 +7169,7 @@ function applySkyHdri(url){
     scene.background = new THREE.Color((worldCfg && worldCfg.fogColor!=null ? worldCfg.fogColor : 0x070b10)>>>0);
     if(scene.environment){ scene.environment = null; }
     if(_skyEnvRT){ _skyEnvRT.dispose && _skyEnvRT.dispose(); _skyEnvRT = null; }
+    _skyOrigTex = null; _skyOrigKind = null; _skyRotTex = null;
     return;
   }
   if(/\.exr(\?|#|$)/i.test(url)){
@@ -7119,18 +7185,10 @@ function applySkyHdri(url){
   }
   const onTex = (tex)=>{
     if(_skyHdriUrl !== url){ tex.dispose && tex.dispose(); return; }
-    try{
-      tex.mapping = THREE.EquirectangularReflectionMapping;
-      if(!_isHdr){ if('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace; else if('encoding' in tex) tex.encoding = 3001; }   // HDR is linear/float; only LDR panoramas get the sRGB tag
-      scene.background = tex;
-      if(THREE.PMREMGenerator){
-        if(!_skyPMREM){ _skyPMREM = new THREE.PMREMGenerator(renderer); _skyPMREM.compileEquirectangularShader(); }
-        if(_skyEnvRT){ _skyEnvRT.dispose && _skyEnvRT.dispose(); }
-        _skyEnvRT = _skyPMREM.fromEquirectangular(tex);
-        scene.environment = _skyEnvRT.texture;   // image-based lighting / reflections
-      }
-      skyStatus(_isHdr ? 'HDR sky loaded ✓' : 'Sky loaded ✓');
-    }catch(e){ console.warn('Sky apply failed:', e && e.message); scene.background = tex; skyStatus('Sky loaded (no reflections)'); }
+    if(!_isHdr){ if('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace; else if('encoding' in tex) tex.encoding = 3001; }   // HDR is linear/float; only LDR panoramas get the sRGB tag
+    if(_skyOrigTex && _skyOrigTex !== tex && _skyOrigTex.dispose){ try{ _skyOrigTex.dispose(); }catch(_){ } }
+    _skyOrigTex = tex; _skyOrigKind = _isHdr ? 'hdr' : 'ldr';
+    _applyOrientedSky(skyStatus);   // builds background + PMREM, applying any saved rotation
   };
   // Try the proxy first (most hosts block cross-origin image reads). If that fails — e.g. the proxy's
   // allowlist hasn't been updated for images, or there's no proxy — fall back to a direct load, which
@@ -7169,6 +7227,7 @@ function applyWorldCfg(){
   worldCfg.sun     = Math.max(0, worldCfg.sun     == null ? DEFAULT_WORLD.sun     : +worldCfg.sun);
   worldCfg.sky     = Math.max(0, worldCfg.sky     == null ? DEFAULT_WORLD.sky     : +worldCfg.sky);
   worldCfg.skyBright = Math.max(0, Math.min(4, worldCfg.skyBright == null ? DEFAULT_WORLD.skyBright : +worldCfg.skyBright));
+  worldCfg.skyRot = ((((+worldCfg.skyRot || 0) % 360) + 360) % 360);
   worldCfg.ambient = Math.max(0, worldCfg.ambient == null ? DEFAULT_WORLD.ambient : +worldCfg.ambient);
   if(worldCfg.sunColor == null) worldCfg.sunColor = DEFAULT_WORLD.sunColor;
   if(typeof moon!=='undefined'){ moon.intensity = worldCfg.sun; moon.color.setHex(worldCfg.sunColor>>>0); }
@@ -7231,6 +7290,7 @@ function applyWorldCfg(){
   }
   // HDRI / equirectangular sky
   if(typeof applySkyHdri==='function') applySkyHdri(worldCfg.sky_hdri||'');
+  if(typeof applySkyRotation==='function') applySkyRotation();   // re-orient the cached sky if only rotation changed
 }
 let editorOpen = false;        // transform editor panel open — declared early to stay TDZ-safe during init
 let _editorOpenFlag = false;   // mirror of editorOpen, read by applyWorldCfg at init
@@ -9702,7 +9762,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 241 · 2026-06-08';
+const BUILD_VERSION = 'build 242 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13080,6 +13140,7 @@ function renderEditorFields(){
       for(const [label,purl] of skyPresets){ const bn=document.createElement('button'); bn.textContent=label; bn.style.cssText='flex:0 0 auto;padding:4px 10px;font-size:11px;'; bn.onclick=()=>{ pushUndoSnapshot(); worldCfg.sky_hdri=purl; applyWorldCfg(); renderEditorFields(); }; presetRow.appendChild(bn); }
       b.appendChild(presetRow);
       slider(b,'Reflection strength','skyBright',0,3,0.05); hint(b,'How strongly the sky reflects on metal floors/walls. Lower = more matte; 0 = no sky reflection.','0 0 4px');
+      slider(b,'Sky rotation\u00b0','skyRot',0,360,5); hint(b,'Spin the sky to aim the sun / horizon. Rebuilds a moment after you release the slider.','0 0 4px');
       const skStatus=document.createElement('div'); skStatus.id='edSkyStatus'; skStatus.className='hint'; skStatus.style.cssText='margin:-2px 0 6px;font-size:10px;'; b.appendChild(skStatus); }
     { const b=subSec('Floor','floor',true);
       colorRow(b,'Floor color','floorColor'); slider(b,'Floor roughness','floorRough',0,1,0.05); slider(b,'Floor metalness','floorMetal',0,1,0.05);
