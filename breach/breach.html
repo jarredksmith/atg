@@ -6011,7 +6011,7 @@ function updateLightBudget(){
 // Arena half-extent. Editable at runtime (saved with the level as worldCfg.arena); rebuildArena()
 // regenerates the floor, grid, and boundary walls, and the player/enemy clamps read it live.
 let ARENA = 70;
-const floorMat = new THREE.MeshStandardMaterial({ color:0x141c22, roughness:.95, metalness:.1 });
+const floorMat = new THREE.MeshPhysicalMaterial({ color:0x141c22, roughness:.95, metalness:.1 });
 const floor = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), floorMat);
 floor.rotation.x = -Math.PI/2; floor.receiveShadow = true;
 scene.add(floor);
@@ -6020,7 +6020,7 @@ scene.add(floor);
 let grid = null;
 
 // walls
-const wallMat = new THREE.MeshStandardMaterial({ color:0x1a242b, roughness:.8, metalness:.2 });
+const wallMat = new THREE.MeshPhysicalMaterial({ color:0x1a242b, roughness:.8, metalness:.2 });
 const colliders = [];
 const H = 8;
 const arenaWalls = [];   // the 4 boundary walls (rebuilt on resize); other colliders (props) are untouched
@@ -7060,7 +7060,7 @@ const player = {
 };
 const EYE = 1.7;            // standing camera height above the surface the player stands on
 // ---- World movement settings (editable in the editor's World panel; saved with the level) ----
-const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, launchPower:1, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorRough:0.95, floorMetal:0.1, floorTex:'', floorTexN:'', floorTexR:'', floorTile:0, floorTileU:0, floorTileV:0, floorRot:0, wallColor:0x1a242b, wallRough:0.8, wallMetal:0.2, wallTex:'', wallTexN:'', wallTexR:'', wallTile:0, wallTileU:0, wallTileV:0, wallRot:0, sky_hdri:'', fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4 };
+const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, launchPower:1, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorRough:0.95, floorMetal:0.1, floorTex:'', floorTexN:'', floorTexR:'', floorTile:0, floorTileU:0, floorTileV:0, floorRot:0, wallColor:0x1a242b, wallRough:0.8, wallMetal:0.2, wallTex:'', wallTexN:'', wallTexR:'', wallTile:0, wallTileU:0, wallTileV:0, wallRot:0, sky_hdri:'', skyBright:1, fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4 };
 let worldCfg = Object.assign({}, DEFAULT_WORLD, (savedLevel && savedLevel.world) || {});
 
 // Apply (or clear) a tiling texture on a shared material. Stores the current url on the material under
@@ -7168,6 +7168,7 @@ function applyWorldCfg(){
   // global lighting (saved with the level)
   worldCfg.sun     = Math.max(0, worldCfg.sun     == null ? DEFAULT_WORLD.sun     : +worldCfg.sun);
   worldCfg.sky     = Math.max(0, worldCfg.sky     == null ? DEFAULT_WORLD.sky     : +worldCfg.sky);
+  worldCfg.skyBright = Math.max(0, Math.min(4, worldCfg.skyBright == null ? DEFAULT_WORLD.skyBright : +worldCfg.skyBright));
   worldCfg.ambient = Math.max(0, worldCfg.ambient == null ? DEFAULT_WORLD.ambient : +worldCfg.ambient);
   if(worldCfg.sunColor == null) worldCfg.sunColor = DEFAULT_WORLD.sunColor;
   if(typeof moon!=='undefined'){ moon.intensity = worldCfg.sun; moon.color.setHex(worldCfg.sunColor>>>0); }
@@ -7188,7 +7189,8 @@ function applyWorldCfg(){
     floorMat.color.setHex(worldCfg.floorColor>>>0);
     if(worldCfg.floorRough!=null) floorMat.roughness = Math.max(0, Math.min(1, +worldCfg.floorRough));
     if(worldCfg.floorMetal!=null) floorMat.metalness = Math.max(0, Math.min(1, +worldCfg.floorMetal));
-    floorMat.envMapIntensity = floorMat.metalness;   // reflections track the metal slider
+    floorMat.envMapIntensity = floorMat.metalness * worldCfg.skyBright;   // reflections track the metal slider, scaled by sky reflection strength
+    floorMat.specularIntensity = floorMat.metalness;   // metal 0 => no dielectric sun-sheen (truly matte)
     if(+worldCfg.floorTile>0 && !(+worldCfg.floorTileU>0) && !(+worldCfg.floorTileV>0)){ worldCfg.floorTileU=worldCfg.floorTileV=+worldCfg.floorTile; worldCfg.floorTile=0; }   // migrate legacy uniform tile
     const fAuto = Math.max(2, Math.round(ARENA/4));
     const fu = +worldCfg.floorTileU>0 ? +worldCfg.floorTileU : fAuto, fv = +worldCfg.floorTileV>0 ? +worldCfg.floorTileV : fAuto;
@@ -7199,7 +7201,8 @@ function applyWorldCfg(){
     wallMat.color.setHex(worldCfg.wallColor>>>0);
     if(worldCfg.wallRough!=null) wallMat.roughness = Math.max(0, Math.min(1, +worldCfg.wallRough));
     if(worldCfg.wallMetal!=null) wallMat.metalness = Math.max(0, Math.min(1, +worldCfg.wallMetal));
-    wallMat.envMapIntensity = wallMat.metalness;
+    wallMat.envMapIntensity = wallMat.metalness * worldCfg.skyBright;
+    wallMat.specularIntensity = wallMat.metalness;   // metal 0 => matte (no sun-sheen)
     if(+worldCfg.wallTile>0 && !(+worldCfg.wallTileU>0) && !(+worldCfg.wallTileV>0)){ worldCfg.wallTileU=worldCfg.wallTileV=+worldCfg.wallTile; worldCfg.wallTile=0; }   // migrate legacy uniform tile
     const wAuto = Math.max(2, Math.round(ARENA/8));
     const wu = +worldCfg.wallTileU>0 ? +worldCfg.wallTileU : wAuto, wv = +worldCfg.wallTileV>0 ? +worldCfg.wallTileV : wAuto;
@@ -9699,7 +9702,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 240 · 2026-06-08';
+const BUILD_VERSION = 'build 241 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13076,6 +13079,7 @@ function renderEditorFields(){
       const presetRow=document.createElement('div'); presetRow.style.cssText='display:flex;flex-wrap:wrap;gap:5px;margin:2px 0 4px;';
       for(const [label,purl] of skyPresets){ const bn=document.createElement('button'); bn.textContent=label; bn.style.cssText='flex:0 0 auto;padding:4px 10px;font-size:11px;'; bn.onclick=()=>{ pushUndoSnapshot(); worldCfg.sky_hdri=purl; applyWorldCfg(); renderEditorFields(); }; presetRow.appendChild(bn); }
       b.appendChild(presetRow);
+      slider(b,'Reflection strength','skyBright',0,3,0.05); hint(b,'How strongly the sky reflects on metal floors/walls. Lower = more matte; 0 = no sky reflection.','0 0 4px');
       const skStatus=document.createElement('div'); skStatus.id='edSkyStatus'; skStatus.className='hint'; skStatus.style.cssText='margin:-2px 0 6px;font-size:10px;'; b.appendChild(skStatus); }
     { const b=subSec('Floor','floor',true);
       colorRow(b,'Floor color','floorColor'); slider(b,'Floor roughness','floorRough',0,1,0.05); slider(b,'Floor metalness','floorMetal',0,1,0.05);
