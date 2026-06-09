@@ -6044,11 +6044,14 @@ function rebuildArena(){
   // boundary walls — remove old (from scene + colliders), rebuild at the new extent
   for(const w of arenaWalls){ scene.remove(w); const ci=colliders.indexOf(w); if(ci>=0) colliders.splice(ci,1); if(w.geometry) w.geometry.dispose(); }
   arenaWalls.length = 0;
-  const mk = (w,h,d,x,y,z)=>{ const m=wall(w,h,d,x,y,z); m.visible = !(typeof worldCfg!=='undefined' && worldCfg && worldCfg.wallsVisible===false); arenaWalls.push(m); colliders.push(m); refreshWallCollider(m); };   // hidden walls keep their collider
+  const mk = (w,h,d,x,y,z)=>{ const m=wall(w,h,d,x,y,z); arenaWalls.push(m); colliders.push(m); refreshWallCollider(m); };
   mk(ARENA*2,H,2, 0,H/2,-ARENA);
   mk(ARENA*2,H,2, 0,H/2, ARENA);
   mk(2,H,ARENA*2, -ARENA,H/2,0);
   mk(2,H,ARENA*2,  ARENA,H/2,0);
+  // honor the saved wall-visibility toggle on every rebuild (colliders stay regardless). try/catch guards
+  // the very first rebuildArena() call, which runs before worldCfg is initialized.
+  try { if(typeof worldCfg !== 'undefined' && worldCfg){ const _wv = worldCfg.wallsVisible !== false; for(const w of arenaWalls) w.visible = _wv; } } catch(e){}
 }
 // Build/refresh a wall's collision box from its current geometry + transform (walls are axis-aligned boxes).
 function refreshWallCollider(m){
@@ -9800,7 +9803,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 244 · 2026-06-08';
+const BUILD_VERSION = 'build 245 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
