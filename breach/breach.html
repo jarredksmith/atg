@@ -5515,19 +5515,27 @@ scene.add(moon);
 // lights here; each frame we keep only the MAX_ACTIVE_LIGHTS nearest to the camera switched on (the
 // rest stay in the scene but at zero intensity, so they cost almost nothing). Glow (emissive material)
 // is free and always visible, so distant emitters still look lit even when their cast light is culled.
-const MAX_ACTIVE_LIGHTS = 8;
+const MAX_ACTIVE_LIGHTS = 16;   // nearest N emitter lights at full; any beyond ease out over a band so they don't pop
 const emitterLights = [];   // { light, baseIntensity }
 function registerEmitterLight(light){ light.castShadow = false; emitterLights.push({ light, baseIntensity: light.intensity }); }
 function unregisterEmitterLight(light){ const i = emitterLights.findIndex(e=>e.light===light); if(i>=0) emitterLights.splice(i,1); }
 const _lp = new THREE.Vector3();
 function updateLightBudget(){
-  if(emitterLights.length <= MAX_ACTIVE_LIGHTS){
+  const N = emitterLights.length;
+  if(N <= MAX_ACTIVE_LIGHTS){
     for(const e of emitterLights) e.light.intensity = e.baseIntensity;
     return;
   }
   for(const e of emitterLights){ e.light.getWorldPosition(_lp); e._d = _lp.distanceToSquared(camera.position); }
   emitterLights.sort((a,b)=>a._d - b._d);
-  for(let i=0;i<emitterLights.length;i++) emitterLights[i].light.intensity = (i < MAX_ACTIVE_LIGHTS) ? emitterLights[i].baseIntensity : 0;
+  // Past the cap, fade out over a band of ranks (instead of a hard 0) so lights ease in/out as you move
+  // rather than snapping on and off when the nearest-set reshuffles.
+  const FADE = 5;
+  for(let i=0;i<N;i++){
+    const over = i - (MAX_ACTIVE_LIGHTS - 1);
+    const f = (over<=0) ? 1 : (over>=FADE ? 0 : 1 - over/FADE);
+    emitterLights[i].light.intensity = emitterLights[i].baseIntensity * f;
+  }
 }
 
 // ---------- Arena ----------
@@ -9196,7 +9204,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 226 · 2026-06-08';
+const BUILD_VERSION = 'build 227 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
