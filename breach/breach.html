@@ -6146,16 +6146,31 @@ function applyPropEmissive(obj, hex, intensity){
   if(!obj || !isShapePrimitive(obj.userData.src)) return;
   obj.userData.emit = { c: hex, i: intensity };
   eachPrimMesh(obj, o=>{ o.material.emissive.setHex(hex); o.material.emissiveIntensity = Math.min(2, intensity); o.material.needsUpdate = true; });
-  // attach (or update) a real point light at the shape's center so it lights nearby surfaces
-  let pl = obj.userData.emitLight;
-  if(!pl){ pl = new THREE.PointLight(hex, intensity, 18); pl.position.set(0, 0.5, 0); pl.castShadow = false; obj.add(pl); obj.userData.emitLight = pl; if(typeof registerEmitterLight==='function') registerEmitterLight(pl); }
-  pl.color.setHex(hex); pl.intensity = intensity;
-  const reg = (typeof emitterLights!=='undefined') && emitterLights.find(e=>e.light===pl); if(reg) reg.baseIntensity = intensity;   // keep budget's base in sync
+  // Distribute real point lights ALONG THE LONGEST AXIS so a stretched primitive lights its whole length,
+  // not just its origin. A normally-proportioned prop gets a single light (unchanged from before).
+  const sx=Math.abs(obj.scale.x), sy=Math.abs(obj.scale.y), sz=Math.abs(obj.scale.z), maxS=Math.max(sx,sy,sz);
+  const N=Math.max(1, Math.min(5, Math.round(maxS/4)));            // ~one light per 4 world units of length, capped
+  let lights = obj.userData.emitLights;
+  if(!lights || lights.length!==N){                               // (re)build the set when the count changes
+    if(lights){ for(const l of lights){ if(typeof unregisterEmitterLight==='function') unregisterEmitterLight(l); obj.remove(l); } }
+    lights=[]; for(let i=0;i<N;i++){ const l=new THREE.PointLight(hex, intensity, 18); l.castShadow=false; obj.add(l); if(typeof registerEmitterLight==='function') registerEmitterLight(l); lights.push(l); }
+    obj.userData.emitLights = lights;
+  }
+  const per = intensity/Math.sqrt(N);                             // split flux so overlap doesn't over-brighten the middle
+  for(let i=0;i<N;i++){ const t=(N===1)?0.5:(i/(N-1)); const l=lights[i];
+    if(sy>=sx && sy>=sz)      l.position.set(0, 0.08+t*0.84, 0);   // tall: spread up the height (local y 0..1)
+    else if(sx>=sz)           l.position.set(-0.42+t*0.84, 0.5, 0);// long in x (local x -.5..5)
+    else                      l.position.set(0, 0.5, -0.42+t*0.84);// long in z
+    l.color.setHex(hex); l.intensity=per;
+    const reg=(typeof emitterLights!=='undefined') && emitterLights.find(e=>e.light===l); if(reg) reg.baseIntensity=per;
+  }
+  obj.userData.emitLight = lights[0];   // legacy single-ref kept for any code that reads it
 }
 function clearPropEmissive(obj){
   if(!obj) return;
   obj.userData.emit = null;
-  if(obj.userData.emitLight){ if(typeof unregisterEmitterLight==='function') unregisterEmitterLight(obj.userData.emitLight); obj.remove(obj.userData.emitLight); obj.userData.emitLight = null; }
+  if(obj.userData.emitLights){ for(const l of obj.userData.emitLights){ if(typeof unregisterEmitterLight==='function') unregisterEmitterLight(l); obj.remove(l); } obj.userData.emitLights = null; }
+  obj.userData.emitLight = null;
   eachPrimMesh(obj, o=>{
     if(obj.userData.tex){ o.material.emissive.setHex(0x000000); o.material.emissiveIntensity = 0; }
     else { o.material.emissive.setHex(0x09231d); o.material.emissiveIntensity = .5; }
@@ -9181,7 +9196,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 225 · 2026-06-08';
+const BUILD_VERSION = 'build 226 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11432,6 +11447,7 @@ const editorTargets = {
       o.position.set(s.px,s.py,s.pz); o.scale.set(s.sx,s.sy,s.sz);
       o.rotation.set(s.rx*RAD, s.ry*RAD, s.rz*RAD);
       refreshPropCollider(o);   // keep the solid hitbox aligned with what you see
+      if(o.userData.emit) applyPropEmissive(o, o.userData.emit.c, o.userData.emit.i);   // re-spread emitter lights along the new longest axis
     },
     code(){
       let body = '// ===== Scene props / objects =====\n'
