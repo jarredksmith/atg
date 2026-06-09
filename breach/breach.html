@@ -9224,7 +9224,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 235 · 2026-06-08';
+const BUILD_VERSION = 'build 236 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11307,14 +11307,24 @@ function loop(){
     // Phase 3 — obstacle resolution (walls + static props + dynamic props), arena clamp, facing, attack
     for(const en of enemies){
       const eR = en.mesh.userData.footprint || 0.9;
-      // static colliders (walls + non-dynamic props): push out of the nearest box face
+      // static colliders (walls + non-dynamic props): push out of the nearest box face. Use the per-column
+      // grid (the same data the player collides against) instead of the single overall box, so openings in
+      // imported models -- doorways, archways -- are passable rather than treating the whole model as one
+      // solid block. Only resolve against a sub-box the body vertically overlaps, so enemies walk through the
+      // door gap, pass under a lintel, and don't get shoved off a platform they're standing on.
+      const eFeetY = en.mesh.position.y - 1.4, eHeadY = en.mesh.position.y + 0.55;
       for(const c of colliders){
-        const b = c.userData.box; if(!b) continue;
-        const cx = Math.max(b.min.x, Math.min(en.mesh.position.x, b.max.x));
-        const cz = Math.max(b.min.z, Math.min(en.mesh.position.z, b.max.z));
-        const dx = en.mesh.position.x - cx, dz = en.mesh.position.z - cz;
-        const d = Math.hypot(dx,dz);
-        if(d < eR && d > 1e-4){ const push=eR-d; en.mesh.position.x += dx/d*push; en.mesh.position.z += dz/d*push; }
+        const b0 = c.userData.box;
+        if(b0 && (en.mesh.position.x < b0.min.x-eR || en.mesh.position.x > b0.max.x+eR || en.mesh.position.z < b0.min.z-eR || en.mesh.position.z > b0.max.z+eR)) continue;   // coarse reject: nowhere near this model
+        const bs = c.userData.boxes || (b0 ? [b0] : null); if(!bs) continue;
+        for(const b of bs){
+          if(b.max.y < eFeetY || b.min.y > eHeadY) continue;   // no vertical overlap: a door gap, or above/below the body
+          const cx = Math.max(b.min.x, Math.min(en.mesh.position.x, b.max.x));
+          const cz = Math.max(b.min.z, Math.min(en.mesh.position.z, b.max.z));
+          const dx = en.mesh.position.x - cx, dz = en.mesh.position.z - cz;
+          const d = Math.hypot(dx,dz);
+          if(d < eR && d > 1e-4){ const push=eR-d; en.mesh.position.x += dx/d*push; en.mesh.position.z += dz/d*push; }
+        }
       }
       // dynamic physics props (crates etc.) live in dynamicProps, not colliders — treat each as an
       // upright cylinder at its current position so enemies can't walk through them.
