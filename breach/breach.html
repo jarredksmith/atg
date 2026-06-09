@@ -9699,7 +9699,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 237 · 2026-06-08';
+const BUILD_VERSION = 'build 238 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12694,6 +12694,68 @@ function ppSearch(query, cb, errcb, page){
     .then(d=>{ const arr = d.results||d.Results||d.models||d.Models||(Array.isArray(d)?d:[]); const total=(typeof d.total==='number')?d.total:(typeof d.Total==='number'?d.Total:null); cb(arr.map(ppParseModel).filter(Boolean), total); })
     .catch(errcb);
 }
+
+// ---------- Poly Haven HDRI browser: search CC0 HDR panoramas and apply as the sky (full HDR lighting) ----------
+let _phHdris = null, _phLastQuery = '';
+function phApi(path, cb, errcb){
+  // api.polyhaven.com asks for a unique User-Agent (a header browsers can't set), so route through the CORS
+  // proxy/Worker which can add it server-side. Per Poly Haven's docs it also works without one for now.
+  fetch(proxied('https://api.polyhaven.com'+path))
+    .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(cb).catch(errcb);
+}
+function _phHint(err){ const m=(err&&err.message)||String(err||''); return m?(' ('+m+')'):''; }
+function openHdriBrowser(){
+  if(document.getElementById('hdriBrowser')) return;
+  const ov=document.createElement('div'); ov.id='hdriBrowser';
+  ov.style.cssText='position:fixed;inset:0;z-index:130;background:rgba(4,8,11,.78);display:flex;align-items:center;justify-content:center;';
+  const panel=document.createElement('div');
+  panel.style.cssText='width:min(680px,94vw);max-height:88vh;display:flex;flex-direction:column;background:#0c1418;border:1px solid #2a3a42;border-radius:10px;padding:12px;box-shadow:0 12px 40px rgba(0,0,0,.6);';
+  const head=document.createElement('div'); head.style.cssText='display:flex;align-items:center;gap:8px;margin-bottom:8px;';
+  const title=document.createElement('div'); title.innerHTML='\U0001f52d <b>Poly Haven HDRI skies</b> <span style="color:#7fb0a3;font-size:11px;">CC0 \u00b7 free</span>'; title.style.cssText='flex:1;color:#cfeee2;font-size:14px;';
+  const xb=document.createElement('button'); xb.textContent='\u2715'; xb.style.cssText='flex:0 0 auto;padding:3px 9px;'; xb.onclick=()=>ov.remove();
+  head.appendChild(title); head.appendChild(xb); panel.appendChild(head);
+  const ctl=document.createElement('div'); ctl.style.cssText='display:flex;gap:6px;margin-bottom:6px;';
+  const q=document.createElement('input'); q.type='text'; q.placeholder='filter skies\u2026 (sunset, studio, night, outdoor\u2026)'; q.value=_phLastQuery;
+  q.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:4px 7px;font-size:12px;';
+  const res=document.createElement('select'); res.style.cssText='flex:0 0 auto;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:4px;font-size:12px;';
+  for(const r of ['1k','2k','4k']){ const o=document.createElement('option'); o.value=r; o.textContent=r; res.appendChild(o); } res.value='1k';
+  ctl.appendChild(q); ctl.appendChild(res); panel.appendChild(ctl);
+  const status=document.createElement('div'); status.className='hint'; status.style.margin='2px 0'; panel.appendChild(status);
+  const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:repeat(3,1fr);gap:6px;overflow:auto;padding:2px;'; panel.appendChild(grid);
+  ov.appendChild(panel); document.body.appendChild(ov);
+  ov.addEventListener('click', e=>{ if(e.target===ov) ov.remove(); });
+  function render(){
+    _phLastQuery=q.value; const term=q.value.trim().toLowerCase(); grid.innerHTML='';
+    const ids=Object.keys(_phHdris||{});
+    if(!ids.length){ status.textContent='No HDRIs loaded.'; return; }
+    const list=ids.filter(id=>{ if(!term) return true; const m=_phHdris[id]||{}; const hay=(id+' '+(m.name||'')+' '+((m.categories||[]).join(' '))+' '+((m.tags||[]).join(' '))).toLowerCase(); return hay.indexOf(term)>=0; });
+    status.textContent = list.length + ' sk' + (list.length===1?'y':'ies') + ' \u2014 click to apply ('+res.value+')';
+    for(const id of list.slice(0,120)){
+      const m=_phHdris[id]||{};
+      const card=document.createElement('button');
+      card.style.cssText='display:flex;flex-direction:column;align-items:center;gap:2px;background:#0c1418;border:1px solid #24323a;border-radius:6px;padding:4px;cursor:pointer;overflow:hidden;';
+      card.title=(m.name||id)+(m.authors?('  \u00b7  '+Object.keys(m.authors).join(', ')):'');
+      if(m.thumbnail_url){ const img=document.createElement('img'); img.src=m.thumbnail_url; img.loading='lazy'; img.style.cssText='width:100%;aspect-ratio:2/1;object-fit:cover;background:#06090b;border-radius:3px;'; card.appendChild(img); }
+      const cap=document.createElement('div'); cap.textContent=m.name||id; cap.style.cssText='font-size:10px;color:#9fe6cf;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'; card.appendChild(cap);
+      card.onclick=()=>pick(id, m); grid.appendChild(card);
+    }
+  }
+  function pick(id, m){
+    status.textContent='Fetching '+(m.name||id)+' ('+res.value+')\u2026';
+    phApi('/files/'+encodeURIComponent(id), (files)=>{
+      const r=res.value, hd=files && files.hdri && files.hdri[r];
+      const url=hd && hd.hdr && hd.hdr.url;
+      if(!url){ status.textContent='No '+r+' .hdr for that one \u2014 try another resolution.'; return; }
+      pushUndoSnapshot(); worldCfg.sky_hdri=url; applyWorldCfg();
+      if(typeof renderEditorFields==='function') renderEditorFields();
+      status.textContent='Applied: '+(m.name||id)+(m.authors?(' by '+Object.keys(m.authors).join(', ')):'')+' \u2014 Poly Haven (CC0)';
+    }, err=>{ status.textContent='Fetch failed'+_phHint(err); });
+  }
+  q.addEventListener('input', render); res.addEventListener('change', render);
+  if(_phHdris){ render(); }
+  else { status.textContent='Loading Poly Haven HDRIs\u2026'; phApi('/assets?t=hdris', d=>{ _phHdris=d||{}; render(); }, err=>{ status.textContent='Could not load the HDRI list'+_phHint(err)+'. Your CORS proxy may need to allow api.polyhaven.com.'; }); }
+}
 // Render the browser into a host element (only on the Props tab). Caches query+results across re-renders.
 function renderModelBrowser(host){
   host.innerHTML='';
@@ -13004,8 +13066,9 @@ function renderEditorFields(){
       if(worldCfg.dof===true){ slider(b,'Focus distance','dofFocus',2,120,1); slider(b,'In-focus range','dofRange',1,80,1); slider(b,'Blur strength','dofStrength',0.1,4,0.1);
         hint(b,'','0 0 4px').textContent='Focus distance = how far away stays sharp. In-focus range = depth kept sharp around it. Everything else blurs.'; } }
     { const b=subSec('Sky','sky',true);
-      hint(b,'Equirectangular panorama as <b>.jpg or .png</b> (not .hdr). Lights reflections too. Blank = flat color.','2px 0 4px');
-      texRow(b,'https://\u2026/sky.jpg (equirectangular)','sky_hdri');
+      hint(b,'Equirectangular panorama: <b>.hdr</b> (full HDR lighting) or .jpg/.png. Lights reflections too. Blank = flat color.','2px 0 4px');
+      const phBtn=document.createElement('button'); phBtn.textContent='\ud83d\udd2d Browse Poly Haven HDRIs'; phBtn.style.cssText='width:100%;padding:6px;font-size:12px;margin:0 0 5px;'; phBtn.onclick=openHdriBrowser; b.appendChild(phBtn);
+      texRow(b,'https://\u2026/sky.hdr or .jpg (equirectangular)','sky_hdri');
       const skyPresets=[['Park','https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/2294472375_24a3b8ef46_o.jpg'],['Mountain','https://raw.githubusercontent.com/aframevr/aframe/master/examples/boilerplate/panorama/puydesancy.jpg'],['Room','https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/kandao3.jpg'],['None','']];
       const presetRow=document.createElement('div'); presetRow.style.cssText='display:flex;flex-wrap:wrap;gap:5px;margin:2px 0 4px;';
       for(const [label,purl] of skyPresets){ const bn=document.createElement('button'); bn.textContent=label; bn.style.cssText='flex:0 0 auto;padding:4px 10px;font-size:11px;'; bn.onclick=()=>{ pushUndoSnapshot(); worldCfg.sky_hdri=purl; applyWorldCfg(); renderEditorFields(); }; presetRow.appendChild(bn); }
