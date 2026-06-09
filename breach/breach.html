@@ -6248,17 +6248,22 @@ function gltfManager(){
   if(m.setURLModifier) m.setURLModifier((u)=> (!u || u.startsWith('blob:') || u.startsWith('data:')) ? u : proxied(u));
   _gltfMgr = m; return m;
 }
+let _glbPending = 0;   // in-flight async GLB loads (drives the level loading screen so assets don't pop in)
 function loadGLTFCached(url, cb, errcb){
-  if(gltfCache[url]){ cb(gltfCache[url]); return; }
-  if(url && url.indexOf('sketchfab:')===0){ loadSketchfabModel(url.slice(10), (gltf)=>{ gltfCache[url]=gltf; cb(gltf); }, errcb); return; }
-  if(!THREE.GLTFLoader){ errcb && errcb(new Error('GLTFLoader unavailable')); return; }
+  if(gltfCache[url]){ cb(gltfCache[url]); return; }   // cached: synchronous, nothing to wait on
+  _glbPending++;
+  let _fin=false; const _done=()=>{ if(_fin) return; _fin=true; _glbPending=Math.max(0,_glbPending-1); };
+  const _cb=(g)=>{ _done(); cb(g); };
+  const _ec=(e)=>{ _done(); errcb && errcb(e); };
+  if(url && url.indexOf('sketchfab:')===0){ loadSketchfabModel(url.slice(10), (gltf)=>{ gltfCache[url]=gltf; _cb(gltf); }, _ec); return; }
+  if(!THREE.GLTFLoader){ _ec(new Error('GLTFLoader unavailable')); return; }
   const mgr = gltfManager();
   if(mgr){
     // Pass the ORIGINAL url: the manager proxies it (and sub-resources resolve against the real origin,
     // then get proxied too). Pre-proxying here would double-encode via the modifier.
-    new THREE.GLTFLoader(mgr).load(url, (gltf)=>{ gltfCache[url]=gltf; cb(gltf); }, undefined, errcb);
+    new THREE.GLTFLoader(mgr).load(url, (gltf)=>{ gltfCache[url]=gltf; _cb(gltf); }, undefined, _ec);
   } else {
-    new THREE.GLTFLoader().load(proxied(url), (gltf)=>{ gltfCache[url]=gltf; cb(gltf); }, undefined, errcb);   // fallback: main file only
+    new THREE.GLTFLoader().load(proxied(url), (gltf)=>{ gltfCache[url]=gltf; _cb(gltf); }, undefined, _ec);   // fallback: main file only
   }
 }
 // ---------- Sketchfab (optional model source) ----------
@@ -9204,7 +9209,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 227 · 2026-06-08';
+const BUILD_VERSION = 'build 229 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10700,6 +10705,11 @@ function startWave(){
 // ---------- Collision helper ----------
 // Returns the ground height (surface the player stands on) given x,z and current feet height.
 const STEP = 0.6; // how high a ledge/slope the player can step or walk up in one move; taller = wall
+// A surface that rises MORE than STEP is followed only if it's a walkable ramp: sloped (not a flat ledge)
+// and not too steep (not a wall). This lets the player walk up curved/imported ramps the way the ball rolls.
+const RAMP_SLOPE_MIN = 0.2;    // ~11deg: below this a tall surface is a flat ledge (must jump), not a ramp
+const RAMP_SLOPE_MAX = 1.5;    // ~56deg: above this it's a wall the player can't walk up
+const RAMP_RISE = 1.7;         // how far above the feet a ramp surface may be followed in one query
 const PLAYER_HEIGHT = EYE + 0.2;   // body column height used for overhead-clearance ("walk under") tests
 // ---------- Mesh-following collision (raycast heightfield) ----------
 // Instead of axis-aligned boxes, we cast a ray straight down against the real collider meshes to
@@ -10752,9 +10762,15 @@ function propSurfaceAt(obj, x, z){
 }
 function groundHeightAt(x, z, feetY){
   const top = surfaceTopAt(x, z);
-  // stand on the surface only if it's at or within a step of the feet; otherwise it's the floor
-  if(top > -Infinity && top <= feetY + STEP) return Math.max(0, top);
-  return 0; // arena floor
+  if(top === -Infinity) return 0;
+  if(top <= feetY + STEP) return Math.max(0, top);            // flat ground or a low step
+  // Above a step: follow it only if it's a walkable RAMP (a sloped surface), not a tall flat ledge or a wall.
+  if(top <= feetY + RAMP_RISE){
+    const e = 0.4, hx = surfaceTopAt(x + e, z), hz = surfaceTopAt(x, z + e);
+    const slope = Math.hypot((hx > -Infinity ? hx - top : 0), (hz > -Infinity ? hz - top : 0)) / e;
+    if(slope > RAMP_SLOPE_MIN && slope < RAMP_SLOPE_MAX) return Math.max(0, top);   // walk up the ramp surface
+  }
+  return 0; // arena floor (surface is a tall flat ledge or too steep -> can't auto-climb)
 }
 // Can the player's center occupy (x,z) at this foot height? (floor or a surface within a step)
 // Can the player's center occupy (x,z) at this foot height? Solid geometry that fills the player's
@@ -10784,7 +10800,14 @@ function clearAt(x, z, feetY){
       const cx = cx0 + Math.sign(bcx - cx0) * Math.min(0.25, Math.abs(bcx - cx0));
       const cz = cz0 + Math.sign(bcz - cz0) * Math.min(0.25, Math.abs(bcz - cz0));
       const es = propSurfaceAt(c, cx, cz);                                                       // this collider's surface nearest the player
-      if(es > -Infinity && es <= feetY + STEP + 1e-4) continue;                                  // steppable edge (ramp/stairs base) -> walk on, not a wall
+      if(es > -Infinity){
+        if(es <= feetY + STEP + 1e-4) continue;                                                  // low step (ramp/stairs base) -> walk on
+        if(es <= feetY + RAMP_RISE){                                                             // higher: passable only if it's a walkable ramp slope here
+          const e2 = 0.4, ex = propSurfaceAt(c, cx + e2, cz), ez = propSurfaceAt(c, cx, cz + e2);
+          const slope = Math.hypot((ex > -Infinity ? ex - es : 0), (ez > -Infinity ? ez - es : 0)) / e2;
+          if(slope > RAMP_SLOPE_MIN && slope < RAMP_SLOPE_MAX) continue;                          // walkable ramp -> not a wall
+        }
+      }
       return false;                                                                              // a genuine wall
     }
   }
@@ -13892,7 +13915,36 @@ function toggleEditor(){
 }
 
 // ---------- Game state ----------
+let _levelLoaderEl=null, _levelLoaderActive=false;
+function showLevelLoader(){
+  if(!_levelLoaderEl){
+    const el=document.createElement('div'); el.id='levelLoader';
+    el.style.cssText='position:fixed;inset:0;z-index:120;display:flex;flex-direction:column;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 42%, rgba(8,20,24,0.97), rgba(3,6,9,0.99));color:#eafff7;font:600 15px/1.4 ui-monospace,monospace;transition:opacity 0.4s;';
+    el.innerHTML='<div style="font-size:13px;letter-spacing:4px;color:#38f5b5;margin-bottom:16px;">BREACH</div>'
+      +'<div id="levelLoaderLabel" style="margin-bottom:14px;">Loading level\u2026</div>'
+      +'<div style="width:240px;height:7px;background:#0c1418;border:1px solid #1c2b30;border-radius:6px;overflow:hidden;"><div style="width:38%;height:100%;background:linear-gradient(90deg,transparent,#38f5b5,transparent);animation:propLoadSlide 1.05s ease-in-out infinite;"></div></div>';
+    document.body.appendChild(el); _levelLoaderEl=el;
+  }
+  _levelLoaderEl.style.display='flex'; _levelLoaderEl.style.opacity='1'; _levelLoaderActive=true;
+}
+function hideLevelLoader(){ _levelLoaderActive=false; if(!_levelLoaderEl) return; _levelLoaderEl.style.opacity='0'; const el=_levelLoaderEl; setTimeout(()=>{ if(el && !_levelLoaderActive) el.style.display='none'; }, 420); }
+// Hold the loading screen until in-flight GLB loads settle (0 for a short grace), with a hard safety cap.
+function waitAssetsThenReveal(){
+  const t0=performance.now(); let zeroAt=0;
+  const tick=()=>{
+    if(!_levelLoaderActive) return;
+    const now=performance.now();
+    const lab=_levelLoaderEl && _levelLoaderEl.querySelector('#levelLoaderLabel');
+    if(lab) lab.textContent = _glbPending>0 ? ('Loading assets\u2026 '+_glbPending+' left') : 'Loading level\u2026';
+    if(_glbPending<=0){ if(!zeroAt) zeroAt=now; if(now-zeroAt>=240){ hideLevelLoader(); return; } }
+    else { zeroAt=0; }
+    if(now-t0>=15000){ hideLevelLoader(); return; }   // safety: never trap the player behind the loader
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
 function startGame(){
+  if(_glbPending>0){ showLevelLoader(); waitAssetsThenReveal(); }   // hold a loading screen so assets don't pop in mid-game
   closeModal('mpModal'); closeModal('instrModal');   // drop any open menu modal as the world starts
   if(typeof ensurePlayerPreview==='function') ensurePlayerPreview(false);   // drop the editor's stand-in avatar
   initAudio();
