@@ -6255,7 +6255,10 @@ function broadcastAnim(i){
 // ---------- Transform-animated mechanisms: move/rotate any object (platforms, doors). userData.xa holds the
 // authored offset + playback/trigger; base transform is captured at deploy so the editor position is point A. ----------
 const _XA_D2R = Math.PI/180;
-function xaApply(o, sx){ o.userData.xa = { on:true, mode:sx.mode||'loop', trig:sx.trig||'auto', mx:sx.mx||0, my:sx.my||0, mz:sx.mz||0, rx:sx.rx||0, ry:sx.ry||0, rz:sx.rz||0, dur:sx.dur||2, path:(sx.path&&sx.path.length>=2)?sx.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):undefined }; }
+function _xaMoves(a){ return !!(a && a.on && ((a.path && a.path.length>=2) || a.mx || a.my || a.mz || a.rx || a.ry || a.rz)); }
+function xaApply(o, sx){ o.userData.xa = { on:true, mode:sx.mode||'loop', trig:sx.trig||'auto', mx:sx.mx||0, my:sx.my||0, mz:sx.mz||0, rx:sx.rx||0, ry:sx.ry||0, rz:sx.rz||0, dur:sx.dur||2, path:(sx.path&&sx.path.length>=2)?sx.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):undefined };
+  // a body can't be both scripted along a path AND shoved by physics: animation wins, so an animated prop is never dynamic
+  if(_xaMoves(o.userData.xa) && o.userData.phys) setPropDynamic(o, false); }
 function _xaEach(fn){ for(const o of propModels){ const a=o&&o.userData&&o.userData.xa; if(a&&a.on) fn(o,a); } }
 function xaCapture(){ _xaEach((o,a)=>{ a.bpx=undefined; a.ph=0; a.dir=1; a.dest=0; }); }   // deploy: recapture point A on the next frame
 function xaSnapToBase(){ _xaEach((o,a)=>{ a.ph=0; a.dir=1; a.dest=0; if(a.bpx!==undefined){ o.position.set(a.bpx,a.bpy,a.bpz); o.rotation.set(a.brx,a.bry,a.brz); o.updateMatrixWorld(true); if(colliders.indexOf(o)>=0||o.userData.box) refreshPropCollider(o); } }); }   // editor: show point A
@@ -9817,7 +9820,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 250 · 2026-06-08';
+const BUILD_VERSION = 'build 251 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10294,6 +10297,7 @@ function moveKCC(dt){
 }
 function setPropDynamic(obj, on){
   if(!obj) return;
+  if(on && obj.userData.xa && _xaMoves(obj.userData.xa)) return;   // animated props stay kinematic, never dynamic
   if(on && !obj.userData.phys){
     obj.userData.phys = { id: nextDynId++, body: null };
     if(obj.userData.mass == null) obj.userData.mass = defaultMassFor(obj);
