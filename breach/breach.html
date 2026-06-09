@@ -6829,8 +6829,17 @@ function _sfFetchArchive(z){
 }
 function loadSketchfabModel(uid, cb, errcb){
   const tok=sfGetToken(); if(!tok){ errcb && errcb(new Error('Add your Sketchfab API token first')); return; }
-  fetch('https://api.sketchfab.com/v3/models/'+uid+'/download', { headers:{ Authorization:'Token '+tok } })
-    .catch(()=>{ throw new Error('download request blocked (CORS/network) at api.sketchfab.com'); })
+  // Try the direct call FIRST: it works whenever Sketchfab's CORS allows the Authorization header (which it
+  // normally does; the header is occasionally rejected by their preflight, which is intermittent on their end).
+  // If the direct call is blocked by CORS/network, fall back through the proxy with the token as a ?sftoken=
+  // query param that the worker turns into the Authorization header server-side (a simple GET, no preflight).
+  // Direct-first means no proxy/worker dependency while Sketchfab cooperates, plus graceful fallback if it doesn't.
+  const _dlUrl = 'https://api.sketchfab.com/v3/models/'+uid+'/download';
+  const _px = proxied(_dlUrl);
+  fetch(_dlUrl, { headers:{ Authorization:'Token '+tok } })
+    .catch(()=> (_px !== _dlUrl)
+      ? fetch(_px + '&sftoken=' + encodeURIComponent(tok))
+      : Promise.reject(new Error('download request blocked (CORS/network) at api.sketchfab.com')))
     .then(r=>{ if(!r.ok) throw new Error('download HTTP '+r.status+(r.status===401?' (check token)':r.status===403?' (login / not downloadable)':'')); return r.json(); })
     .then(d=>{ const z=d.gltf&&d.gltf.url; if(!z) throw new Error('no downloadable glTF for this model'); return _sfFetchArchive(z); })
     .then(buf=> ensureFflate().catch(()=>{ throw new Error('could not load the unzip helper (fflate) from CDN'); }).then(ff=>{
@@ -8529,6 +8538,7 @@ function loadLevelFromNet(level){
   pickupsOn = (level.pickupsOn !== false);
   pickupSpots = Array.isArray(level.pickups) ? level.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : []; pickupModels = (level.pickupModels && typeof level.pickupModels==='object') ? JSON.parse(JSON.stringify(level.pickupModels)) : {}; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }   // adopt the host's sky / ground / fog
+  if(level.audio && NET.mode!=='client'){ try{ audioSettings.musicUrl=(typeof level.audio.musicUrl==='string')?level.audio.musicUrl:''; audioSettings.sounds=_sanitizeSounds(level.audio.sounds); if(typeof saveAudioSettings==='function') saveAudioSettings(); if(typeof preloadCustomSounds==='function') preloadCustomSounds(); if(_musicOn){ stopMusic(); startMusic(); } }catch(e){ console.warn('level audio apply failed', e); } }
   // per-player characters: the client keeps its own avatar; the host's character arrives via the welcome 'char' field
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; }
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
@@ -9822,7 +9832,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 252 · 2026-06-08';
+const BUILD_VERSION = 'build 255 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11546,6 +11556,7 @@ function loop(){
   const rawDt = Math.min(clock.getDelta(), 0.05);
   let dt = rawDt;
   updatePerfHud();   // measure real frame time every frame (before any early-out)
+  if(_pathPreviewGroup && !editorOpen){ scene.remove(_pathPreviewGroup); try{ _pathPreviewGroup.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); }catch(e){} _pathPreviewGroup=null; }   // editor waypoint markers never linger into play
   { const v = gameOn && !gameOver && !shopOpen && !editorOpen && !choosingUpgrade && !paused;   // show ❚❚ only during live play
     if(v!==_pbShow){ _pbShow=v; const pb=document.getElementById('pauseBtn'); if(pb) pb.style.display = v?'flex':'none'; } }
   if(hitStop > 0){ hitStop -= rawDt; dt = rawDt * 0.12; }   // impact freeze: slow the sim briefly (real-time countdown)
@@ -12588,6 +12599,7 @@ function serializeLevel(){
     pstart:  { x: playerSpawn.x, z: playerSpawn.z, yaw: playerSpawn.yaw },
     extract: extractSpot ? { x: +extractSpot.x.toFixed(3), z: +extractSpot.z.toFixed(3) } : null,
     grenade: { model: GRENADE.model, scale: GRENADE.scale, radius: GRENADE.radius, damage: GRENADE.damage, fuse: GRENADE.fuse, throwForce: GRENADE.throwForce },
+    audio:   { musicUrl: (audioSettings.musicUrl||''), sounds: _sanitizeSounds(audioSettings.sounds) },   // music track + custom SFX travel with the level (volumes/mute stay per-device)
   };
 }
 function saveLevel(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(serializeLevel())); return true; } catch(e){ return false; } }
@@ -12678,6 +12690,7 @@ function restoreLevel(level){
   if(level.station){ if(level.station.url && level.station.url!==stationModelUrl) swapStationModel(level.station.url); Object.assign(editorTargets.station.state, level.station.state||{}); editorTargets.station.apply(); }
   // world + loot
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }
+  if(level.audio){ try{ audioSettings.musicUrl=(typeof level.audio.musicUrl==='string')?level.audio.musicUrl:''; audioSettings.sounds=_sanitizeSounds(level.audio.sounds); if(typeof saveAudioSettings==='function') saveAudioSettings(); if(typeof preloadCustomSounds==='function') preloadCustomSounds(); if(_musicOn){ stopMusic(); startMusic(); } }catch(e){ console.warn('level audio apply failed', e); } }
   if(level.player) applyPlayerLevel(level.player);
   if(level.chest){ chestModelUrl = level.chest.url||''; chestModelScale = level.chest.scale||1; }
   if(level.coin){ const c=level.coin; coinCfg.url=c.url||''; coinCfg.scale=c.scale||1; coinCfg.on=c.on!==false; }
