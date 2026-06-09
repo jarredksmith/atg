@@ -6840,6 +6840,16 @@ addEventListener('keydown', e=>{
   if(e.code==='Digit3' && owned[2]) switchWeapon(owned[2]);
 });
 addEventListener('keyup', e=>{ keys[e.code]=false; if(e.code==='Tab' && radialOpen) closeRadial(true); });
+// Clear held movement input. A wave-end / death transition can swallow the keyup (or hide the touch stick
+// before its pointer-release fires), leaving a key/stick stuck so the next round auto-walks. Call this when
+// a wave or round starts. (Gamepad axes re-poll every frame, so they self-correct and aren't cleared here.)
+function clearMovementInput(){
+  for(const k in keys) keys[k]=false;
+  touchMoveX=0; touchMoveZ=0; touchSprint=false; touchFiring=false; touchAds=false; touchJump=false; touchLookDX=0; touchLookDY=0;
+  sliding=false; firing=false;
+  if(player && player.vel){ player.vel.x=0; player.vel.z=0; }
+  const _thumb=document.getElementById('tThumb'); if(_thumb) _thumb.style.transform='translate(0,0)';   // reset the stick visual too
+}
 // Focusing a text field clears any held movement keys so the player can't keep sliding while you type.
 addEventListener('focusin', e=>{ if(typingInField(e)){ for(const k in keys) keys[k]=false; } });
 addEventListener('wheel', e=>{
@@ -9214,7 +9224,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 231 · 2026-06-08';
+const BUILD_VERSION = 'build 233 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10732,6 +10742,7 @@ function objectiveTick(dt){   // host/solo per-frame; may trigger the win
   }
 }
 function startWave(){
+  clearMovementInput();   // don't carry a held key / stuck stick into the new wave (auto-move bug)
   spawnQueue = [];
   if(gameCfg.mode === 'prebuilt'){
     for(const g of spawnMarkers){ if(spawnAppearsOnWave(g.userData.mark, wave)) spawnQueue.push(descFromMarker(g)); }
@@ -13981,20 +13992,25 @@ function hideLevelLoader(){ _levelLoaderActive=false; if(!_levelLoaderEl) return
 // Hold the loading screen until in-flight GLB loads settle (0 for a short grace), with a hard safety cap.
 function waitAssetsThenReveal(){
   const t0=performance.now(); let zeroAt=0;
+  // The physics world was built at deploy, possibly before async model geometry finished loading, so its
+  // static colliders can be incomplete (player passes through). Rebuild it now that all assets are in,
+  // so the character controller collides against the fully-loaded scene.
+  const reveal=()=>{ try{ if(physWorld) buildPhysWorld(); }catch(e){} hideLevelLoader(); };
   const tick=()=>{
     if(!_levelLoaderActive) return;
     const now=performance.now();
     const lab=_levelLoaderEl && _levelLoaderEl.querySelector('#levelLoaderLabel');
     if(lab) lab.textContent = _glbPending>0 ? ('Loading assets\u2026 '+_glbPending+' left') : 'Loading level\u2026';
-    if(_glbPending<=0){ if(!zeroAt) zeroAt=now; if(now-zeroAt>=240){ hideLevelLoader(); return; } }
+    if(_glbPending<=0){ if(!zeroAt) zeroAt=now; if(now-zeroAt>=240){ reveal(); return; } }
     else { zeroAt=0; }
-    if(now-t0>=15000){ hideLevelLoader(); return; }   // safety: never trap the player behind the loader
+    if(now-t0>=15000){ reveal(); return; }   // safety: never trap the player behind the loader
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
 }
 function startGame(){
   if(_glbPending>0){ showLevelLoader(); waitAssetsThenReveal(); }   // hold a loading screen so assets don't pop in mid-game
+  clearMovementInput();   // start fresh: no input held over from a previous round/death
   closeModal('mpModal'); closeModal('instrModal');   // drop any open menu modal as the world starts
   if(typeof ensurePlayerPreview==='function') ensurePlayerPreview(false);   // drop the editor's stand-in avatar
   initAudio();
