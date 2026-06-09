@@ -6804,8 +6804,10 @@ function sfSetEnabled(b){ try{ localStorage.setItem(SF_ON_KEY, b?'1':'0'); }catc
 function sfThumb(m){ try{ const imgs=(m.thumbnails&&m.thumbnails.images)||[]; const s=imgs.filter(i=>i.width<=320).sort((a,b)=>b.width-a.width)[0]||imgs[0]; return s?s.url:''; }catch(e){ return ''; } }
 function sfMap(m){ return { uid:m.uid, title:m.name||'Untitled', thumb:sfThumb(m), animated:!!(m.animationCount), attribution:(m.name||'Model')+(m.user&&m.user.username?(' by '+m.user.username):'')+(m.license&&m.license.label?(' ['+m.license.label+']'):'')+' \u2014 via Sketchfab' }; }
 function sfFetchPage(url, cb, errcb){   // cb(results, nextPageUrl|null)
-  const tok=sfGetToken();
-  fetch(url, { headers: tok ? { Authorization:'Token '+tok } : {} })
+  // Public search/browse: send NO Authorization header. Adding it makes the request preflighted, and
+  // Sketchfab's search endpoint does not allow 'authorization' in its CORS Access-Control-Allow-Headers,
+  // so the preflight is rejected. The token is only needed to DOWNLOAD a model (see loadSketchfabModel).
+  fetch(url)
     .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status+(r.status===401?' \u2014 check your token':'')); return r.json(); })
     .then(d=>{ cb((d.results||[]).map(sfMap), d.next||null); })
     .catch(errcb);
@@ -9820,7 +9822,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 251 · 2026-06-08';
+const BUILD_VERSION = 'build 252 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12738,7 +12740,7 @@ function renderSketchfabSearch(host, onPick){
       card.onclick=()=>{ status.textContent='Using \u201c'+m.title+'\u201d\u2026 (downloading)'; onPick({ title:m.title, glb:'sketchfab:'+m.uid, thumb:m.thumb, attribution:m.attribution, animated:m.animated }, status); };
       grid.appendChild(card); }
     if(sfNextUrl){ const mb=document.createElement('button'); mb.textContent='Show more'; mb.style.cssText='padding:5px 16px;font-size:11px;'; mb.onclick=()=>{ mb.disabled=true; mb.textContent='Loading\u2026'; sfFetchPage(sfNextUrl, (more,next)=>{ sfLastResults=sfLastResults.concat(more); sfNextUrl=next; render(); }, err=>{ mb.disabled=false; mb.textContent='Show more'; status.textContent='Could not load more: '+((err&&err.message)||err); }); }; moreWrap.appendChild(mb); } }
-  function doSearch(){ const term=q.value.trim(); if(!term){ status.textContent='Type something to search.'; return; } if(!sfGetToken()){ status.textContent='Add your Sketchfab token first.'; return; } sfLastQuery=term; status.textContent='Searching\u2026'; grid.innerHTML='';
+  function doSearch(){ const term=q.value.trim(); if(!term){ status.textContent='Type something to search.'; return; } sfLastQuery=term; status.textContent='Searching\u2026'; grid.innerHTML='';
     sfSearch(term, (list,next)=>{ sfLastResults=list; sfNextUrl=next; render(); }, err=>{ sfLastResults=[]; sfNextUrl=null; status.textContent='Search failed: '+((err&&err.message)||err); }); }
   sb.onclick=doSearch; q.addEventListener('keydown', e=>{ if(e.code==='Enter'){ e.preventDefault(); doSearch(); } });
   if(sfLastResults.length) render(sfLastResults);
