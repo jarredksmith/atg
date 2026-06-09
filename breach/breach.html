@@ -9158,7 +9158,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 221 · 2026-06-08';
+const BUILD_VERSION = 'build 222 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9338,13 +9338,21 @@ addEventListener('contextmenu', e=>{ if(gameOn) e.preventDefault(); });
 // Editing happens under a full-screen overlay that intercepts all touches, so a control's own
 // fire/aim/move handlers never trigger while you are arranging the layout.
 const TOUCH_EDITABLE = ['tStick','tFire','tAim','tJump','tReload','tNade','tWeapon','tUse'];
-const TOUCH_LABEL = { tStick:'Move', tFire:'Fire', tAim:'Aim', tJump:'Jump', tReload:'Reload', tNade:'Grenade', tWeapon:'Weapon', tUse:'Use' };
+const TOUCH_LABEL = { tStick:'Move', tFire:'Fire', tAim:'Aim', tJump:'Jump', tReload:'Reload', tNade:'Grenade', tWeapon:'Weapon', tUse:'Use', stats:'Health', ammoPanel:'Ammo', minimap:'Map', score:'Score' };
 const TSTICK_BASE = 120;   // px (matches body.touch #tStick); user scale multiplies this
+const HUD_EDITABLE = ['stats','ammoPanel','minimap','score'];   // read-only HUD panels: movable + sizable, no gameplay handlers
+const ALL_EDITABLE = TOUCH_EDITABLE.concat(HUD_EDITABLE);
+let touchOpacity = (()=>{ const v=parseFloat(localStorage.getItem('breach_touch_opacity')); return (v>=0.2 && v<=1)?v:1; })();
+let touchHand = (localStorage.getItem('breach_touch_hand')==='left') ? 'left' : 'right';
+function applyTouchChrome(){
+  const tu=document.getElementById('touchUI'); if(tu) tu.style.opacity = touchOpacity;     // global control transparency
+  const lk=document.getElementById('tLook'); if(lk){ if(touchHand==='left'){ lk.style.left='0'; lk.style.right='42%'; } else { lk.style.left=''; lk.style.right=''; } }   // look-drag side
+}
 let touchLayout = (()=>{ try{ return JSON.parse(localStorage.getItem('breach_touch_layout')||'{}')||{}; }catch(e){ return {}; } })();
 function saveTouchLayout(){ try{ localStorage.setItem('breach_touch_layout', JSON.stringify(touchLayout)); }catch(e){} }
 function applyTouchLayout(){
   const vw=innerWidth, vh=innerHeight;
-  for(const id of TOUCH_EDITABLE){ const el=document.getElementById(id); if(!el) continue; const o=touchLayout[id]||{};
+  for(const id of ALL_EDITABLE){ const el=document.getElementById(id); if(!el) continue; const o=touchLayout[id]||{};
     if(typeof o.fx==='number'){ el.style.left=(o.fx*vw)+'px'; el.style.top=(o.fy*vh)+'px'; el.style.right='auto'; el.style.bottom='auto'; }
     else { el.style.left=''; el.style.top=''; el.style.right=''; el.style.bottom=''; }   // no position override -> CSS default
     const sc=(typeof o.scale==='number' && o.scale>0) ? o.scale : 1;
@@ -9362,20 +9370,20 @@ let touchEditMode=false, _teOverlay=null, _teDrag=null, _teSel=null, _teSizeRow=
 function _teSyncSize(){ if(!_teSizeRow) return;
   if(_teSel){ const o=touchLayout[_teSel]||{}; _teSizeSlider.value=(typeof o.scale==='number'&&o.scale>0)?o.scale:1; _teSizeName.textContent=TOUCH_LABEL[_teSel]||_teSel; _teSizeRow.style.display='flex'; }
   else { _teSizeRow.style.display='none'; } }
-function _teHighlight(){ for(const id of TOUCH_EDITABLE){ const el=document.getElementById(id); if(!el) continue; const on=(id===_teSel); el.style.outline=on?'2px solid #38f5b5':''; el.style.outlineOffset=on?'2px':''; } }
+function _teHighlight(){ for(const id of ALL_EDITABLE){ const el=document.getElementById(id); if(!el) continue; const on=(id===_teSel); el.style.outline=on?'2px solid #38f5b5':''; el.style.outlineOffset=on?'2px':''; } }
 function _teClamp(id){ const el=document.getElementById(id); if(!el) return; const r=el.getBoundingClientRect(); let nx=r.left, ny=r.top, ch=false;
   if(r.right>innerWidth){ nx=innerWidth-r.width; ch=true; } if(r.bottom>innerHeight){ ny=innerHeight-r.height; ch=true; }
   if(nx<0){ nx=0; ch=true; } if(ny<0){ ny=0; ch=true; }
   if(ch){ const o=(touchLayout[id]=touchLayout[id]||{}); o.fx=nx/innerWidth; o.fy=ny/innerHeight; el.style.left=nx+'px'; el.style.top=ny+'px'; el.style.right='auto'; el.style.bottom='auto'; } }
 function _teHit(x,y){ let best=null;   // topmost editable control under the point (last in list order wins)
-  for(const id of TOUCH_EDITABLE){ const el=document.getElementById(id); if(!el) continue; const r=el.getBoundingClientRect();
+  for(const id of ALL_EDITABLE){ const el=document.getElementById(id); if(!el) continue; const r=el.getBoundingClientRect();
     if(x>=r.left && x<=r.right && y>=r.top && y<=r.bottom) best=el; }
   return best;
 }
 function enterTouchEdit(){
   if(touchEditMode) return; touchEditMode=true;
   const tu=document.getElementById('touchUI'); if(tu) tu.style.display='block';   // controls visible beneath the editor
-  applyTouchLayout();
+  applyTouchLayout(); applyTouchChrome();
   if(!_teOverlay){
     const ov=document.createElement('div'); ov.id='touchEditOverlay';
     ov.style.cssText='position:fixed;inset:0;z-index:60;background:rgba(3,8,10,0.45);touch-action:none;-webkit-user-select:none;user-select:none;';
@@ -9384,10 +9392,18 @@ function enterTouchEdit(){
     const row1=document.createElement('div'); row1.style.cssText='display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;';
     const lbl=document.createElement('span'); lbl.textContent='Drag to move \u00b7 tap to size'; lbl.style.cssText='color:#eafff7;font:600 12px/1.2 ui-monospace,monospace;margin-right:4px;';
     const reset=document.createElement('button'); reset.textContent='Reset'; reset.style.cssText='padding:5px 12px;font:600 12px ui-monospace,monospace;background:#0c1418;color:#cfeee2;border:1px solid #2a3a42;border-radius:6px;';
-    reset.onclick=(e)=>{ e.stopPropagation(); touchLayout={}; _teSel=null; saveTouchLayout(); applyTouchLayout(); _teHighlight(); _teSyncSize(); };
+    reset.onclick=(e)=>{ e.stopPropagation(); touchLayout={}; _teSel=null; touchOpacity=1; touchHand='right'; try{ localStorage.setItem('breach_touch_opacity','1'); localStorage.setItem('breach_touch_hand','right'); }catch(_){} saveTouchLayout(); applyTouchLayout(); applyTouchChrome(); oSlider.value=1; _teHighlight(); _teSyncSize(); };
     const done=document.createElement('button'); done.textContent='Done'; done.style.cssText='padding:5px 14px;font:600 12px ui-monospace,monospace;background:#38f5b5;color:#04110c;border:none;border-radius:6px;';
     done.onclick=(e)=>{ e.stopPropagation(); exitTouchEdit(); };
     row1.appendChild(lbl); row1.appendChild(reset); row1.appendChild(done); bar.appendChild(row1);
+    const row2=document.createElement('div'); row2.style.cssText='display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;border-top:1px solid rgba(56,245,181,0.18);padding-top:6px;';
+    const flip=document.createElement('button'); flip.textContent='\u21c4 Flip L/R'; flip.style.cssText='padding:5px 12px;font:600 11px ui-monospace,monospace;background:#0c1418;color:#cfeee2;border:1px solid #2a3a42;border-radius:6px;';
+    flip.onclick=(e)=>{ e.stopPropagation(); const vw=innerWidth; for(const id of ALL_EDITABLE){ const el=document.getElementById(id); if(!el) continue; const r=el.getBoundingClientRect(); const o=(touchLayout[id]=touchLayout[id]||{}); o.fx=(vw-r.right)/vw; if(typeof o.fy!=='number') o.fy=r.top/innerHeight; } touchHand=(touchHand==='left')?'right':'left'; try{ localStorage.setItem('breach_touch_hand', touchHand); }catch(_){} saveTouchLayout(); applyTouchLayout(); applyTouchChrome(); _teClamp&&ALL_EDITABLE.forEach(_teClamp); _teHighlight(); };
+    const oLab=document.createElement('span'); oLab.textContent='Opacity'; oLab.style.cssText='color:#eafff7;font:600 11px ui-monospace,monospace;';
+    const oSlider=document.createElement('input'); oSlider.type='range'; oSlider.min='0.2'; oSlider.max='1'; oSlider.step='0.05'; oSlider.value=touchOpacity; oSlider.style.cssText='width:120px;accent-color:#38f5b5;';
+    oSlider.addEventListener('pointerdown', e=>e.stopPropagation());
+    oSlider.oninput=()=>{ touchOpacity=+oSlider.value; try{ localStorage.setItem('breach_touch_opacity', touchOpacity); }catch(_){} applyTouchChrome(); };
+    row2.appendChild(flip); row2.appendChild(oLab); row2.appendChild(oSlider); bar.appendChild(row2);
     const sizeRow=document.createElement('div'); sizeRow.style.cssText='display:none;gap:8px;align-items:center;justify-content:center;border-top:1px solid rgba(56,245,181,0.18);padding-top:6px;';
     const sName=document.createElement('span'); sName.style.cssText='color:#9fe6cf;font:600 11px ui-monospace,monospace;min-width:54px;text-align:right;';
     const sLab=document.createElement('span'); sLab.textContent='Size'; sLab.style.cssText='color:#eafff7;font:600 11px ui-monospace,monospace;';
@@ -9420,7 +9436,7 @@ function enterTouchEdit(){
 }
 function exitTouchEdit(){ touchEditMode=false; _teSel=null; _teHighlight(); if(_teOverlay) _teOverlay.style.display='none';
   const pm=document.getElementById('pauseMenu'); if(pm) pm.classList.remove('hidden'); }   // back to the pause menu
-applyTouchLayout();
+applyTouchLayout(); applyTouchChrome();
 addEventListener('resize', ()=>{ applyTouchLayout(); });
 addEventListener('orientationchange', ()=>{ setTimeout(applyTouchLayout, 120); });
 
