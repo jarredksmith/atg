@@ -6251,7 +6251,7 @@ function broadcastAnim(i){
 // ---------- Transform-animated mechanisms: move/rotate any object (platforms, doors). userData.xa holds the
 // authored offset + playback/trigger; base transform is captured at deploy so the editor position is point A. ----------
 const _XA_D2R = Math.PI/180;
-function xaApply(o, sx){ o.userData.xa = { on:true, mode:sx.mode||'loop', trig:sx.trig||'auto', mx:sx.mx||0, my:sx.my||0, mz:sx.mz||0, rx:sx.rx||0, ry:sx.ry||0, rz:sx.rz||0, dur:sx.dur||2 }; }
+function xaApply(o, sx){ o.userData.xa = { on:true, mode:sx.mode||'loop', trig:sx.trig||'auto', mx:sx.mx||0, my:sx.my||0, mz:sx.mz||0, rx:sx.rx||0, ry:sx.ry||0, rz:sx.rz||0, dur:sx.dur||2, path:(sx.path&&sx.path.length>=2)?sx.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):undefined }; }
 function _xaEach(fn){ for(const o of propModels){ const a=o&&o.userData&&o.userData.xa; if(a&&a.on) fn(o,a); } }
 function xaCapture(){ _xaEach((o,a)=>{ a.bpx=undefined; a.ph=0; a.dir=1; a.dest=0; }); }   // deploy: recapture point A on the next frame
 function xaSnapToBase(){ _xaEach((o,a)=>{ a.ph=0; a.dir=1; a.dest=0; if(a.bpx!==undefined){ o.position.set(a.bpx,a.bpy,a.bpz); o.rotation.set(a.brx,a.bry,a.brz); o.updateMatrixWorld(true); if(colliders.indexOf(o)>=0||o.userData.box) refreshPropCollider(o); } }); }   // editor: show point A
@@ -6346,6 +6346,37 @@ function _xaPeakSpeed(o, prevP, prevQ, b, dt){   // fastest surface speed ANYWHE
   }
   return mx/Math.max(dt,1e-4);
 }
+let _pathPreviewGroup = null;
+// Position along a polyline of [x,y,z] waypoints at parameter t in [0,1], measured by arc length.
+// `closed` joins the last point back to the first (Loop travels seamlessly instead of snapping back).
+function pointAlongPath(pts, t, closed){
+  const nn = pts.length;
+  if(nn===0) return [0,0,0];
+  if(nn===1) return [pts[0][0], pts[0][1], pts[0][2]];
+  const segs = closed ? nn : nn-1; const segLen=[]; let total=0;
+  for(let i=0;i<segs;i++){ const a=pts[i], b=pts[(i+1)%nn]; const l=Math.hypot(b[0]-a[0], b[1]-a[1], b[2]-a[2]); segLen.push(l); total+=l; }
+  if(total<=0) return [pts[0][0], pts[0][1], pts[0][2]];
+  let d = Math.max(0, Math.min(1, t)) * total;
+  for(let i=0;i<segs;i++){
+    if(d<=segLen[i] || i===segs-1){ const a=pts[i], b=pts[(i+1)%nn]; const f = segLen[i]>0 ? d/segLen[i] : 0; return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f]; }
+    d -= segLen[i];
+  }
+  const last = pts[closed?0:nn-1]; return [last[0], last[1], last[2]];
+}
+// Editor-only: draw the selected prop's waypoint path (line + point markers) so it can be edited visually.
+function refreshPathPreview(){
+  try{
+    if(_pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); _pathPreviewGroup=null; }
+    if(!editorOpen || editorActive!=='props') return;
+    const sel = editorTargets.props.obj && editorTargets.props.obj();
+    const a = sel && sel.userData && sel.userData.xa;
+    if(!a || !a.on || !a.path || !a.path.length) return;
+    const g = new THREE.Group();
+    if(a.path.length>=2){ const v=a.path.map(p=>new THREE.Vector3(p[0],p[1],p[2])); if(a.mode==='loop') v.push(v[0].clone()); g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(v), new THREE.LineBasicMaterial({ color:0x7ad7ff }))); }
+    a.path.forEach((p,i)=>{ const m=new THREE.Mesh(new THREE.SphereGeometry(0.45,10,8), new THREE.MeshBasicMaterial({ color: i===0?0x38f5b5:0x7ad7ff })); m.position.set(p[0],p[1],p[2]); g.add(m); });
+    scene.add(g); _pathPreviewGroup=g;
+  }catch(e){ /* markers are cosmetic; never let them break the editor */ }
+}
 function updateXAnim(dt){
   if(!gameOn || editorOpen || paused) return;
   for(const o of propModels){
@@ -6359,8 +6390,14 @@ function updateXAnim(dt){
     const e = lin ? a.ph : (a.ph*a.ph*(3-2*a.ph));
     const ox=o.position.x, oy=o.position.y, oz=o.position.z;
     _xaPrevP.set(ox,oy,oz); _xaPrevQ.copy(o.quaternion);
-    o.position.set(a.bpx+(a.mx||0)*e, a.bpy+(a.my||0)*e, a.bpz+(a.mz||0)*e);
-    o.rotation.set(a.brx+(a.rx||0)*_XA_D2R*e, a.bry+(a.ry||0)*_XA_D2R*e, a.brz+(a.rz||0)*_XA_D2R*e);
+    if(a.path && a.path.length>=2){
+      const _pp = pointAlongPath(a.path, a.ph, a.mode==='loop');   // waypoint path drives position (overrides the single move offset)
+      o.position.set(_pp[0], _pp[1], _pp[2]);
+      o.rotation.set(a.brx, a.bry, a.brz);
+    } else {
+      o.position.set(a.bpx+(a.mx||0)*e, a.bpy+(a.my||0)*e, a.bpz+(a.mz||0)*e);
+      o.rotation.set(a.brx+(a.rx||0)*_XA_D2R*e, a.bry+(a.ry||0)*_XA_D2R*e, a.brz+(a.rz||0)*_XA_D2R*e);
+    }
     const dx=o.position.x-ox, dy=o.position.y-oy, dz=o.position.z-oz;
     const turns=(a.rx||a.ry||a.rz);   // a rotating prop's surface moves even when its origin doesn't
     if(dx||dy||dz||turns){
@@ -9763,7 +9800,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 243 · 2026-06-08';
+const BUILD_VERSION = 'build 244 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12482,7 +12519,7 @@ function propMaterialDesc(o){
 function propEntry(o){
   const e={ src:o.userData.src||PROP_MODEL_URL, t:[ (o.userData.physHome?o.userData.physHome.x:o.position.x), (o.userData.physHome?o.userData.physHome.y:o.position.y), (o.userData.physHome?o.userData.physHome.z:o.position.z), o.rotation.x,o.rotation.y,o.rotation.z,o.scale.x,o.scale.y,o.scale.z] };
   if(o.userData.animMode==='trigger') e.anim='trigger';
-  if(o.userData.xa && o.userData.xa.on){ const a=o.userData.xa; e.xa={ mode:a.mode||'loop', trig:a.trig||'auto', mx:a.mx||0, my:a.my||0, mz:a.mz||0, rx:a.rx||0, ry:a.ry||0, rz:a.rz||0, dur:a.dur||2 }; }
+  if(o.userData.xa && o.userData.xa.on){ const a=o.userData.xa; e.xa={ mode:a.mode||'loop', trig:a.trig||'auto', mx:a.mx||0, my:a.my||0, mz:a.mz||0, rx:a.rx||0, ry:a.ry||0, rz:a.rz||0, dur:a.dur||2 }; if(a.path && a.path.length>=2) e.xa.path = a.path.map(q=>[+q[0],+q[1],+q[2]]); }
   if(o.userData.phys){ e.dyn=true; if(o.userData.mass!=null) e.mass=o.userData.mass;
     if(o.userData.noGrab) e.ng=true;
     if(o.userData.breakable===false) e.brk=false;   // breakable defaults true; only store when off
@@ -13637,10 +13674,25 @@ function renderEditorFields(){
           const seg=(label,key,opts)=>{ const h=document.createElement('div'); h.className='hint'; h.style.margin='6px 0 2px'; h.textContent=label; animHost.appendChild(h); const row=document.createElement('div'); row.className='row2'; opts.forEach(o=>{ const b=document.createElement('button'); b.textContent=o[1]; if((xa[key]||opts[0][0])===o[0]){ b.style.background='rgba(122,215,255,0.28)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); xa[key]=o[0]; renderEditorFields(); }; row.appendChild(b); }); animHost.appendChild(row); };
           seg('Playback','mode',[['loop','\u27f3 Loop'],['pingpong','\u21c4 Ping-pong'],['once','\u2192 Once']]);
           seg('Trigger','trig',[['auto','Auto'],['interact','E Activate']]);
+          // ---- Waypoint path: prop travels through a series of points (ping-pong by default) ----
+          { const ph2=document.createElement('div'); ph2.className='hint'; ph2.style.margin='8px 0 2px'; ph2.innerHTML='<b>Waypoint path</b> \u2014 travels through points (overrides Move offset)'; animHost.appendChild(ph2);
+            xa.path = xa.path || [];
+            const addB=document.createElement('button'); addB.textContent='+ Add waypoint (current spot)'; addB.style.cssText='width:100%;padding:5px;font-size:12px;margin:2px 0;';
+            addB.onclick=()=>{ pushUndoSnapshot(); xa.path.push([+sel.position.x.toFixed(3), +sel.position.y.toFixed(3), +sel.position.z.toFixed(3)]); if(xa.path.length===1 && xa.mode==='loop') xa.mode='pingpong'; renderEditorFields(); };
+            animHost.appendChild(addB);
+            xa.path.forEach((wp,i)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;align-items:center;gap:6px;color:#bfe6ff;font-size:11px;margin:1px 0;';
+              const lab=document.createElement('span'); lab.textContent=(i+1)+'. '+wp.map(v=>(+v).toFixed(1)).join(', '); lab.style.flex='1';
+              const go=document.createElement('button'); go.textContent='Move here'; go.style.cssText='padding:1px 6px;font-size:10px;'; go.onclick=()=>{ pushUndoSnapshot(); sel.position.set(wp[0],wp[1],wp[2]); sel.updateMatrixWorld(true); if(colliders.indexOf(sel)>=0||sel.userData.box) refreshPropCollider(sel); if(typeof syncPropStateFromObj==='function') syncPropStateFromObj(); renderEditorFields(); };
+              const del=document.createElement('button'); del.textContent='\u2715'; del.style.cssText='padding:1px 7px;font-size:10px;'; del.onclick=()=>{ pushUndoSnapshot(); xa.path.splice(i,1); renderEditorFields(); };
+              r.appendChild(lab); r.appendChild(go); r.appendChild(del); animHost.appendChild(r); });
+            if(xa.path.length){ const clr=document.createElement('button'); clr.textContent='Clear path'; clr.style.cssText='padding:3px 10px;font-size:11px;margin:3px 0;'; clr.onclick=()=>{ pushUndoSnapshot(); xa.path.length=0; renderEditorFields(); }; animHost.appendChild(clr);
+              const pn=document.createElement('div'); pn.className='hint'; pn.style.marginTop='2px'; pn.textContent='Move the prop and Add a waypoint to trace the route (2+ points). Playback above sets repeat (Ping-pong reverses at the ends, Loop joins end\u2192start); Duration is one-way travel time. Deploy to test.'; animHost.appendChild(pn); }
+          }
           const xn=document.createElement('div'); xn.className='hint'; xn.style.marginTop='4px'; xn.textContent='Travels from its current spot by the offset above. Players ride moving platforms and are blocked by closed doors. Deploy to test; E-activate toggles open/close (Once locks open).';
           animHost.appendChild(xn);
         }
       }
+      refreshPathPreview();   // keep the waypoint markers in sync with the selection / edits
       // physics toggle (selected prop)
       if(sel){
         const phead=document.createElement('div'); phead.className='hint'; phead.style.margin='8px 0 3px'; phead.innerHTML='<b>Physics</b> — dynamic objects fall, tumble, stack & react to shots';
@@ -14633,6 +14685,7 @@ function waitAssetsThenReveal(){
 function startGame(){
   if(_glbPending>0){ showLevelLoader(); waitAssetsThenReveal(); }   // hold a loading screen so assets don't pop in mid-game
   clearMovementInput();   // start fresh: no input held over from a previous round/death
+  if(_pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; }   // hide editor path markers during play
   closeModal('mpModal'); closeModal('instrModal');   // drop any open menu modal as the world starts
   if(typeof ensurePlayerPreview==='function') ensurePlayerPreview(false);   // drop the editor's stand-in avatar
   initAudio();
