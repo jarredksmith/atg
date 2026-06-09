@@ -6168,7 +6168,7 @@ function applyPropShine(obj, rough, metal){
   if(!obj || !isShapePrimitive(obj.userData.src)) return;
   const r = Math.max(0, Math.min(1, rough)), m = Math.max(0, Math.min(1, metal));
   obj.userData.shine = { r, m };
-  eachPrimMesh(obj, o=>{ o.material.roughness = r; o.material.metalness = m; o.material.needsUpdate = true; });
+  eachPrimMesh(obj, o=>{ o.material.roughness = r; o.material.metalness = m; o.material.envMapIntensity = m; o.material.needsUpdate = true; });   // metal 0 => no environment reflection
 }
 // Apply any stored material props after a (re)spawn — used by load + level-sync.
 function applyStoredMaterial(obj, mat){
@@ -6680,6 +6680,7 @@ function applyWorldCfg(){
     floorMat.color.setHex(worldCfg.floorColor>>>0);
     if(worldCfg.floorRough!=null) floorMat.roughness = Math.max(0, Math.min(1, +worldCfg.floorRough));
     if(worldCfg.floorMetal!=null) floorMat.metalness = Math.max(0, Math.min(1, +worldCfg.floorMetal));
+    floorMat.envMapIntensity = floorMat.metalness;   // reflections track the metal slider
     if(+worldCfg.floorTile>0 && !(+worldCfg.floorTileU>0) && !(+worldCfg.floorTileV>0)){ worldCfg.floorTileU=worldCfg.floorTileV=+worldCfg.floorTile; worldCfg.floorTile=0; }   // migrate legacy uniform tile
     const fAuto = Math.max(2, Math.round(ARENA/4));
     const fu = +worldCfg.floorTileU>0 ? +worldCfg.floorTileU : fAuto, fv = +worldCfg.floorTileV>0 ? +worldCfg.floorTileV : fAuto;
@@ -6690,6 +6691,7 @@ function applyWorldCfg(){
     wallMat.color.setHex(worldCfg.wallColor>>>0);
     if(worldCfg.wallRough!=null) wallMat.roughness = Math.max(0, Math.min(1, +worldCfg.wallRough));
     if(worldCfg.wallMetal!=null) wallMat.metalness = Math.max(0, Math.min(1, +worldCfg.wallMetal));
+    wallMat.envMapIntensity = wallMat.metalness;
     if(+worldCfg.wallTile>0 && !(+worldCfg.wallTileU>0) && !(+worldCfg.wallTileV>0)){ worldCfg.wallTileU=worldCfg.wallTileV=+worldCfg.wallTile; worldCfg.wallTile=0; }   // migrate legacy uniform tile
     const wAuto = Math.max(2, Math.round(ARENA/8));
     const wu = +worldCfg.wallTileU>0 ? +worldCfg.wallTileU : wAuto, wv = +worldCfg.wallTileV>0 ? +worldCfg.wallTileV : wAuto;
@@ -8744,6 +8746,13 @@ const STATION_POS = new THREE.Vector3(8.00000, 0.00000, 7.82061);
 const STATION_SCALE = 0.25297;                          // tweak if the model imports too large/small
 const STATION_ROT = new THREE.Euler(0.00000, 3.14159, 0.00000); // face the terminal toward spawn (origin)
 let station = null;
+function applyStationLight(){
+  if(!station || !station.light) return;
+  const s = (typeof editorTargets!=='undefined' && editorTargets.station) ? editorTargets.station.state : {};
+  station.light.color.setHex((s.lightColor!=null)?s.lightColor:0x38c8f5);
+  station.light.intensity = (s.lightInt!=null)?s.lightInt:6;
+  station.light.distance  = (s.lightDist!=null)?s.lightDist:14;
+}
 function buildStation(){
   // Create the station record + glow immediately so proximity/buying work even before the model loads.
   const g = new THREE.Group();
@@ -9172,7 +9181,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 224 · 2026-06-08';
+const BUILD_VERSION = 'build 225 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11371,7 +11380,7 @@ const editorTargets = {
     setUrl(u){ swapStationModel(u); },
     apply(){ const s=this.state;
       if(station){ station.group.position.set(s.px,s.py,s.pz); station.pos.set(s.px,s.py,s.pz);
-        if(station.light) station.light.position.set(s.px,3+s.py,s.pz); }
+        if(station.light) station.light.position.set(s.px,3+s.py,s.pz); applyStationLight(); }
       const o=this.obj(); if(o){ o.scale.setScalar(s.s); o.rotation.set(s.rx*RAD, s.ry*RAD, s.rz*RAD);
         station.group.updateMatrixWorld(true); refreshPropCollider(o); } },   // keep collision boxes in sync with the transform
     code(){ const s=this.state;
@@ -13100,6 +13109,25 @@ function renderEditorFields(){
       const sh=document.createElement('div'); sh.className='hint'; sh.style.margin='10px 0 2px'; sh.innerHTML='<b>Shoot sound</b> \u2014 '+wn+' (saved on this device)'; urlHost.appendChild(sh);
       urlHost.appendChild(_sndRow('Shoot \u00b7 '+wn, ()=>audioSettings.sounds.shoot[curWep], v=>{ if(v) audioSettings.sounds.shoot[curWep]=v; else delete audioSettings.sounds.shoot[curWep]; }));
       urlHost.appendChild(renderFreesoundBrowser(urlHost, ()=>renderEditorFields(), { label:'Shoot \u00b7 '+wn, set:v=>{ if(v) audioSettings.sounds.shoot[curWep]=v; else delete audioSettings.sounds.shoot[curWep]; } }));
+    }
+    if(tgt===editorTargets.station){   // station glow controls
+      const s=tgt.state;
+      const lh=document.createElement('div'); lh.className='hint'; lh.style.margin='10px 0 3px'; lh.innerHTML='<b>Station light</b> \u2014 the glow at the buy station'; urlHost.appendChild(lh);
+      const cRow=document.createElement('label'); cRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:3px 0;';
+      const cSp=document.createElement('span'); cSp.textContent='Color'; cSp.style.minWidth='86px';
+      const cInp=document.createElement('input'); cInp.type='color'; cInp.value='#'+(((s.lightColor!=null?s.lightColor:0x38c8f5)>>>0)&0xffffff).toString(16).padStart(6,'0'); cInp.style.cssText='width:48px;height:24px;background:#0c1418;border:1px solid #2a3a42;border-radius:4px;cursor:pointer;';
+      cInp.addEventListener('mousedown',()=>pushUndoSnapshot());
+      cInp.oninput=()=>{ s.lightColor=parseInt(cInp.value.slice(1),16)||0; applyStationLight(); };
+      cRow.appendChild(cSp); cRow.appendChild(cInp); urlHost.appendChild(cRow);
+      const mkSL=(label,key,min,max,step,def)=>{ const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:3px 0;';
+        const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='86px';
+        const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=(s[key]!=null?s[key]:def); rng.style.cssText='flex:1;accent-color:#38f5b5;';
+        const num=document.createElement('input'); num.type='number'; num.min=min; num.max=max; num.step=step; num.value=(s[key]!=null?s[key]:def); num.style.cssText='width:60px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+        const ap=(v)=>{ s[key]=parseFloat(v)||0; rng.value=s[key]; num.value=s[key]; applyStationLight(); };
+        rng.oninput=()=>ap(rng.value); num.onchange=()=>ap(num.value); rng.addEventListener('mousedown',()=>pushUndoSnapshot());
+        row.appendChild(sp); row.appendChild(rng); row.appendChild(num); urlHost.appendChild(row); };
+      mkSL('Intensity','lightInt',0,20,0.5,6);
+      mkSL('Distance','lightDist',0,40,1,14);
     }
     if(tgt===editorTargets.player){   // avatar animation states (mirror the enemy state machine)
       const acHead=document.createElement('div'); acHead.className='hint'; acHead.style.margin='10px 0 2px'; acHead.innerHTML='<b>Animation states</b> — auto-matched by clip name; override per state. Walk/run switch with the avatar\u2019s movement in-game.';
