@@ -7331,7 +7331,7 @@ function applyWorldCfg(){
     dofStrength = Math.max(0.1, Math.min(4,   worldCfg.dofStrength == null ? DEFAULT_WORLD.dofStrength : +worldCfg.dofStrength));
   }
   // HDRI / equirectangular sky
-  if(typeof applySkyHdri==='function') applySkyHdri(worldCfg.sky_hdri||'');
+  if(typeof applySkyHdri==='function'){ try{ applySkyHdri(worldCfg.sky_hdri||''); }catch(e){ console.warn('sky apply failed', e); } }
   if(typeof applySkyRotation==='function') applySkyRotation();   // re-orient the cached sky if only rotation changed
 }
 let editorOpen = false;        // transform editor panel open — declared early to stay TDZ-safe during init
@@ -8503,7 +8503,7 @@ function loadLevelFromNet(level){
   // rebuild from the host's data
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p);  if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));
+    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }catch(e){ console.warn('net prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('net prop '+i+' failed', e); } });
   }
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
@@ -9804,7 +9804,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 248 · 2026-06-08';
+const BUILD_VERSION = 'build 249 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12629,7 +12629,7 @@ function restoreLevel(level){
   propModels.length = 0;
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p);  if(p.att) obj.userData.attribution=p.att; }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));
+    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }catch(e){ console.warn('prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('prop '+i+' failed to load', e); } });
   }
   // lights
   for(let i=lightModels.length-1;i>=0;i--) removeLight(i);
