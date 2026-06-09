@@ -9224,7 +9224,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 233 · 2026-06-08';
+const BUILD_VERSION = 'build 234 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10073,7 +10073,7 @@ function damageProp(obj, dmg, point, dir, power, byId){
 function updatePhysics(dt){
   if(!physWorld) return;
   driveAllHeld();   // command velocity of any grabbed prop toward its hold point before stepping
-  if(!dynamicProps.length && !fragments.length){ physAccum = 0; return; }   // nothing dynamic to simulate (debris counts!)
+  if(!dynamicProps.length && !fragments.length && !(playerPhysMode && playerBody)){ physAccum = 0; return; }   // nothing dynamic to simulate; but if the player is on the physics controller, keep stepping so its collision queries stay fresh (otherwise the player slowly sinks through static-only levels)
   physAccum += Math.min(dt, 0.1);
   // drive kinematic moving-platform bodies to this frame's animated pose; Rapier derives their velocity
   // from the pose delta and imparts it to anything they sweep into (the trebuchet flinging a ball).
