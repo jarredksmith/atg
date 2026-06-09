@@ -36,6 +36,12 @@
   }
   #editorResize:hover::after, #editor.resizing #editorResize::after { background: rgba(56,245,181,0.85); }
   #editor.resizing { user-select: none; }
+  #editor #edTopBar button { background:rgba(56,245,181,0.12); border:1px solid rgba(56,245,181,0.4); color:#cfeee2; border-radius:6px; width:32px; height:30px; font-size:15px; line-height:1; cursor:pointer; flex:0 0 auto; }
+  #editor #edTopBar button:hover { border-color:#38f5b5; color:#eafff7; }
+  #editor.collapsed { max-height:none; height:auto; width:auto; min-width:0; overflow:hidden; }
+  #editor.collapsed > *:not(#edTopBar) { display:none; }
+  #editor.dockLeft { left:0; right:auto; border-left:none; border-right:1px solid rgba(56,245,181,0.35); box-shadow:6px 0 24px rgba(0,0,0,0.5); }
+  #editor.dockLeft #editorResize { left:auto; right:-3px; }
   #editor h3 { margin: 0 0 6px; font-size: 13px; color: #38f5b5; letter-spacing: .04em; }
   #editor .hint { color: #5a7d72; font-size: 11px; margin-bottom: 10px; }
   #editor .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
@@ -9166,7 +9172,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 223 · 2026-06-08';
+const BUILD_VERSION = 'build 224 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10971,7 +10977,7 @@ function loop(){
   } else if(editorOpen && editorFreeFly){
     if(scene.fog !== SCENE_FOG) scene.fog = SCENE_FOG;
     if(editorBrightLight.intensity !== 0) editorBrightLight.intensity = 0;
-    gun.visible = false;
+    gun.visible = (editorActive==='gun' || editorActive==='aim');   // keep the viewmodel visible while editing it (esp. mobile free-fly)
     if(!flyInit){ flyPos.copy(player.pos); flyInit = true; }   // seed from where the player stands
     // WASD moves along the view direction; Space/E rise, Q/Ctrl fall; Shift sprints — all in world space
     const spd = (keys['ShiftLeft']||keys['ShiftRight']?60:26) * dt;
@@ -12178,7 +12184,11 @@ function buildEditorPanel(){
     + '<div class="edSecHead"><span class="edCaret">▾</span>'+title+'</div>'
     + '<div class="edSecBody">'+innerHtml+'</div></div>';
   p.innerHTML = '<div id="editorResize" title="Drag to resize"></div>'
-    + '<h3>LEVEL / TRANSFORM EDITOR</h3>'
+    + '<div id="edTopBar" style="display:flex;align-items:center;gap:6px;margin:0 0 6px;">'
+      + '<h3 style="margin:0;flex:1;">LEVEL / TRANSFORM EDITOR</h3>'
+      + '<button id="edDock" title="Move panel to the other side">\u21c4</button>'
+      + '<button id="edCollapse" title="Collapse panel">\u2304</button>'
+    + '</div>'
     + '<div class="hint">Click an object to select it. <b>Shift+click</b> props to multi-select. Use <b>Move / Rotate / Scale</b> + the handles, or type values. <b>Shift+D</b> duplicates, <b>Delete</b> removes. Drag the left edge to resize. Press <b>P</b> to close.</div>'
     + '<div class="row2" style="margin:0 0 8px"><button id="edPlay" style="background:rgba(56,245,181,0.22);color:#eafff7;font-weight:600">▶ Play level</button><button id="edMenu">⌂ Main menu</button></div>'
     + '<div class="row2" id="edView" style="margin-bottom:10px"></div>'
@@ -12204,6 +12214,11 @@ function buildEditorPanel(){
     ;
   document.body.appendChild(p);
   editorEl = p;
+  (function(){ const ed=p;
+    try{ if(localStorage.getItem('breach_editor_dock')==='left') ed.classList.add('dockLeft'); }catch(e){}
+    const dk=ed.querySelector('#edDock'); if(dk) dk.onclick=()=>{ ed.classList.toggle('dockLeft'); try{ localStorage.setItem('breach_editor_dock', ed.classList.contains('dockLeft')?'left':'right'); }catch(e){} };
+    const cl=ed.querySelector('#edCollapse'); if(cl) cl.onclick=()=>{ const c=ed.classList.toggle('collapsed'); cl.textContent=c?'\u2303':'\u2304'; cl.title=c?'Expand panel':'Collapse panel'; };
+  })();
   if(typeof renderCampaignPanel==='function') renderCampaignPanel();
   // restore saved width + wire drag-to-resize (drag the left edge; wider = more room for the crowded panels)
   try{ const w = parseInt(localStorage.getItem('breach_editor_width')||'',10); if(w>=260 && w<=window.innerWidth*0.92) p.style.width = w+'px'; }catch(e){}
