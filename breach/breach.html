@@ -9214,7 +9214,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 230 · 2026-06-08';
+const BUILD_VERSION = 'build 231 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -9644,6 +9644,10 @@ function buildPhysWorld(){
   for(const c of colliders) addStaticColliderFor(c);   // walls + all static props (dynamic props aren't in this list)
   for(const o of dynamicProps) createBodyFor(o);
   physAccum = 0;
+  // Warm the broad-phase / query pipeline so the character controller sees the floor & walls on the very
+  // first frame. Without this, starting a game already in physics mode drops the player through the floor
+  // (a freshly built world hasn't registered its colliders for queries until it has stepped once).
+  try{ physWorld.step(); }catch(e){}
 }
 function destroyPhysWorld(){
   if(typeof clearFragments==='function') clearFragments();   // drop transient debris first, so its bodies aren't left dangling after free()
