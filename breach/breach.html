@@ -6044,7 +6044,7 @@ function rebuildArena(){
   // boundary walls — remove old (from scene + colliders), rebuild at the new extent
   for(const w of arenaWalls){ scene.remove(w); const ci=colliders.indexOf(w); if(ci>=0) colliders.splice(ci,1); if(w.geometry) w.geometry.dispose(); }
   arenaWalls.length = 0;
-  const mk = (w,h,d,x,y,z)=>{ const m=wall(w,h,d,x,y,z); arenaWalls.push(m); colliders.push(m); refreshWallCollider(m); };
+  const mk = (w,h,d,x,y,z)=>{ const m=wall(w,h,d,x,y,z); m.visible = !(typeof worldCfg!=='undefined' && worldCfg && worldCfg.wallsVisible===false); arenaWalls.push(m); colliders.push(m); refreshWallCollider(m); };   // hidden walls keep their collider
   mk(ARENA*2,H,2, 0,H/2,-ARENA);
   mk(ARENA*2,H,2, 0,H/2, ARENA);
   mk(2,H,ARENA*2, -ARENA,H/2,0);
@@ -7060,7 +7060,7 @@ const player = {
 };
 const EYE = 1.7;            // standing camera height above the surface the player stands on
 // ---- World movement settings (editable in the editor's World panel; saved with the level) ----
-const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, launchPower:1, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorRough:0.95, floorMetal:0.1, floorTex:'', floorTexN:'', floorTexR:'', floorTile:0, floorTileU:0, floorTileV:0, floorRot:0, wallColor:0x1a242b, wallRough:0.8, wallMetal:0.2, wallTex:'', wallTexN:'', wallTexR:'', wallTile:0, wallTileU:0, wallTileV:0, wallRot:0, sky_hdri:'', skyBright:1, skyRot:0, fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4 };
+const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, launchPower:1, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorRough:0.95, floorMetal:0.1, floorTex:'', floorTexN:'', floorTexR:'', floorTile:0, floorTileU:0, floorTileV:0, floorRot:0, wallColor:0x1a242b, wallRough:0.8, wallMetal:0.2, wallTex:'', wallTexN:'', wallTexR:'', wallTile:0, wallTileU:0, wallTileV:0, wallRot:0, sky_hdri:'', skyBright:1, skyRot:0, wallsVisible:true, fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4 };
 let worldCfg = Object.assign({}, DEFAULT_WORLD, (savedLevel && savedLevel.world) || {});
 
 // Apply (or clear) a tiling texture on a shared material. Stores the current url on the material under
@@ -7267,6 +7267,7 @@ function applyWorldCfg(){
     const wu = +worldCfg.wallTileU>0 ? +worldCfg.wallTileU : wAuto, wv = +worldCfg.wallTileV>0 ? +worldCfg.wallTileV : wAuto;
     applySurfaceTexture(wallMat, worldCfg.wallTex, '_wallTexUrl', wu, wv, worldCfg.wallTexN, worldCfg.wallTexR, (+worldCfg.wallRot||0)*Math.PI/180);
   }
+  for(const w of arenaWalls){ w.visible = worldCfg.wallsVisible !== false; }   // toggle the boundary walls' look; their colliders stay either way
   // camera: field of view + view distance (the range before geometry/fog fades out)
   worldCfg.fov      = Math.max(40, Math.min(120, worldCfg.fov == null ? DEFAULT_WORLD.fov : +worldCfg.fov));
   worldCfg.viewDist = Math.max(60, Math.min(2000, worldCfg.viewDist == null ? DEFAULT_WORLD.viewDist : +worldCfg.viewDist));
@@ -9762,7 +9763,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 242 · 2026-06-08';
+const BUILD_VERSION = 'build 243 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13147,6 +13148,10 @@ function renderEditorFields(){
       texRow(b,'https://\u2026/floor.jpg (tiles)','floorTex'); slider(b,'Floor tile W','floorTileU',0,80,0.5); slider(b,'Floor tile H','floorTileV',0,80,0.5); slider(b,'Floor rotate\u00b0','floorRot',0,360,5);
       { const fh=document.createElement('div'); b.appendChild(fh); renderTexSearch(fh,(maps)=>{ pushUndoSnapshot(); worldCfg.floorTex=maps.map||''; worldCfg.floorTexN=maps.normal||''; worldCfg.floorTexR=maps.rough||''; applyWorldCfg(); renderEditorFields(); }); } }
     { const b=subSec('Walls','walls',true);
+      { const vr=document.createElement('label'); vr.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 6px;cursor:pointer;';
+        const vc=document.createElement('input'); vc.type='checkbox'; vc.checked=(worldCfg.wallsVisible!==false); vc.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+        vc.onchange=()=>{ pushUndoSnapshot(); worldCfg.wallsVisible=vc.checked; applyWorldCfg(); };
+        const vs=document.createElement('span'); vs.innerHTML='<b>Show boundary walls</b> \u2014 off = invisible, still solid'; vr.appendChild(vc); vr.appendChild(vs); b.appendChild(vr); }
       colorRow(b,'Wall color','wallColor'); slider(b,'Wall roughness','wallRough',0,1,0.05); slider(b,'Wall metalness','wallMetal',0,1,0.05);
       texRow(b,'https://\u2026/wall.jpg (tiles)','wallTex'); slider(b,'Wall tile W','wallTileU',0,80,0.5); slider(b,'Wall tile H','wallTileV',0,80,0.5); slider(b,'Wall rotate\u00b0','wallRot',0,360,5);
       { const wh=document.createElement('div'); b.appendChild(wh); renderTexSearch(wh,(maps)=>{ pushUndoSnapshot(); worldCfg.wallTex=maps.map||''; worldCfg.wallTexN=maps.normal||''; worldCfg.wallTexR=maps.rough||''; applyWorldCfg(); renderEditorFields(); }); }
