@@ -9919,7 +9919,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 269 · 2026-06-08';
+const BUILD_VERSION = 'build 270 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12847,6 +12847,7 @@ function loadCampaign(){ try{ const j=JSON.parse(localStorage.getItem(CAMPAIGN_K
 let campaign = loadCampaign();
 function saveCampaign(){ try{ localStorage.setItem(CAMPAIGN_KEY, JSON.stringify(campaign)); return true; }catch(e){ return false; } }
 let campaignActive=false, campaignIdx=0, _campaignComplete=false;
+let campaignEditIdx=-1;   // campaign slot currently loaded in the editor for re-editing (-1 = none)
 function _campaignLoad(i){ const lv=campaign.levels[i]; if(!lv) return; loadLevelFromNet(lv); startGame(); }
 function startCampaign(){ if(!campaign.levels.length){ if(typeof flashToast==='function') flashToast('Add a level to the campaign first'); return; } campaignActive=true; campaignIdx=0; _campaignComplete=false; _campaignLoad(0); }
 function _captureLoadout(){ const a={}; for(const k of owned){ const w=WEAPONS[k]; if(w) a[k]={ mag:w.mag, reserve:w.reserve }; } return { owned:[...owned], wep:curWep, hp:player.hp, ammo:a }; }
@@ -12858,21 +12859,29 @@ function renderCampaignPanel(){
   info.innerHTML='Chain levels into a solo campaign. Build a level, <b>Add</b> it, repeat, then <b>Play</b>. Each level ends on its win condition (set <b>Extraction</b> as the exit) and loads the next \u2014 weapons + health carry over.';
   host.appendChild(info);
   const row=document.createElement('div'); row.className='row2';
-  const addB=document.createElement('button'); addB.textContent='\u2795 Add current level'; addB.onclick=()=>{ campaign.levels.push(serializeLevel()); saveCampaign(); renderCampaignPanel(); };
+  const addB=document.createElement('button'); addB.textContent='\u2795 Add current level'; addB.onclick=()=>{ const lv=serializeLevel(); lv.name='Level '+(campaign.levels.length+1); campaign.levels.push(lv); campaignEditIdx=-1; saveCampaign(); renderCampaignPanel(); };
   const playB=document.createElement('button'); playB.textContent='\u25b6 Play campaign'; playB.style.cssText='background:rgba(56,245,181,0.22);color:#eafff7;font-weight:600'; playB.onclick=()=>{ startCampaign(); };
   row.appendChild(addB); row.appendChild(playB); host.appendChild(row);
   const r2=document.createElement('div'); r2.className='row2'; r2.style.marginTop='6px';
   const repB=document.createElement('button'); repB.textContent='\u27f3 Replace last'; repB.onclick=()=>{ if(campaign.levels.length){ campaign.levels[campaign.levels.length-1]=serializeLevel(); saveCampaign(); renderCampaignPanel(); } };
-  const clrB=document.createElement('button'); clrB.textContent='Clear all'; clrB.onclick=()=>{ campaign.levels=[]; saveCampaign(); renderCampaignPanel(); };
+  const clrB=document.createElement('button'); clrB.textContent='Clear all'; clrB.onclick=()=>{ campaign.levels=[]; campaignEditIdx=-1; saveCampaign(); renderCampaignPanel(); };
   r2.appendChild(repB); r2.appendChild(clrB); host.appendChild(r2);
+  if(campaignEditIdx>=0 && campaign.levels[campaignEditIdx]){
+    const _enm=campaign.levels[campaignEditIdx].name||('Level '+(campaignEditIdx+1));
+    const er=document.createElement('div'); er.className='row2'; er.style.marginTop='6px';
+    const saveB=document.createElement('button'); saveB.textContent='Save changes to "'+_enm+'"'; saveB.style.cssText='flex:1;background:rgba(56,245,181,0.22);color:#eafff7;font-weight:600;'; saveB.onclick=()=>{ const lv=serializeLevel(); lv.name=_enm; campaign.levels[campaignEditIdx]=lv; saveCampaign(); if(typeof flashToast==='function') flashToast('Saved to "'+_enm+'"'); renderCampaignPanel(); };
+    const cancelB=document.createElement('button'); cancelB.textContent='Done'; cancelB.title='Stop editing this campaign level'; cancelB.onclick=()=>{ campaignEditIdx=-1; renderCampaignPanel(); };
+    er.appendChild(saveB); er.appendChild(cancelB); host.appendChild(er);
+  }
   const st=document.createElement('div'); st.className='hint'; st.style.margin='6px 0 2px'; st.textContent = campaign.levels.length ? (campaign.levels.length+' level'+(campaign.levels.length>1?'s':'')+':') : 'No levels yet.';
   host.appendChild(st);
-  campaign.levels.forEach((lv,i)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;align-items:center;gap:6px;font-size:12px;color:#cfeee2;margin:2px 0;';
-    const lab=document.createElement('span'); lab.style.flex='1'; const obj=(lv.game&&lv.game.objective)||'eliminate'; lab.textContent=(i+1)+'. '+obj+' \u00b7 '+((lv.props&&lv.props.length)||0)+' props';
-    const up=document.createElement('button'); up.textContent='\u25b2'; up.style.cssText='padding:1px 6px'; up.onclick=()=>{ if(i>0){ const t=campaign.levels[i-1]; campaign.levels[i-1]=campaign.levels[i]; campaign.levels[i]=t; saveCampaign(); renderCampaignPanel(); } };
-    const dn=document.createElement('button'); dn.textContent='\u25bc'; dn.style.cssText='padding:1px 6px'; dn.onclick=()=>{ if(i<campaign.levels.length-1){ const t=campaign.levels[i+1]; campaign.levels[i+1]=campaign.levels[i]; campaign.levels[i]=t; saveCampaign(); renderCampaignPanel(); } };
-    const del=document.createElement('button'); del.textContent='\u2715'; del.style.cssText='padding:1px 7px'; del.onclick=()=>{ campaign.levels.splice(i,1); saveCampaign(); renderCampaignPanel(); };
-    r.appendChild(lab); r.appendChild(up); r.appendChild(dn); r.appendChild(del); host.appendChild(r); });
+  campaign.levels.forEach((lv,i)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;align-items:center;gap:5px;font-size:12px;color:#cfeee2;margin:2px 0;'+((i===campaignEditIdx)?'outline:1px solid #38f5b5;border-radius:5px;padding:2px 3px;':'');
+    const nm=document.createElement('input'); nm.type='text'; nm.value=(lv.name!=null?lv.name:('Level '+(i+1))); nm.title=((lv.game&&lv.game.objective)||'eliminate')+' · '+((lv.props&&lv.props.length)||0)+' props'; nm.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 6px;font-size:12px;'; nm.onchange=()=>{ lv.name=nm.value.trim()||('Level '+(i+1)); saveCampaign(); };
+    const ed=document.createElement('button'); ed.textContent='Edit'; ed.title='Load this level back into the editor to change it'; ed.style.cssText='padding:1px 7px;font-size:11px;'; ed.onclick=()=>{ if(typeof pushUndoSnapshot==='function') pushUndoSnapshot(); restoreLevel(campaign.levels[i]); campaignEditIdx=i; if(typeof renderEditorFields==='function') renderEditorFields(); if(typeof flashToast==='function') flashToast('Editing "'+(lv.name||('Level '+(i+1)))+'" - Save to campaign when done'); };
+    const up=document.createElement('button'); up.textContent='▲'; up.style.cssText='padding:1px 6px'; up.onclick=()=>{ if(i>0){ const t=campaign.levels[i-1]; campaign.levels[i-1]=campaign.levels[i]; campaign.levels[i]=t; campaignEditIdx=-1; saveCampaign(); renderCampaignPanel(); } };
+    const dn=document.createElement('button'); dn.textContent='▼'; dn.style.cssText='padding:1px 6px'; dn.onclick=()=>{ if(i<campaign.levels.length-1){ const t=campaign.levels[i+1]; campaign.levels[i+1]=campaign.levels[i]; campaign.levels[i]=t; campaignEditIdx=-1; saveCampaign(); renderCampaignPanel(); } };
+    const del=document.createElement('button'); del.textContent='✕'; del.style.cssText='padding:1px 7px'; del.onclick=()=>{ campaign.levels.splice(i,1); campaignEditIdx=-1; saveCampaign(); renderCampaignPanel(); };
+    r.appendChild(nm); r.appendChild(ed); r.appendChild(up); r.appendChild(dn); r.appendChild(del); host.appendChild(r); });
 }
 
 // ---------- Editor undo (Ctrl+Z) ----------
