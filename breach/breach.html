@@ -7158,7 +7158,8 @@ function randomWaveDescriptors(waveNum, arena, rng){
   return out;
 }
 // Should a spawn marker appear on this wave? wave 0 = every wave (back-compat default); else exact match.
-function spawnAppearsOnWave(mark, waveNum){ const w = mark.wave||0; return w===0 || w===waveNum; }
+function spawnAppearsOnWave(mark, waveNum){ const w0 = mark.wave||0; if(typeof gameCfg!=='undefined' && gameCfg.noRespawn){ const w=(w0===0?1:w0); return w===waveNum; } return w0===0 || w0===waveNum; }
+function _hasFutureAuthoredSpawns(curWaveNum){ for(const g of spawnMarkers){ const w0=g.userData.mark.wave||0; const w=(gameCfg.noRespawn && w0===0)?1:w0; if(w>curWaveNum) return true; } return false; }
 function descFromMarker(g){ const m=g.userData.mark; return { x:g.position.x, z:g.position.z, mode:m.mode, patrolR:m.radius, detectR:m.detect, face:m.face, route:m.route.map(p=>({x:p.x,z:p.z})), routeLoop:m.routeLoop, type:m.type||'grunt' }; }
 // Mode defaults preserve old levels: markers present -> pre-built (markers were wave 0 = every wave); else random.
 let gameCfg = {
@@ -7170,6 +7171,7 @@ let gameCfg = {
   extractHold: (savedLevel && savedLevel.game && savedLevel.game.extractHold!=null) ? savedLevel.game.extractHold : 5,
   extractRadius: (savedLevel && savedLevel.game && savedLevel.game.extractRadius!=null) ? savedLevel.game.extractRadius : 3.5,
   bossWave: (savedLevel && savedLevel.game && savedLevel.game.bossWave!=null) ? savedLevel.game.bossWave : 5,   // random mode: spawn a BOSS every Nth wave (0 = never)
+  noRespawn: !!(savedLevel && savedLevel.game && savedLevel.game.noRespawn),   // pre-built: spawn authored markers once, don't respawn cleared waves
 };
 
 // ---------- Player start (where you/co-op players spawn each run; authored in-editor) ----------
@@ -8627,7 +8629,8 @@ function loadLevelFromNet(level){
   if(level.audio && NET.mode!=='client'){ try{ audioSettings.musicUrl=(typeof level.audio.musicUrl==='string')?level.audio.musicUrl:''; audioSettings.sounds=_sanitizeSounds(level.audio.sounds); if(typeof saveAudioSettings==='function') saveAudioSettings(); if(typeof preloadCustomSounds==='function') preloadCustomSounds(); if(_musicOn){ stopMusic(); startMusic(); } }catch(e){ console.warn('level audio apply failed', e); } }
   if(level.cine){ const lc=level.cine; cineCfg.on=!!lc.on; cineCfg.path=Array.isArray(lc.path)?lc.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lensFrom=+lc.lensFrom||+lc.lens||35; cineCfg.lensTo=+lc.lensTo||+lc.lens||cineCfg.lensFrom; cineCfg.focusOn=!!lc.focusOn; cineCfg.focusFrom=+lc.focusFrom||8; cineCfg.focusTo=+lc.focusTo||cineCfg.focusFrom; cineCfg.dur=+lc.dur||6; cineCfg.look=(lc.look==='path')?'path':'spawn'; } else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; }
   // per-player characters: the client keeps its own avatar; the host's character arrives via the welcome 'char' field
-  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; }
+  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; gameCfg.noRespawn = !!level.game.noRespawn; }
+  extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null; if(typeof refreshExtractMarker==='function') refreshExtractMarker();   // restore the per-level extraction spot (campaign / co-op load path)
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; refreshPlayerSpawnMarker(); }
   if(level.weapons){ for(const k in WEAPONS){ const wd=level.weapons[k]; if(wd){ WEAPONS[k].model=wd.model||''; WEAPONS[k].view=wd.view||null; } } }
@@ -9919,7 +9922,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 270 · 2026-06-08';
+const BUILD_VERSION = 'build 272 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12077,7 +12080,9 @@ function loop(){
       spawnTimer-=dt;
       if(spawnTimer<=0){ spawnEnemy(spawnQueue.length ? spawnQueue.shift() : null); toSpawn--; spawnTimer=0.6; updateHUD(); }
     } else if(enemies.length===0){
+      const _cleared = gameCfg.noRespawn && gameCfg.mode==='prebuilt' && !_hasFutureAuthoredSpawns(wave);   // single-pass: authored spawns exhausted -> field stays clear (no respawn, no empty-wave loop)
       if(objectiveActive()==='eliminate' && gameCfg.winWaves>0 && wave>=gameCfg.winWaves){ if(typeof gameWon==='function') gameWon(); }
+      else if(_cleared){ if(objectiveActive()==='eliminate'){ if(typeof gameWon==='function') gameWon(); } }   // eliminate wins on clear; extraction/survival just hold the cleared field and finish via the objective
       else if(NET.mode==='off' && gameCfg.upgrades !== false){ beginUpgradeChoice(); }   // solo + enabled: pick an upgrade between waves
       else { wave++; SFX.wave(); startWave(); }
     }
@@ -12830,7 +12835,7 @@ function serializeLevel(){
     pickupsOn: pickupsOn,
     pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind })),
     pickupModels: Object.keys(pickupModels).reduce((a,k)=>{ const m=pickupModels[k]; if(m&&m.url){ a[k]={ url:m.url, scale:m.scale||1 }; } return a; }, {}),
-    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave },
+    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave, noRespawn: !!gameCfg.noRespawn },
     dmgNum:  { on: dmgNumCfg.on !== false, size: dmgNumCfg.size, hit: dmgNumCfg.hitColor, kill: dmgNumCfg.killColor },
     pstart:  { x: playerSpawn.x, z: playerSpawn.z, yaw: playerSpawn.yaw },
     extract: extractSpot ? { x: +extractSpot.x.toFixed(3), z: +extractSpot.z.toFixed(3) } : null,
@@ -12914,7 +12919,7 @@ function restoreLevel(level){
   // enemy spawns
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns) buildSpawnMarker(sp); } setSpawnMarkersVisible(editorOpen);
-  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; }
+  if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; gameCfg.noRespawn = !!level.game.noRespawn; }
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; } else { playerSpawn.x=0; playerSpawn.z=0; playerSpawn.yaw=0; }
   refreshPlayerSpawnMarker();
@@ -13708,6 +13713,15 @@ function renderEditorFields(){
     hint(gHost, '', '3px 0 6px').textContent = (gameCfg.mode==='prebuilt')
       ? 'Pre-built: each wave spawns the enemy markers assigned to it (set “Appears on wave” per spawn on the Spawns tab; 0 = every wave).'
       : 'Random: each wave auto-spawns scattered, mixed-type hostiles that scale with the wave number.';
+    if(gameCfg.mode==='prebuilt'){
+      const nrLab=document.createElement('label'); nrLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 4px;cursor:pointer;';
+      const nrCb=document.createElement('input'); nrCb.type='checkbox'; nrCb.checked=!!gameCfg.noRespawn; nrCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+      nrCb.onchange=()=>{ pushUndoSnapshot(); gameCfg.noRespawn=nrCb.checked; renderEditorFields(); };
+      const nrSp=document.createElement('span'); nrSp.innerHTML='<b>No respawn</b> (single pass)'; nrLab.appendChild(nrCb); nrLab.appendChild(nrSp); gHost.appendChild(nrLab);
+      hint(gHost,'','0 0 6px').textContent = gameCfg.noRespawn
+        ? 'Each spawn fires once on its wave (0 = wave 1); after the last authored wave is cleared the field stays empty. Eliminate wins on the final clear; extraction/survival finish via their own goal.'
+        : 'Cleared waves auto-advance and respawn (markers set to 0 = every wave keep coming back). Turn this on to fight the placed enemies once and then leave the field clear.';
+    }
     const wwLab=document.createElement('label'); wwLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;';
     const wwSp=document.createElement('span'); wwSp.textContent='Win after N waves'; wwSp.style.minWidth='118px';
     const wwN=document.createElement('input'); wwN.type='number'; wwN.min='0'; wwN.max='99'; wwN.step='1'; wwN.value=gameCfg.winWaves; wwN.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
