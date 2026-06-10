@@ -8598,7 +8598,7 @@ function loadLevelFromNet(level){
   pickupSpots = Array.isArray(level.pickups) ? level.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : []; pickupModels = (level.pickupModels && typeof level.pickupModels==='object') ? JSON.parse(JSON.stringify(level.pickupModels)) : {}; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }   // adopt the host's sky / ground / fog
   if(level.audio && NET.mode!=='client'){ try{ audioSettings.musicUrl=(typeof level.audio.musicUrl==='string')?level.audio.musicUrl:''; audioSettings.sounds=_sanitizeSounds(level.audio.sounds); if(typeof saveAudioSettings==='function') saveAudioSettings(); if(typeof preloadCustomSounds==='function') preloadCustomSounds(); if(_musicOn){ stopMusic(); startMusic(); } }catch(e){ console.warn('level audio apply failed', e); } }
-  if(level.cine){ cineCfg.on=!!level.cine.on; cineCfg.path=Array.isArray(level.cine.path)?level.cine.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lens=+level.cine.lens||35; cineCfg.dur=+level.cine.dur||6; cineCfg.look=(level.cine.look==='path')?'path':'spawn'; } else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lens=35; cineCfg.dur=6; cineCfg.look='spawn'; }
+  if(level.cine){ const lc=level.cine; cineCfg.on=!!lc.on; cineCfg.path=Array.isArray(lc.path)?lc.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lensFrom=+lc.lensFrom||+lc.lens||35; cineCfg.lensTo=+lc.lensTo||+lc.lens||cineCfg.lensFrom; cineCfg.focusOn=!!lc.focusOn; cineCfg.focusFrom=+lc.focusFrom||8; cineCfg.focusTo=+lc.focusTo||cineCfg.focusFrom; cineCfg.dur=+lc.dur||6; cineCfg.look=(lc.look==='path')?'path':'spawn'; } else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; }
   // per-player characters: the client keeps its own avatar; the host's character arrives via the welcome 'char' field
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; }
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
@@ -9892,7 +9892,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 258 · 2026-06-08';
+const BUILD_VERSION = 'build 259 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11616,8 +11616,8 @@ function updatePerfHud(){
 // Reuses pointAlongPath. The camera rides cineCfg.path over cineCfg.dur seconds, framing either the player
 // start ('spawn') or its travel direction ('path'), letterboxed with the HUD hidden. Any input skips it.
 // Disabled / no path => deploy behaves exactly as before. Editor 'Preview' reuses the same engine.
-let cineCfg = { on:false, path:[], lens:35, dur:6, look:'spawn' };
-let _cineActive=false, _cineT=0, _cineData=null, _cineReturn=null, _cineEditorPreview=false;
+let cineCfg = { on:false, path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn' };
+let _cineActive=false, _cineT=0, _cineData=null, _cineReturn=null, _cineEditorPreview=false, _cinePreviewGroup=null;
 const _cineV0=new THREE.Vector3(), _cineTgt=new THREE.Vector3();
 (function(){ if(!document.getElementById('cineCss')){ const st=document.createElement('style'); st.id='cineCss'; st.textContent='body.cine #hud,body.cine #touchUI,body.cine #pauseBtn,body.cine #prompt{display:none !important;}'; (document.head||document.documentElement).appendChild(st); } })();
 function _cineBarsEl(){
@@ -11644,9 +11644,11 @@ function lensToFov(mm){ const f=Math.max(8, +mm||35), sensorH=24; return 2*Math.
 function cineHasData(){ return !!(cineCfg && cineCfg.path && cineCfg.path.length>=1); }
 function startCinematic(data, editorPreview){
   if(!data || !data.path || !data.path.length) return false;
-  _cineData={ path:data.path.map(q=>q.slice()), lens:+data.lens||35, dur:Math.max(0.2,+data.dur||6), look:(data.look==='path'?'path':'spawn') };
+  _cineData={ path:data.path.map(q=>q.slice()), lensFrom:+data.lensFrom||35, lensTo:+data.lensTo||(+data.lensFrom||35), focusOn:!!data.focusOn, focusFrom:+data.focusFrom||8, focusTo:+data.focusTo||(+data.focusFrom||8), dur:Math.max(0.2,+data.dur||6), look:(data.look==='path'?'path':'spawn') };
   _cineActive=true; _cineT=0; _cineEditorPreview=!!editorPreview;
-  _cineReturn={ x:camera.position.x, y:camera.position.y, z:camera.position.z, q:camera.quaternion.clone(), fov:camera.fov };
+  _cineReturn={ x:camera.position.x, y:camera.position.y, z:camera.position.z, q:camera.quaternion.clone(), fov:camera.fov, dofEn:dofEnabled, dofF:dofFocus };
+  if(_cineData.focusOn && !IS_COARSE) dofEnabled=true;   // rack focus needs DoF (skipped on mobile where DoF is off)
+  if(_cinePreviewGroup) _cinePreviewGroup.visible=false;   // hide the authoring path during the shot
   if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false;
   if(typeof selBox!=='undefined' && selBox) selBox.visible=false;
   document.body.classList.add('cine'); _cineShowBars(true);
@@ -11655,9 +11657,10 @@ function startCinematic(data, editorPreview){
 function endCinematic(){
   if(!_cineActive) return;
   _cineActive=false; _cineShowBars(false); document.body.classList.remove('cine');
-  if(_cineReturn){ camera.fov=_cineReturn.fov; camera.updateProjectionMatrix(); if(_cineEditorPreview){ camera.position.set(_cineReturn.x,_cineReturn.y,_cineReturn.z); camera.quaternion.copy(_cineReturn.q); } }
+  if(_cineReturn){ camera.fov=_cineReturn.fov; camera.updateProjectionMatrix(); dofEnabled=_cineReturn.dofEn; dofFocus=_cineReturn.dofF; if(_cineEditorPreview){ camera.position.set(_cineReturn.x,_cineReturn.y,_cineReturn.z); camera.quaternion.copy(_cineReturn.q); } }
   _cineReturn=null; _cineData=null; _cineEditorPreview=false;
   if(typeof clearMovementInput==='function') clearMovementInput();
+  if(typeof refreshCinePreview==='function') refreshCinePreview();
 }
 function updateCinematic(dt){
   const d=_cineData; if(!d){ endCinematic(); return; }
@@ -11670,10 +11673,24 @@ function updateCinematic(dt){
   if(d.look==='path' && path.length>=2){ const a=pointAlongPath(path, Math.min(1,te+0.02), false); _cineTgt.set(a[0],a[1],a[2]); if(_cineTgt.distanceToSquared(_cineV0)<1e-4) _cineTgt.set(playerSpawn.x, EYE, playerSpawn.z); }
   else { _cineTgt.set(playerSpawn.x, EYE, playerSpawn.z); }
   camera.lookAt(_cineTgt);
-  camera.fov=lensToFov(d.lens); camera.updateProjectionMatrix();
+  const lens = d.lensFrom + (d.lensTo - d.lensFrom)*te;          // zoom keyframe: focal-length ramp over the shot
+  camera.fov=lensToFov(lens); camera.updateProjectionMatrix();
+  if(d.focusOn && !IS_COARSE){ dofEnabled=true; dofFocus = d.focusFrom + (d.focusTo - d.focusFrom)*te; }   // rack focus: focus-distance ramp
   if(_cineT>=d.dur) endCinematic();
 }
-function maybeStartIntroCine(){ if(cineCfg.on && cineHasData()) startCinematic({ path:cineCfg.path, lens:cineCfg.lens, dur:cineCfg.dur, look:cineCfg.look }, false); }
+function maybeStartIntroCine(){ if(cineCfg.on && cineHasData()) startCinematic({ path:cineCfg.path, lensFrom:cineCfg.lensFrom, lensTo:cineCfg.lensTo, focusOn:cineCfg.focusOn, focusFrom:cineCfg.focusFrom, focusTo:cineCfg.focusTo, dur:cineCfg.dur, look:cineCfg.look }, false); }
+function refreshCinePreview(){
+  try{
+    if(_cinePreviewGroup){ scene.remove(_cinePreviewGroup); _cinePreviewGroup.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); _cinePreviewGroup=null; }
+    if(!editorOpen || !cineCfg.path || !cineCfg.path.length) return;
+    const g=new THREE.Group();
+    const pts=cineCfg.path.map(q=>new THREE.Vector3(q[0],q[1],q[2]));
+    if(pts.length>=2){ const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineDashedMaterial({ color:0xffcf6b, dashSize:0.7, gapSize:0.45, transparent:true, opacity:0.9, depthTest:false })); line.computeLineDistances(); line.renderOrder=998; g.add(line); }
+    if(pts.length>=1 && typeof playerSpawn!=='undefined'){ const aim=new THREE.Line(new THREE.BufferGeometry().setFromPoints([pts[pts.length-1], new THREE.Vector3(playerSpawn.x, EYE, playerSpawn.z)]), new THREE.LineDashedMaterial({ color:0x4aa3ff, dashSize:0.5, gapSize:0.6, transparent:true, opacity:0.45, depthTest:false })); aim.computeLineDistances(); aim.renderOrder=998; g.add(aim); }
+    cineCfg.path.forEach((q,i)=>{ const m=new THREE.Mesh(new THREE.SphereGeometry(0.4,10,8), new THREE.MeshBasicMaterial({ color: i===0?0x38f5b5:0xffcf6b, depthTest:false })); m.position.set(q[0],q[1],q[2]); m.renderOrder=999; g.add(m); });
+    scene.add(g); _cinePreviewGroup=g;
+  }catch(e){ /* path preview is cosmetic; never let it break the editor */ }
+}
 addEventListener('pointerdown', ()=>{ if(_cineActive) endCinematic(); });
 function loop(){
   requestAnimationFrame(loop);
@@ -11681,6 +11698,7 @@ function loop(){
   let dt = rawDt;
   updatePerfHud();   // measure real frame time every frame (before any early-out)
   if(_pathPreviewGroup && !editorOpen){ scene.remove(_pathPreviewGroup); try{ _pathPreviewGroup.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); }catch(e){} _pathPreviewGroup=null; }   // editor waypoint markers never linger into play
+  if(_cinePreviewGroup && !editorOpen){ scene.remove(_cinePreviewGroup); try{ _cinePreviewGroup.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); }catch(e){} _cinePreviewGroup=null; }   // cine path preview is editor-only
   { const v = gameOn && !gameOver && !shopOpen && !editorOpen && !choosingUpgrade && !paused;   // show ❚❚ only during live play
     if(v!==_pbShow){ _pbShow=v; const pb=document.getElementById('pauseBtn'); if(pb) pb.style.display = v?'flex':'none'; } }
   if(hitStop > 0){ hitStop -= rawDt; dt = rawDt * 0.12; }   // impact freeze: slow the sim briefly (real-time countdown)
@@ -12725,7 +12743,7 @@ function serializeLevel(){
     extract: extractSpot ? { x: +extractSpot.x.toFixed(3), z: +extractSpot.z.toFixed(3) } : null,
     grenade: { model: GRENADE.model, scale: GRENADE.scale, radius: GRENADE.radius, damage: GRENADE.damage, fuse: GRENADE.fuse, throwForce: GRENADE.throwForce },
     audio:   { musicUrl: (audioSettings.musicUrl||''), sounds: _sanitizeSounds(audioSettings.sounds) },   // music track + custom SFX travel with the level (volumes/mute stay per-device)
-    cine:    { on: cineCfg.on, path: cineCfg.path.map(q=>q.slice()), lens: cineCfg.lens, dur: cineCfg.dur, look: cineCfg.look },
+    cine:    { on: cineCfg.on, path: cineCfg.path.map(q=>q.slice()), lensFrom: cineCfg.lensFrom, lensTo: cineCfg.lensTo, focusOn: cineCfg.focusOn, focusFrom: cineCfg.focusFrom, focusTo: cineCfg.focusTo, dur: cineCfg.dur, look: cineCfg.look },
   };
 }
 function saveLevel(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(serializeLevel())); return true; } catch(e){ return false; } }
@@ -12817,7 +12835,7 @@ function restoreLevel(level){
   // world + loot
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }
   if(level.audio){ try{ audioSettings.musicUrl=(typeof level.audio.musicUrl==='string')?level.audio.musicUrl:''; audioSettings.sounds=_sanitizeSounds(level.audio.sounds); if(typeof saveAudioSettings==='function') saveAudioSettings(); if(typeof preloadCustomSounds==='function') preloadCustomSounds(); if(_musicOn){ stopMusic(); startMusic(); } }catch(e){ console.warn('level audio apply failed', e); } }
-  if(level.cine){ cineCfg.on=!!level.cine.on; cineCfg.path=Array.isArray(level.cine.path)?level.cine.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lens=+level.cine.lens||35; cineCfg.dur=+level.cine.dur||6; cineCfg.look=(level.cine.look==='path')?'path':'spawn'; } else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lens=35; cineCfg.dur=6; cineCfg.look='spawn'; }
+  if(level.cine){ const lc=level.cine; cineCfg.on=!!lc.on; cineCfg.path=Array.isArray(lc.path)?lc.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lensFrom=+lc.lensFrom||+lc.lens||35; cineCfg.lensTo=+lc.lensTo||+lc.lens||cineCfg.lensFrom; cineCfg.focusOn=!!lc.focusOn; cineCfg.focusFrom=+lc.focusFrom||8; cineCfg.focusTo=+lc.focusTo||cineCfg.focusFrom; cineCfg.dur=+lc.dur||6; cineCfg.look=(lc.look==='path')?'path':'spawn'; } else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; }
   if(level.player) applyPlayerLevel(level.player);
   if(level.chest){ chestModelUrl = level.chest.url||''; chestModelScale = level.chest.scale||1; }
   if(level.coin){ const c=level.coin; coinCfg.url=c.url||''; coinCfg.scale=c.scale||1; coinCfg.on=c.on!==false; }
@@ -13370,16 +13388,28 @@ function renderEditorFields(){
       if(cineCfg.path.length){
         cineCfg.path.forEach((pt,i)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;align-items:center;gap:6px;font-size:11px;color:#9fe6cf;margin:2px 0;';
           const lab=document.createElement('span'); lab.textContent=(i===0?'Start':('Pt '+i)); lab.style.flex='1';
-          const go=document.createElement('button'); go.textContent='Move here'; go.style.cssText='padding:1px 7px;font-size:10px;'; go.onclick=()=>{ pushUndoSnapshot(); cineCfg.path[i]=[+camera.position.x.toFixed(3),+camera.position.y.toFixed(3),+camera.position.z.toFixed(3)]; };
+          const go=document.createElement('button'); go.textContent='Move here'; go.style.cssText='padding:1px 7px;font-size:10px;'; go.onclick=()=>{ pushUndoSnapshot(); cineCfg.path[i]=[+camera.position.x.toFixed(3),+camera.position.y.toFixed(3),+camera.position.z.toFixed(3)]; if(typeof refreshCinePreview==='function') refreshCinePreview(); };
           const del=document.createElement('button'); del.textContent='✕'; del.style.cssText='padding:1px 7px;font-size:10px;'; del.onclick=()=>{ pushUndoSnapshot(); cineCfg.path.splice(i,1); renderEditorFields(); };
           r.appendChild(lab); r.appendChild(go); r.appendChild(del); b.appendChild(r); });
         const clr=document.createElement('button'); clr.textContent='Clear path'; clr.style.cssText='padding:3px 10px;font-size:11px;margin:3px 0;'; clr.onclick=()=>{ pushUndoSnapshot(); cineCfg.path.length=0; renderEditorFields(); }; b.appendChild(clr);
       }
       const crow=(lab,val,mn,mx,st,suffix,set)=>{ const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent=lab; sp.style.minWidth='56px'; const inp=document.createElement('input'); inp.type='range'; inp.min=mn; inp.max=mx; inp.step=st; inp.value=val; inp.style.flex='1'; inp.style.accentColor='#38f5b5'; const nm=document.createElement('span'); nm.textContent=val+suffix; nm.style.minWidth='44px'; nm.style.textAlign='right'; inp.oninput=()=>{ nm.textContent=inp.value+suffix; set(+inp.value); }; r.appendChild(sp); r.appendChild(inp); r.appendChild(nm); b.appendChild(r); };
-      crow('Lens', cineCfg.lens, 14, 120, 1, 'mm', v=>{ cineCfg.lens=v; });
+      crow('Lens start', cineCfg.lensFrom, 14, 120, 1, 'mm', v=>{ cineCfg.lensFrom=v; });
+      crow('Lens end', cineCfg.lensTo, 14, 120, 1, 'mm', v=>{ cineCfg.lensTo=v; });
+      hint(b,'Different start/end lens = a zoom across the shot (e.g. 35 to 85 pushes in).','0 0 4px');
+      { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0 2px;cursor:pointer;';
+        const c=document.createElement('input'); c.type='checkbox'; c.checked=!!cineCfg.focusOn; c.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+        c.onchange=()=>{ pushUndoSnapshot(); cineCfg.focusOn=c.checked; renderEditorFields(); };
+        const sp=document.createElement('span'); sp.innerHTML='<b>Rack focus</b> (depth of field)'; r.appendChild(c); r.appendChild(sp); b.appendChild(r); }
+      if(cineCfg.focusOn){
+        crow('Focus start', cineCfg.focusFrom, 1, 120, 1, 'm', v=>{ cineCfg.focusFrom=v; });
+        crow('Focus end', cineCfg.focusTo, 1, 120, 1, 'm', v=>{ cineCfg.focusTo=v; });
+        hint(b,'Focus distance pulls from start to end over the shot. Needs depth of field, which is off on mobile.','0 0 4px');
+      }
       crow('Duration', cineCfg.dur, 1, 20, 0.5, 's', v=>{ cineCfg.dur=v; });
       { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent='Framing'; sp.style.minWidth='56px'; const sel=document.createElement('select'); sel.style.cssText='flex:1;font-size:11px;'; [['spawn','Aim at player start'],['path','Look along path']].forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(cineCfg.look===o[0]) op.selected=true; sel.appendChild(op); }); sel.onchange=()=>{ cineCfg.look=sel.value; }; r.appendChild(sp); r.appendChild(sel); b.appendChild(r); }
-      { const prev=document.createElement('button'); prev.textContent='▶ Preview'; prev.style.cssText='width:100%;padding:6px 8px;font-size:12px;cursor:pointer;margin-top:4px;'; prev.disabled=!cineCfg.path.length; prev.onclick=()=>{ startCinematic({ path:cineCfg.path, lens:cineCfg.lens, dur:cineCfg.dur, look:cineCfg.look }, true); }; b.appendChild(prev); } }
+      { const prev=document.createElement('button'); prev.textContent='▶ Preview'; prev.style.cssText='width:100%;padding:6px 8px;font-size:12px;cursor:pointer;margin-top:4px;'; prev.disabled=!cineCfg.path.length; prev.onclick=()=>{ startCinematic({ path:cineCfg.path, lensFrom:cineCfg.lensFrom, lensTo:cineCfg.lensTo, focusOn:cineCfg.focusOn, focusFrom:cineCfg.focusFrom, focusTo:cineCfg.focusTo, dur:cineCfg.dur, look:cineCfg.look }, true); }; b.appendChild(prev); }
+      if(typeof refreshCinePreview==='function') refreshCinePreview(); }
     { const b=subSec('Walls','walls',true);
       { const vr=document.createElement('label'); vr.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 6px;cursor:pointer;';
         const vc=document.createElement('input'); vc.type='checkbox'; vc.checked=(worldCfg.wallsVisible!==false); vc.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
@@ -14819,6 +14849,7 @@ function toggleEditor(){
     if(isTouch){ editorFreeFly=true; flyInit=false; }   // mobile: fly-around editing (joystick moves, drag the left side to look)
     for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible = true; }
     if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(true);
+    if(typeof refreshCinePreview==='function') refreshCinePreview();   // show the dotted camera path while editing
     const mm=$('minimap'); if(mm) mm.style.display='none';        // declutter combat HUD while editing
     const wp=$('wavePanel'); if(wp) wp.style.display='none';
     if(typeof applyEditorMode==='function') applyEditorMode();
