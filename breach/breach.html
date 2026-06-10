@@ -7569,6 +7569,7 @@ addEventListener('wheel', e=>{
     if(editorTopView){ topZoom = Math.max(6, Math.min(110, topZoom + e.deltaY*0.04)); e.preventDefault(); }
     return;   // no weapon switching while editing
   }
+  if(heldProp) return;   // while holding a prop the wheel controls its distance only (see the held-prop wheel handler), not weapon switching
   if(gameOn && !shopOpen) cycleWeapon(e.deltaY>0?1:-1);
 }, {passive:false});
 
@@ -10018,7 +10019,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 287 · 2026-06-08';
+const BUILD_VERSION = 'build 288 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
