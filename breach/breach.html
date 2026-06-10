@@ -8850,7 +8850,7 @@ function applyObjectiveSnapshot(O, wv){
   if(O.o==='extraction'){
     buildExtractZone();
     const R=O.er||3.5; extractZone.scale.set(R,1,R);
-    if(O.ex){ extractPos.set(O.ex[0],0,O.ex[1]); extractZone.position.set(O.ex[0],0,O.ex[1]); }
+    if(O.ex){ extractPos.set(O.ex[0],0,O.ex[1]); extractZone.position.set(O.ex[0], _maxTerrainOver(O.ex[0],O.ex[1], gameCfg.extractRadius||3.5), O.ex[1]); }
     extractZone.visible=true; _clientBeaconOn=true;
     const H=O.eh||5;
     if(wn) wn.textContent = ((+O.h)>0.05) ? ('EXTRACTING '+(+O.h).toFixed(1)+' / '+H) : 'REACH EXTRACTION';
@@ -9919,7 +9919,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 268 · 2026-06-08';
+const BUILD_VERSION = 'build 269 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11424,7 +11424,7 @@ function refreshExtractMarker(){
   const R = gameCfg.extractRadius || 3.5;
   extractZone.scale.set(R, 1, R);
   const p = currentExtractXZ();
-  extractPos.set(p.x, 0, p.z); extractZone.position.set(p.x, 0, p.z);
+  extractPos.set(p.x, 0, p.z); extractZone.position.set(p.x, _maxTerrainOver(p.x, p.z, R), p.z);   // beacon clears the terrain under its radius; extractPos stays flat (in-zone test is 2D)
 }
 function placeExtraction(){
   refreshExtractMarker();
@@ -14613,7 +14613,7 @@ function setSelPos(v){
     playerSpawn.x=v.x; playerSpawn.z=v.z; refreshPlayerSpawnMarker();   // player start lives on the floor
   } else if(editorActive==='extract'){
     const lim=ARENA*0.85; const x=Math.max(-lim,Math.min(lim,v.x)), z=Math.max(-lim,Math.min(lim,v.z));
-    extractSpot={x,z}; extractPos.set(x,0,z); if(extractZone) extractZone.position.set(x,0,z);   // extraction sits on the floor
+    extractSpot={x,z}; extractPos.set(x,0,z); if(extractZone) extractZone.position.set(x, _maxTerrainOver(x, z, gameCfg.extractRadius||3.5), z);   // extraction sits on the terrain
   }
 }
 // --- rotation (Euler, radians) of the selected object, for the rotate gizmo ---
