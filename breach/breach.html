@@ -647,7 +647,7 @@
   <div class="modalCard">
     <button class="modalClose" data-close="charPicker">✕</button>
     <h2>CHOOSE A CHARACTER</h2>
-    <div class="mpDesc">Pick your color — other players see it in co-op and PvP.</div>
+    <div class="mpDesc">Pick your character and color — other players see them in co-op and PvP.</div>
     <div id="charGrid"></div>
   </div>
 </div>
@@ -8708,6 +8708,7 @@ function loadLevelFromNet(level){
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; gameCfg.noRespawn = !!level.game.noRespawn; }
   extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null; if(typeof refreshExtractMarker==='function') refreshExtractMarker();   // restore the per-level extraction spot (campaign / co-op load path)
   audioZones = Array.isArray(level.audioZones) ? level.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : []; if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
+  charRoster = Array.isArray(level.roster) ? level.roster.map(_sanitizeCharCfg) : []; if(typeof renderCharRosterPanel==='function') renderCharRosterPanel();
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; refreshPlayerSpawnMarker(); }
   if(level.weapons){ for(const k in WEAPONS){ const wd=level.weapons[k]; if(wd){ WEAPONS[k].model=wd.model||''; WEAPONS[k].view=wd.view||null; } } }
@@ -8733,6 +8734,9 @@ const remoteBodyGeo = new THREE.CapsuleGeometry(0.5, 1.2, 4, 8);
 // ---- Player avatar (what teammates / duel opponents see). Default = blue capsule; swappable for a GLB. ----
 const PLAYER_MODEL0 = { url:'', scale:1, face:0, rx:0, rz:0, yoff:0, xoff:0, zoff:0, clips:{ idle:'', walk:'', run:'', attack:'' } };   // face/rx/rz in radians
 let playerModelCfg = Object.assign({}, PLAYER_MODEL0, { clips:{ idle:'', walk:'', run:'', attack:'' } });
+function _sanitizeCharCfg(c){ c=c||{}; return { name:(typeof c.name==='string'&&c.name)||'Character', url:c.url||'', scale:+c.scale||1, face:+c.face||0, rx:+c.rx||0, rz:+c.rz||0, xoff:+c.xoff||0, yoff:+c.yoff||0, zoff:+c.zoff||0, clips:Object.assign({idle:'',walk:'',run:'',attack:''}, (c.clips&&typeof c.clips==='object')?c.clips:{}) }; }
+let charRoster = (savedLevel && Array.isArray(savedLevel.roster)) ? savedLevel.roster.map(_sanitizeCharCfg) : [];   // authored multiplayer character models
+let myRosterIdx = -1;   // which roster character the local player picked (-1 = default player model)
 const CHARACTERS = [
   { name:'Ranger',  color:0x57e389 },
   { name:'Viper',   color:0xb072ff },
@@ -8794,7 +8798,7 @@ function buildAvatarVisual(g, cfg){
 }
 function rebuildAvatars(){ for(const id in NET.players){ const rp=NET.players[id]; if(rp && rp.mesh) buildAvatarVisual(rp.mesh, rp.modelCfg); } if(typeof previewAvatar!=='undefined' && previewAvatar) buildAvatarVisual(previewAvatar); _scheduleCharBroadcast(); }
 // ---- per-player characters: each player owns + broadcasts their avatar config; others build from it ----
-function myCharCfg(){ const c=playerModelCfg; return { url:c.url||'', scale:c.scale||1, face:c.face||0, rx:c.rx||0, rz:c.rz||0, xoff:c.xoff||0, yoff:c.yoff||0, zoff:c.zoff||0, clips:Object.assign({}, c.clips||{}), tint:(CHARACTERS[myCharIdx]?CHARACTERS[myCharIdx].color:null) }; }
+function myCharCfg(){ const c=(myRosterIdx>=0 && charRoster[myRosterIdx]) ? charRoster[myRosterIdx] : playerModelCfg; return { url:c.url||'', scale:c.scale||1, face:c.face||0, rx:c.rx||0, rz:c.rz||0, xoff:c.xoff||0, yoff:c.yoff||0, zoff:c.zoff||0, clips:Object.assign({}, c.clips||{}), tint:(CHARACTERS[myCharIdx]?CHARACTERS[myCharIdx].color:null) }; }
 function applyRemoteChar(id, cfg){ if(cfg==null || +id===NET.myId) return; NET.charById[id]=cfg; const rp=NET.players[id]; if(rp){ rp.modelCfg=cfg; if(rp.mesh){ buildAvatarVisual(rp.mesh, cfg); if(teamMode() && NET.teams[id]!=null) tintAvatar(rp.mesh, NET.teams[id]); } } }
 function broadcastMyChar(){ const cfg=myCharCfg(); if(NET.mode==='host'){ NET.charById[0]=cfg; for(const id in NET.conns){ try{ NET.conns[id].send({t:'char', from:0, cfg}); }catch(e){} } } else if(NET.mode==='client' && NET.conn){ try{ NET.conn.send({t:'char', cfg}); }catch(e){} } }
 let _charBcT=null;
@@ -8802,8 +8806,17 @@ function _scheduleCharBroadcast(){ if(NET.mode==='off') return; if(_charBcT) cle
 function addCharRing(g, color){ const geo=new THREE.RingGeometry(0.34,0.5,28); geo.rotateX(-Math.PI/2); const m=new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent:true, opacity:0.85, side:THREE.DoubleSide, depthWrite:false })); m.position.y=0.05; m.raycast=()=>{}; g.add(m); g.userData.charRing=m; }
 function _charHex(i){ return '#'+CHARACTERS[i].color.toString(16).padStart(6,'0'); }
 function updateCharBtnLabel(){ const b=document.getElementById('charBtn'); if(b) b.innerHTML='CHARACTER: <b style="color:'+_charHex(myCharIdx)+'">'+CHARACTERS[myCharIdx].name+'</b> \u25b8'; }
-function renderCharGrid(){ const g=document.getElementById('charGrid'); if(!g) return; g.innerHTML=''; CHARACTERS.forEach((c,i)=>{ const card=document.createElement('div'); card.className='charCard'+(i===myCharIdx?' sel':''); card.innerHTML='<div class="charSwatch" style="background:'+_charHex(i)+'"></div><div class="charName">'+c.name+'</div>'; card.onclick=()=>selectChar(i); g.appendChild(card); }); }
-function selectChar(i){ if(i<0||i>=CHARACTERS.length) return; myCharIdx=i; try{ localStorage.setItem('breach_char', String(i)); }catch(e){} updateCharBtnLabel(); renderCharGrid(); if(typeof previewAvatar!=='undefined' && previewAvatar) buildAvatarVisual(previewAvatar); if(NET.mode!=='off') broadcastMyChar(); }
+function renderCharGrid(){ const g=document.getElementById('charGrid'); if(!g) return; g.innerHTML='';
+  if(charRoster.length){
+    const lab=document.createElement('div'); lab.textContent='CHARACTER'; lab.style.cssText='flex-basis:100%;width:100%;color:#7fe6cf;font-size:10px;letter-spacing:2px;margin:4px 0 1px;'; g.appendChild(lab);
+    const mk=(idx,name,grad)=>{ const card=document.createElement('div'); card.className='charCard'+(idx===myRosterIdx?' sel':''); const sw=document.createElement('div'); sw.className='charSwatch'; sw.style.background=grad; const nm=document.createElement('div'); nm.className='charName'; nm.textContent=name; card.appendChild(sw); card.appendChild(nm); card.onclick=()=>selectRosterChar(idx); g.appendChild(card); };
+    mk(-1, 'Default', 'linear-gradient(135deg,#3a4750,#222c32)');
+    charRoster.forEach((c,i)=> mk(i, c.name||('Character '+(i+1)), 'linear-gradient(135deg,#1f6f7a,#0f3038)'));
+    const lab2=document.createElement('div'); lab2.textContent='COLOR'; lab2.style.cssText='flex-basis:100%;width:100%;color:#7fe6cf;font-size:10px;letter-spacing:2px;margin:6px 0 1px;'; g.appendChild(lab2);
+  }
+  CHARACTERS.forEach((c,i)=>{ const card=document.createElement('div'); card.className='charCard'+(i===myCharIdx?' sel':''); const sw=document.createElement('div'); sw.className='charSwatch'; sw.style.background=_charHex(i); const nm=document.createElement('div'); nm.className='charName'; nm.textContent=c.name; card.appendChild(sw); card.appendChild(nm); card.onclick=()=>selectChar(i); g.appendChild(card); }); }
+function selectRosterChar(i){ myRosterIdx=(i>=0 && charRoster[i])?i:-1; renderCharGrid(); if(typeof previewAvatar!=='undefined' && previewAvatar) buildAvatarVisual(previewAvatar, myCharCfg()); if(NET.mode!=='off') broadcastMyChar(); }
+function selectChar(i){ if(i<0||i>=CHARACTERS.length) return; myCharIdx=i; try{ localStorage.setItem('breach_char', String(i)); }catch(e){} updateCharBtnLabel(); renderCharGrid(); if(typeof previewAvatar!=='undefined' && previewAvatar) buildAvatarVisual(previewAvatar, myCharCfg()); if(NET.mode!=='off') broadcastMyChar(); }
 function openCharPicker(){ renderCharGrid(); const m=document.getElementById('charPicker'); if(m) m.classList.remove('hidden'); }
 function makeRemotePlayer(name, cfg){
   const g=new THREE.Group();
@@ -10001,7 +10014,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 281 · 2026-06-08';
+const BUILD_VERSION = 'build 283 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12637,7 +12650,7 @@ const PRIM_ICON = {
   cone:     _svgIcon('<ellipse cx="12" cy="18" rx="7.5" ry="2.6"/><path d="M12 3 4.5 18M12 3l7.5 15"/>'),
 };
 const MODE_SECTIONS = {
-  build:   ['gizmo','object','material','transform'],
+  build:   ['gizmo','object','material','transform','characters'],
   scene:   ['world','audiozones'],
   enemies: ['enemies'],
   rules:   ['game','loot'],
@@ -12916,6 +12929,7 @@ function serializeLevel(){
     pickupsOn: pickupsOn,
     pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind })),
     audioZones: audioZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, url:z.url||'', vol:+z.vol, loop:!!z.loop })),
+    roster: charRoster.map(c=>({ name:c.name, url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, clips:Object.assign({},c.clips||{}) })),
     pickupModels: Object.keys(pickupModels).reduce((a,k)=>{ const m=pickupModels[k]; if(m&&m.url){ a[k]={ url:m.url, scale:m.scale||1 }; } return a; }, {}),
     game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave, noRespawn: !!gameCfg.noRespawn },
     dmgNum:  { on: dmgNumCfg.on !== false, size: dmgNumCfg.size, hit: dmgNumCfg.hitColor, kill: dmgNumCfg.killColor },
@@ -12972,6 +12986,27 @@ function _campaignLoad(i){ const lv=campaign.levels[i]; if(!lv) return; loadLeve
 function startCampaign(){ if(!campaign.levels.length){ if(typeof flashToast==='function') flashToast('Add a level to the campaign first'); return; } campaignActive=true; campaignIdx=0; _campaignComplete=false; _campaignLoad(0); }
 function _captureLoadout(){ const a={}; for(const k of owned){ const w=WEAPONS[k]; if(w) a[k]={ mag:w.mag, reserve:w.reserve }; } return { owned:[...owned], wep:curWep, hp:player.hp, ammo:a }; }
 function _restoreLoadout(c){ if(!c) return; owned.length=0; for(const k of c.owned) owned.push(k); for(const k in c.ammo){ if(WEAPONS[k]){ WEAPONS[k].mag=c.ammo[k].mag; WEAPONS[k].reserve=c.ammo[k].reserve; } } curWep=(c.wep && owned.includes(c.wep))?c.wep:owned[0]; player.hp=Math.max(1, c.hp||player.hp); if(typeof switchWeapon==='function') switchWeapon(curWep); if(typeof updateHUD==='function') updateHUD(); }
+function _snapshotPlayerCharCfg(name){ const c=playerModelCfg; return _sanitizeCharCfg({ name:name||'Character', url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, clips:Object.assign({},c.clips||{}) }); }
+function _loadCharIntoEditor(i){ const c=charRoster[i]; if(!c) return; pushUndoSnapshot(); Object.assign(playerModelCfg, { url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, clips:Object.assign({},c.clips||{}) }); editorActive='player'; if(typeof ensurePlayerPreview==='function') ensurePlayerPreview(true); if(typeof previewAvatar!=='undefined' && previewAvatar && typeof buildAvatarVisual==='function') buildAvatarVisual(previewAvatar); if(typeof renderEditorFields==='function') renderEditorFields(); if(typeof flashToast==='function') flashToast('Loaded "'+(c.name||'Character')+'" onto the Player tab'); }
+function renderCharRosterPanel(){
+  const host = editorEl && editorEl.querySelector('#edCharRoster'); if(!host) return;
+  host.innerHTML='';
+  const info=document.createElement('div'); info.className='hint'; info.style.margin='2px 0 6px';
+  info.innerHTML='<b>Character roster</b> for multiplayer. Tune a model on the <b>Player</b> tab (model URL, scale, clips), then add it here. At the start of a multiplayer match each player picks one from this list. Saved with the level.';
+  host.appendChild(info);
+  const addB=document.createElement('button'); addB.textContent='➕ Add current player model'; addB.title='Snapshot the model currently on the Player tab as a roster character'; addB.onclick=()=>{ pushUndoSnapshot(); charRoster.push(_snapshotPlayerCharCfg('Character '+(charRoster.length+1))); renderCharRosterPanel(); };
+  host.appendChild(addB);
+  const st=document.createElement('div'); st.className='hint'; st.style.margin='6px 0 2px'; st.textContent = charRoster.length ? (charRoster.length+' character'+(charRoster.length>1?'s':'')+':') : 'No characters yet - players use the default model.';
+  host.appendChild(st);
+  charRoster.forEach((c,i)=>{
+    const row=document.createElement('div'); row.style.cssText='display:flex;align-items:center;gap:5px;margin:3px 0;';
+    const nm=document.createElement('input'); nm.type='text'; nm.value=c.name||('Character '+(i+1)); nm.title=(c.url? c.url : 'capsule (no model set)'); nm.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 6px;font-size:12px;'; nm.onchange=()=>{ c.name=nm.value.trim()||('Character '+(i+1)); };
+    const loadB=document.createElement('button'); loadB.textContent='Load'; loadB.title='Put this character on the Player tab to re-tune'; loadB.style.cssText='padding:1px 7px;font-size:11px;'; loadB.onclick=()=>_loadCharIntoEditor(i);
+    const upB=document.createElement('button'); upB.textContent='Update'; upB.title='Replace this character with the current Player-tab model'; upB.style.cssText='padding:1px 7px;font-size:11px;'; upB.onclick=()=>{ pushUndoSnapshot(); const nmv=c.name; charRoster[i]=_snapshotPlayerCharCfg(nmv); renderCharRosterPanel(); if(typeof flashToast==='function') flashToast('Updated "'+(nmv||'Character')+'"'); };
+    const del=document.createElement('button'); del.textContent='✕'; del.style.cssText='padding:1px 7px;font-size:11px;'; del.onclick=()=>{ pushUndoSnapshot(); charRoster.splice(i,1); renderCharRosterPanel(); };
+    row.appendChild(nm); row.appendChild(loadB); row.appendChild(upB); row.appendChild(del); host.appendChild(row);
+  });
+}
 function renderAudioZonesPanel(){
   const host = editorEl && editorEl.querySelector('#edAudioZones'); if(!host) return;
   host.innerHTML='';
@@ -13076,6 +13111,7 @@ function restoreLevel(level){
   refreshPlayerSpawnMarker();
   extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null;
   audioZones = Array.isArray(level.audioZones) ? level.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : []; if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
+  charRoster = Array.isArray(level.roster) ? level.roster.map(_sanitizeCharCfg) : []; if(typeof renderCharRosterPanel==='function') renderCharRosterPanel();
   if(level.grenade){ const G=level.grenade; if(G.model!=null) GRENADE.model=G.model||''; if(G.scale!=null) GRENADE.scale=G.scale; if(G.radius!=null) GRENADE.radius=G.radius; if(G.damage!=null) GRENADE.damage=G.damage; if(G.fuse!=null) GRENADE.fuse=G.fuse; if(G.throwForce!=null) GRENADE.throwForce=G.throwForce; loadGrenadeModel(); if(editorTargets.grenade.sync) editorTargets.grenade.sync(); }
   // gun / aim / station
   if(level.gun){ if(level.gun.url && level.gun.url!==gunModelUrl) swapGunModel(level.gun.url); Object.assign(editorTargets.gun.state, level.gun.state||{}); editorTargets.gun.apply(); }
@@ -13412,6 +13448,7 @@ function buildEditorPanel(){
     + sec('Game / waves', 'game', '<div id="edGame"></div>')
     + sec('Loot', 'loot', '<div id="edLoot"></div>')
     + sec('Audio zones', 'audiozones', '<div id="edAudioZones"></div>')
+    + sec('Characters', 'characters', '<div id="edCharRoster"></div>')
     + sec('Level file', 'levelfile',
         '<div class="row2"><button id="edSave">💾 Save</button><button id="edClear">Clear save</button></div>'
       + '<div class="row2" style="margin-top:6px"><button id="edShare">🔗 Copy share link</button></div>'
@@ -13431,6 +13468,7 @@ function buildEditorPanel(){
   })();
   if(typeof renderCampaignPanel==='function') renderCampaignPanel();
   if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
+  if(typeof renderCharRosterPanel==='function') renderCharRosterPanel();
   // restore saved width + wire drag-to-resize (drag the left edge; wider = more room for the crowded panels)
   try{ const w = parseInt(localStorage.getItem('breach_editor_width')||'',10); if(w>=260 && w<=window.innerWidth*0.92) p.style.width = w+'px'; }catch(e){}
   (function(){
