@@ -349,6 +349,16 @@
   #killFeed .kfRow.kfFade { opacity:0; }
   #killFeed .kfArrow { color:#ff6b6b; }
   body.touch #killFeed { top: calc(140px + env(safe-area-inset-top)); left: calc(8px + env(safe-area-inset-left)); bottom:auto; font-size:10px; gap:2px; }
+  #chatBox { position:fixed; bottom:132px; left:18px; z-index:42; display:flex; flex-direction:column; gap:3px; max-width:340px; font:600 12px ui-monospace,monospace; }
+  #chatLog { display:flex; flex-direction:column; gap:3px; pointer-events:none; }
+  #chatLog .chatRow { background:rgba(5,10,12,0.62); border:1px solid rgba(79,208,255,0.22); border-radius:5px; padding:2px 7px; opacity:1; transition:opacity .8s; word-break:break-word; }
+  #chatLog .chatRow.chatFade { opacity:0; }
+  #chatBox.chatOpen #chatLog .chatRow { opacity:1; }
+  #chatLog .chatName { color:#4fd0ff; }
+  #chatLog .chatName.chatMine { color:#38f5b5; }
+  #chatLog .chatText { color:#dfeef2; }
+  #chatInput { display:none; width:300px; background:rgba(5,10,12,0.92); border:1px solid #4fd0ff; color:#eafff7; border-radius:5px; padding:5px 8px; font:600 12px ui-monospace,monospace; outline:none; pointer-events:auto; }
+  #chatBox.chatOpen #chatInput { display:block; }
   #padDebug { display:none; position:fixed; top:12px; left:12px; z-index:60; background:rgba(5,10,12,0.85); color:#9fe6cf; border:1px solid rgba(56,245,181,0.4); border-radius:6px; padding:8px 12px; font:11px/1.5 ui-monospace,monospace; white-space:pre; pointer-events:none; max-width:340px; }
   #controls b { color:#a8d6c8; }
   .hidden { display:none !important; }
@@ -659,6 +669,7 @@
 <div id="roomBadge"></div>
 <div id="scoreboard"></div>
 <div id="killFeed"></div>
+<div id="chatBox"><div id="chatLog"></div><input id="chatInput" type="text" maxlength="200" autocomplete="off" spellcheck="false" placeholder="Say something (Enter to send, Esc to cancel)"></div>
 <button id="pauseBtn" title="Pause (Esc)" style="display:none">❚❚</button>
 <div id="pauseMenu" class="hidden">
   <div class="pauseCard">
@@ -7468,6 +7479,7 @@ let touchMoveX=0, touchMoveZ=0, touchSprint=false, touchFiring=false, touchAds=f
 const TOUCH_LOOK_SENS = 0.0042, TOUCH_ADS_SENS = 0.0022;
 // Pointer Lock isn't supported on iOS Safari (the methods are undefined). Route every call through these
 // guards so a missing API can't throw — touch devices steer via the on-screen look pad instead.
+let chatOpen=false;   // multiplayer text chat input is focused
 function tryPointerLock(){ if(isTouch) return; const el = renderer && renderer.domElement; if(el && el.requestPointerLock){ try{ el.requestPointerLock(); }catch(e){} } }
 function safeExitPointerLock(){ if(document.exitPointerLock){ try{ document.exitPointerLock.call(document); }catch(e){} } }
 function typingInField(e){
@@ -7480,6 +7492,7 @@ addEventListener('keydown', e=>{
   if(_cineActive){ endCinematic(); return; }   // any key skips the intro flythrough
   keys[e.code]=true;
   if(e.code==='Tab'){ if(!e.repeat) openRadial(); e.preventDefault(); return; }   // radial deploy menu
+  if(e.code==='KeyT' && NET.mode!=='off' && gameOn && !gameOver && !editorOpen && !shopOpen && !choosingUpgrade && !radialOpen){ openChat(); e.preventDefault(); return; }   // T: open multiplayer text chat
   // Crouch is Ctrl, so crouch+WASD lands on browser shortcuts: Ctrl+S (save page), Ctrl+D (bookmark),
   // Ctrl+A (select all). Swallow those so moving while crouched doesn't trigger them. Ctrl+W (close tab)
   // is browser-reserved and can't be cancelled here — the beforeunload guard below catches that one.
@@ -7564,7 +7577,7 @@ const MAX_LOOK_DELTA = 300;   // px per mousemove event; guards against spurious
 let editorDragLook = false, editorDragMoved = false, editorDragPan = false;   // editor mouse states
 renderer.domElement.addEventListener('click', ()=>{ if(!isTouch && gameOn && !locked && !shopOpen && !editorOpen && !paused) tryPointerLock(); });
 document.addEventListener('pointerlockchange', ()=>{ const was=locked; locked = document.pointerLockElement === renderer.domElement; if(locked && !was){ lookFresh = true; if(paused) resumeGame(); }
-  if(!locked && was && !isTouch && gameOn && !gameOver && !shopOpen && !editorOpen && !choosingUpgrade && !paused) openPause(); });   // Esc releases the lock -> show the pause menu
+  if(!locked && was && !isTouch && gameOn && !gameOver && !shopOpen && !editorOpen && !choosingUpgrade && !paused && !chatOpen) openPause(); });   // Esc releases the lock -> show the pause menu (but not when opening chat)
 // Ctrl+W (crouch + forward) is the browser's close-tab shortcut and can't be cancelled from a keydown.
 // While actively playing (pointer locked), ask the browser to confirm before unloading so an accidental
 // Ctrl+W shows a "Leave site?" prompt the player can cancel instead of silently losing the session.
@@ -8599,6 +8612,15 @@ function addKillFeed(killerId, victimId){
 }
 function broadcastFeed(k,v){ const m={t:'feed', k, v}; for(const id in NET.conns){ try{ NET.conns[id].send(m); }catch(e){} } }
 function clearKillFeed(){ const fe=document.getElementById('killFeed'); if(fe) fe.innerHTML=''; }
+// ---------- Multiplayer text chat: T opens an input; messages relay through the host; log sits bottom-left ----------
+let _chatWired=false;
+function _wireChatInput(){ if(_chatWired) return; const inp=document.getElementById('chatInput'); if(!inp) return; _chatWired=true;
+  inp.addEventListener('keydown', e=>{ e.stopPropagation(); if(e.code==='Enter'||e.code==='NumpadEnter'){ e.preventDefault(); closeChat(true); } else if(e.code==='Escape'){ e.preventDefault(); closeChat(false); } });
+  inp.addEventListener('keyup', e=>e.stopPropagation()); }
+function openChat(){ if(chatOpen || NET.mode==='off') return; const box=document.getElementById('chatBox'), inp=document.getElementById('chatInput'); if(!box||!inp) return; _wireChatInput(); chatOpen=true; box.classList.add('chatOpen'); if(typeof clearMovementInput==='function') clearMovementInput(); safeExitPointerLock(); inp.value=''; setTimeout(()=>{ try{ inp.focus(); }catch(e){} }, 0); }
+function closeChat(send){ if(!chatOpen) return; const box=document.getElementById('chatBox'), inp=document.getElementById('chatInput'); const txt=(inp && inp.value || '').trim(); chatOpen=false; if(box) box.classList.remove('chatOpen'); if(inp){ inp.value=''; try{ inp.blur(); }catch(e){} } if(send && txt) sendChat(txt); if(!isTouch && gameOn && !gameOver && !editorOpen) tryPointerLock(); }
+function sendChat(text){ text=(''+text).slice(0,200); if(!text) return; const nm=NET.name||'You'; addChatLine(nm, text, true); if(NET.mode==='host'){ for(const id in NET.conns){ try{ NET.conns[id].send({t:'chat', name:nm, text}); }catch(e){} } } else if(NET.mode==='client' && NET.conn){ try{ NET.conn.send({t:'chat', text}); }catch(e){} } }
+function addChatLine(name, text, mine){ const log=document.getElementById('chatLog'); if(!log) return; const row=document.createElement('div'); row.className='chatRow'; const nm=document.createElement('span'); nm.className='chatName'+(mine?' chatMine':''); nm.textContent=(name||'?')+': '; const tx=document.createElement('span'); tx.className='chatText'; tx.textContent=(''+(text||'')).slice(0,200); row.appendChild(nm); row.appendChild(tx); log.appendChild(row); while(log.children.length>8) log.removeChild(log.firstChild); setTimeout(()=>{ row.classList.add('chatFade'); }, 9000); }
 function applyPvpDamage(dmg, from){
   if(duelDead || duelInvuln>0) return;
   if(sameTeam(from, NET.myId)) return;   // no friendly fire in team modes
@@ -9031,6 +9053,7 @@ function handleClientMsg(conn, msg){
   else if(msg.t==='pDel'){ if(netApplyDelProp(msg.nid)) relayProp({t:'pDel', nid:msg.nid}, id); } // a client deleted a prop
   else if(msg.t==='pMov'){ if(netApplyMovProp(msg.nid, msg.x)) relayProp({t:'pMov', nid:msg.nid, x:msg.x}, id); } // a client moved a prop
   else if(msg.t==='death'){ playerDeathFx(msg.p[0], msg.p[1], msg.p[2]); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send(msg); }catch(e){} } } }   // a client died -> show + relay the pop
+  else if(msg.t==='chat'){ const nm=(NET.players[id]&&NET.players[id].name)||msg.name||('P'+id); const tx=(''+(msg.text||'')).slice(0,200); addChatLine(nm, tx); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'chat', name:nm, text:tx}); }catch(e){} } } }   // a client chatted -> show + relay to the others
 }
 function handleHostMsg(msg){
   if(msg.t==='welcome'){
@@ -9063,6 +9086,7 @@ function handleHostMsg(msg){
   else if(msg.t==='score'){ NET.duelScore=msg.s; duelHUD(); }
   else if(msg.t==='teams'){ NET.teams=msg.tm||{}; if(NET.teams[NET.myId]!=null) NET.team=NET.teams[NET.myId]; applyTeamColors(); renderScoreboard(); }
   else if(msg.t==='feed'){ addKillFeed(msg.k, msg.v); }
+  else if(msg.t==='chat'){ addChatLine(msg.name||'?', (''+(msg.text||'')).slice(0,200)); }   // chat from the host or relayed from another player
   else if(msg.t==='duelOver'){ showDuelResult(msg.w, msg.wt); }
   else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o); }   // a trigger animation fired somewhere
   else if(msg.t==='xa'){ const o=propModels[msg.i]; if(o&&o.userData.xa) o.userData.xa.dest=msg.dest?1:0; }   // a mechanism toggled somewhere
@@ -9977,7 +10001,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 280 · 2026-06-08';
+const BUILD_VERSION = 'build 281 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
