@@ -10014,7 +10014,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 283 · 2026-06-08';
+const BUILD_VERSION = 'build 284 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15385,6 +15385,7 @@ function startGame(){
   updateHUD(); updateBuffs(0);
   resetDynamicProps();        // dynamic objects return to their authored spots each deploy
   teardownInstancing(); buildInstancing();   // (re)collapse repeated static shapes for play
+  if(typeof buildPhysWorld==='function') buildPhysWorld();   // build a FRESH physics world for this level every match — never inherit a stale one from a previous session (fixes the client free-fly when no assets were pending, so the loader/reveal never rebuilt it)
   if(typeof maybeStartIntroCine==='function') maybeStartIntroCine();   // optional authored intro flythrough (no-op if disabled / no path)
   tryPointerLock();
 }
