@@ -643,7 +643,7 @@
     <div id="mpStatus"></div>
   </div>
 </div>
-<div id="charPicker" class="modalBack hidden">
+<div id="charPicker" class="modalBack hidden" style="z-index:25">
   <div class="modalCard">
     <button class="modalClose" data-close="charPicker">✕</button>
     <h2>CHOOSE A CHARACTER</h2>
@@ -10018,7 +10018,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 286 · 2026-06-08';
+const BUILD_VERSION = 'build 287 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
