@@ -7540,6 +7540,7 @@ addEventListener('beforeunload', e=>{ if(locked){ e.preventDefault(); e.returnVa
 document.addEventListener('mousemove', e=>{
   if(radialOpen){ radialMove(e.movementX, e.movementY); return; }
   if(editorOpen){
+    if(_brushing){ _brushStroke(e); editorDragMoved = true; return; }    // painting the terrain
     if(gizmoDrag){ gizmoDragMove(e); editorDragMoved = true; return; }   // dragging an axis handle
     if(editorDragPan && editorTopView){
       const wpp = (2*topZoom)/innerHeight;   // world units per pixel at current zoom
@@ -7569,10 +7570,11 @@ document.addEventListener('mousemove', e=>{
 renderer.domElement.addEventListener('mousedown', e=>{
   if(!editorOpen || e.button!==0) return;
   editorDragMoved = false;
+  if(terrainBrush.on && terrainPointUnderPointer(e)){ pushUndoSnapshot(); _brushStroke(e); _brushing = true; editorDragMoved = true; return; }   // sculpt instead of select/look
   if(tryGizmoGrab(e)){ editorDragMoved = true; return; }   // grabbing an axis handle (suppresses select)
   if(editorTopView) editorDragPan = true; else editorDragLook = true;
 });
-addEventListener('mouseup', e=>{ if(e.button===0){ editorDragLook = false; editorDragPan = false; const _wg=gizmoDrag; gizmoDrag = null; if(_wg){ const tg=editorTargets[editorActive]; if(tg && typeof tg.sync==='function') tg.sync(); if(typeof updateFieldDisplays==='function') updateFieldDisplays(); } } });
+addEventListener('mouseup', e=>{ if(e.button===0){ if(_brushing){ _brushing = false; editorDragMoved = true; } editorDragLook = false; editorDragPan = false; const _wg=gizmoDrag; gizmoDrag = null; if(_wg){ const tg=editorTargets[editorActive]; if(tg && typeof tg.sync==='function') tg.sync(); if(typeof updateFieldDisplays==='function') updateFieldDisplays(); } } });
 
 // ---------- Weapon (viewmodel) ----------
 // The `gun` group is what the render loop animates (sway, recoil, ADS). We load a hosted
@@ -8113,6 +8115,7 @@ let powerups = [];
 let _puId = 1;
 // Editor-placed pickups (weapons/ammo/health/buffs). The live pads are built from these at deploy; if a
 // level has none, spawnPowerups() falls back to the auto buff layout. Markers are an editor-only preview.
+let selPickup = -1;   // editor: index of the pickup spot grabbed by the gizmo (-1 = none)
 let pickupSpots = (savedLevel && Array.isArray(savedLevel.pickups)) ? savedLevel.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : [];
 let newPickupKind = 'health';
 let pickupsOn = !(savedLevel && savedLevel.pickupsOn === false);   // off => no pickups at all (not even the default fallback set)
@@ -8123,8 +8126,8 @@ function refreshPickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m);
   for(const sp of pickupSpots){ const g=buildPowerupMesh(sp.kind); g.position.set(sp.x, terrainHeightAt(sp.x,sp.z), sp.z); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.pickupMarker=true; scene.add(g); pickupMarkers.push(g); } }
 function setPickupMarkersVisible(v){ for(const m of pickupMarkers) m.visible=v; }
 function disposePickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m); } pickupMarkers.length=0; }
-function addPickupSpot(kind){ pushUndoSnapshot(); const fwd=new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw)); pickupSpots.push({ x:+(player.pos.x+fwd.x*6).toFixed(2), z:+(player.pos.z+fwd.z*6).toFixed(2), kind:kind||'health' }); refreshPickupMarkers(); renderEditorFields(); }
-function removePickupSpot(i){ pushUndoSnapshot(); pickupSpots.splice(i,1); refreshPickupMarkers(); renderEditorFields(); }
+function addPickupSpot(kind){ pushUndoSnapshot(); const fwd=new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw)); pickupSpots.push({ x:+(player.pos.x+fwd.x*6).toFixed(2), z:+(player.pos.z+fwd.z*6).toFixed(2), kind:kind||'health' }); selPickup = pickupSpots.length-1; refreshPickupMarkers(); renderEditorFields(); }
+function removePickupSpot(i){ pushUndoSnapshot(); pickupSpots.splice(i,1); selPickup=-1; refreshPickupMarkers(); renderEditorFields(); }
 const WEAPON_PICKUP_KINDS = { rifle:1, smg:1, shotgun:1, launcher:1 };
 function buildPowerupMesh(kind){
   const k = POWERUP_KINDS[kind] || POWERUP_KINDS.health;
@@ -9892,7 +9895,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 262 · 2026-06-08';
+const BUILD_VERSION = 'build 264 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13231,7 +13234,7 @@ function buildEditorPanel(){
   for(const key of Object.keys(editorTargets)){
     const b = document.createElement('div'); b.className='tab'; b.textContent = editorTargets[key].label;
     b.dataset.key = key;
-    b.onclick = ()=>{ editorActive = key; if(key==='gun' && editorTargets.gun.syncFromWeapon) editorTargets.gun.syncFromWeapon(); if(key==='grenade' && editorTargets.grenade.sync) editorTargets.grenade.sync(); renderEditorFields(); };
+    b.onclick = ()=>{ selPickup=-1; editorActive = key; if(key==='gun' && editorTargets.gun.syncFromWeapon) editorTargets.gun.syncFromWeapon(); if(key==='grenade' && editorTargets.grenade.sync) editorTargets.grenade.sync(); renderEditorFields(); };
     tabs.appendChild(b);
   }
   const modeRow = p.querySelector('#edModes');
@@ -13410,7 +13413,23 @@ function renderEditorFields(){
         gen.onclick=()=>{ pushUndoSnapshot(); const amp=+ampIn.value, freq=(+freqIn.value)|0, seed=(Date.now()&0x7fffffff); worldCfg.terrain={ seg:48, amp:amp, freq:freq, seed:seed, h:generateTerrain(48, amp, freq, seed) }; setTerrainFromCfg(true); renderEditorFields(); };
         const flat=document.createElement('button'); flat.textContent='Flatten'; flat.style.cssText='padding:5px 10px;font-size:11px;cursor:pointer;'; flat.disabled=!tcur;
         flat.onclick=()=>{ pushUndoSnapshot(); worldCfg.terrain=null; setTerrainFromCfg(true); renderEditorFields(); };
-        br.appendChild(gen); br.appendChild(flat); tb.appendChild(br); b.appendChild(tb); } }
+        br.appendChild(gen); br.appendChild(flat); tb.appendChild(br);
+        // sculpt brush controls
+        const mkBSlider=(lab,val,mn,mx,st,set)=>{ const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:5px 0 0;'; const sp=document.createElement('span'); sp.textContent=lab; sp.style.minWidth='62px'; const inp=document.createElement('input'); inp.type='range'; inp.min=mn; inp.max=mx; inp.step=st; inp.value=val; inp.style.flex='1'; inp.style.accentColor='#38f5b5'; const nm=document.createElement('span'); nm.textContent=val; nm.style.minWidth='28px'; nm.style.textAlign='right'; inp.oninput=()=>{ nm.textContent=inp.value; set(+inp.value); }; r.appendChild(sp); r.appendChild(inp); r.appendChild(nm); return r; };
+        const bw=document.createElement('div'); bw.style.cssText='margin-top:8px;border-top:1px solid #1e3a3a;padding-top:7px;';
+        const bl=document.createElement('label'); bl.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;cursor:pointer;';
+        const bcb=document.createElement('input'); bcb.type='checkbox'; bcb.checked=terrainBrush.on; bcb.onchange=()=>{ terrainBrush.on=bcb.checked; renderEditorFields(); };
+        bl.appendChild(bcb); bl.appendChild(document.createTextNode('Sculpt brush (drag on the floor)')); bw.appendChild(bl);
+        if(terrainBrush.on){
+          const mrow=document.createElement('div'); mrow.style.cssText='display:flex;gap:6px;margin-top:6px;';
+          [['raise','Raise'],['lower','Lower'],['smooth','Smooth']].forEach(([m,lab])=>{ const mb=document.createElement('button'); mb.textContent=lab; mb.style.cssText='flex:1;padding:4px 6px;font-size:11px;cursor:pointer;'+(terrainBrush.mode===m?'background:#13494a;color:#cffaf0;border:1px solid #2aa;':''); mb.onclick=()=>{ terrainBrush.mode=m; renderEditorFields(); }; mrow.appendChild(mb); });
+          bw.appendChild(mrow);
+          bw.appendChild(mkBSlider('Brush size', terrainBrush.radius, 2, 40, 1, v=>terrainBrush.radius=v));
+          bw.appendChild(mkBSlider('Strength', terrainBrush.strength, 0.1, 3, 0.1, v=>terrainBrush.strength=v));
+          const hint=document.createElement('div'); hint.className='hint'; hint.style.marginTop='5px'; hint.textContent='Dragging the floor now sculpts instead of selecting. Uncheck to move objects again. Physics catches up to the new shape when you start a game.'; bw.appendChild(hint);
+        }
+        tb.appendChild(bw);
+        b.appendChild(tb); } }
     { const b=subSec('Cinematic','cine',true);
       { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 6px;cursor:pointer;';
         const c=document.createElement('input'); c.type='checkbox'; c.checked=!!cineCfg.on; c.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
@@ -14404,6 +14423,69 @@ function groundPointUnderPointer(e){
   const p = new THREE.Vector3();
   return raycaster.ray.intersectPlane(_groundPlane, p) ? p : null;
 }
+// ---- Terrain sculpt brush (editor): drag on the terrain to raise / lower / smooth it ----
+let terrainBrush = { on:false, mode:'raise', radius:12, strength:0.6 };
+let _brushing = false;
+// Pure: modify height grid h (N*N, spanning [-ARENA,ARENA] on both axes) within `radius` of world (cx,cz).
+// raise/lower add or subtract amount*falloff; smooth blends each cell toward its 4-neighbour average.
+function _terrainPaint(h, N, ARENA, cx, cz, radius, amount, mode){
+  const span = ARENA*2, r2 = radius*radius;
+  const src = (mode==='smooth') ? h.slice() : null;   // read neighbours from a frozen copy
+  for(let row=0; row<N; row++){
+    const z = -ARENA + (row/(N-1))*span;
+    for(let col=0; col<N; col++){
+      const x = -ARENA + (col/(N-1))*span;
+      const dx=x-cx, dz=z-cz, d2=dx*dx+dz*dz;
+      if(d2>r2) continue;
+      const f = Math.cos((Math.sqrt(d2)/radius)*Math.PI/2);   // 1 at centre -> 0 at edge
+      const i = row*N+col;
+      if(mode==='lower') h[i] -= amount*f;
+      else if(mode==='smooth'){
+        let sum=0, cnt=0; const add=(rr,cc)=>{ if(rr>=0&&rr<N&&cc>=0&&cc<N){ sum+=src[rr*N+cc]; cnt++; } };
+        add(row-1,col); add(row+1,col); add(row,col-1); add(row,col+1); add(row,col);
+        h[i] += ((sum/cnt) - h[i]) * f * Math.min(1, amount);
+      } else h[i] += amount*f;
+      if(h[i]>60) h[i]=60; else if(h[i]<-60) h[i]=-60;
+    }
+  }
+  return h;
+}
+// Raycast the actual displaced terrain mesh (not the flat y=0 plane) so the dab lands under the cursor.
+function terrainPointUnderPointer(e){
+  if(!floor) return null;
+  const r = renderer.domElement.getBoundingClientRect();
+  const nx = ((e.clientX - r.left)/r.width)*2 - 1, ny = -((e.clientY - r.top)/r.height)*2 + 1;
+  raycaster.setFromCamera(new THREE.Vector2(nx, ny), activeCam());
+  const hits = raycaster.intersectObject(floor, false);
+  return hits.length ? hits[0].point : null;
+}
+// Push terrain.h into the existing floor geometry in place (cheap enough to run every drag event).
+function _terrainRedisplace(){
+  const t = (typeof worldCfg!=='undefined') ? worldCfg.terrain : null;
+  if(!t || !t.h) return;
+  const geo = floor.geometry, pos = geo && geo.attributes && geo.attributes.position;
+  if(!pos || pos.count !== (t.seg+1)*(t.seg+1)){ setTerrainFromCfg(true); return; }   // shape changed -> full rebuild
+  for(let i=0;i<pos.count;i++) pos.setZ(i, terrainHeightAt(pos.getX(i), -pos.getY(i)));
+  pos.needsUpdate = true; geo.computeVertexNormals();
+}
+// Ensure a (flat) terrain grid exists so the brush can push up from a bare floor.
+function _ensureTerrainGrid(){
+  if(typeof worldCfg==='undefined') return;
+  const t = worldCfg.terrain;
+  if(t && t.h && t.h.length) return;
+  const seg=48, N=seg+1; worldCfg.terrain = { seg, amp:0, freq:3, seed:1, h:new Array(N*N).fill(0) };
+  setTerrainFromCfg(true);
+}
+// One brush dab at the pointer; returns true if it landed on the terrain (so the drag is swallowed).
+function _brushStroke(e){
+  if(!terrainBrush.on || typeof worldCfg==='undefined') return false;
+  _ensureTerrainGrid();
+  const hit = terrainPointUnderPointer(e); if(!hit) return false;
+  const t = worldCfg.terrain;
+  _terrainPaint(t.h, t.seg+1, ARENA, hit.x, hit.z, terrainBrush.radius, terrainBrush.strength*0.35, terrainBrush.mode);
+  _terrainRedisplace();
+  return true;
+}
 let selBoxes = [];        // pooled BoxHelpers for highlighting the multi-selection
 function isGroupSel(){ return editorOpen && ((editorActive==='props' && selProps.length>1) || (editorActive==='lights' && selLights.length>1)); }
 function activeSel(){ return editorActive==='lights' ? selLights : selProps; }   // the active multi-selection list
@@ -14420,6 +14502,7 @@ function syncPropStateFromObj(){
   s.sx=o.scale.x; s.sy=o.scale.y; s.sz=o.scale.z;
 }
 function selectedSceneObject(){
+  if(selPickup>=0 && pickupMarkers[selPickup]) return pickupMarkers[selPickup];
   if(editorActive==='station') return station && station.model;
   if(editorActive==='props') return editorTargets.props.obj();
   if(editorActive==='lights'){ const g=editorTargets.lights.obj(); return g && g.userData.marker; }
@@ -14430,6 +14513,7 @@ function selectedSceneObject(){
 }
 // live world position of the selected scene object (or null)
 function getSelPos(){
+  if(selPickup>=0 && pickupMarkers[selPickup]) return pickupMarkers[selPickup].position;
   if(isGroupSel()) return selCentroid();
   if(editorActive==='station' && station) return station.group.position;
   if(editorActive==='props'){ const o=editorTargets.props.obj(); return o?o.position:null; }
@@ -14441,6 +14525,11 @@ function getSelPos(){
 }
 // move the selected object to a world position and sync its editor state + collider
 function setSelPos(v){
+  if(selPickup>=0){
+    const g=pickupMarkers[selPickup], sp=pickupSpots[selPickup];
+    if(g && sp){ sp.x=+v.x.toFixed(2); sp.z=+v.z.toFixed(2); g.position.set(sp.x, terrainHeightAt(sp.x,sp.z), sp.z); }
+    return;
+  }
   if(editorActive==='station' && station){
     station.group.position.copy(v); station.pos.copy(v);
     if(station.light) station.light.position.set(v.x, 3+v.y, v.z);
@@ -14479,6 +14568,7 @@ function getSelRot(){
 // directly (not through apply()), so without this the box would stay frozen at the load-time transform.
 function refreshStationCollider(){ if(station && station.model){ station.group.updateMatrixWorld(true); refreshPropCollider(station.model); } }
 function setSelRot(euler){
+  if(selPickup>=0) return;   // pickups only translate
   if(editorActive==='station' && station){
     station.group.rotation.copy(euler);
     const s=editorTargets.station.state; s.rx=euler.x*DEG; s.ry=euler.y*DEG; s.rz=euler.z*DEG;
@@ -14505,6 +14595,7 @@ function getSelScale(){
   return null;
 }
 function setSelScale(v){
+  if(selPickup>=0) return;   // pickups only translate
   if(editorActive==='station' && station && station.model){
     station.model.scale.copy(v);
     editorTargets.station.state.s = v.x;   // station field is uniform
@@ -14571,7 +14662,7 @@ function buildGizmo(){
 function updateGizmo(){
   if(!gizmo) gizmo = buildGizmo();
   const gr = gizmo.userData.groups;
-  const movable = editorOpen && (editorActive==='props' || editorActive==='station' || editorActive==='lights' || editorActive==='spawns' || editorActive==='pstart' || editorActive==='extract');
+  const movable = editorOpen && (selPickup>=0 || editorActive==='props' || editorActive==='station' || editorActive==='lights' || editorActive==='spawns' || editorActive==='pstart' || editorActive==='extract');
   const pos = movable ? getSelPos() : null;
   if(!pos){ gr.translate.visible=gr.scale.visible=gr.rotate.visible=false; gizmo.visible = false; return; }
   gizmo.position.copy(pos);
@@ -14580,6 +14671,7 @@ function updateGizmo(){
   // lights + spawns have no scale; force translate/rotate only for them
   let mode = gizmoMode;
   if((editorActive==='lights'||editorActive==='spawns'||editorActive==='pstart') && mode==='scale') mode='translate';
+  if(selPickup>=0) mode='translate';   // a pickup spot is just an x/z position
   if(editorActive==='extract') mode='translate';   // the extraction point only moves (radius lives in Game / waves)
   gr.translate.visible = (mode==='translate');
   gr.scale.visible = (mode==='scale');
@@ -14775,6 +14867,7 @@ renderer.domElement.addEventListener('click', (e)=>{
   for(const p of propModels){ if(p) targets.push(p); }
   for(const g of lightModels){ if(g.userData.marker) targets.push(g.userData.marker); }
   for(const g of spawnMarkers){ if(g.visible) targets.push(g); }
+  for(const m of pickupMarkers){ if(m && m.visible) targets.push(m); }
   if(!targets.length) return;
   const hits = raycaster.intersectObjects(targets, true);
   if(!hits.length) return;
@@ -14787,9 +14880,13 @@ renderer.domElement.addEventListener('click', (e)=>{
     if(li>=0){ picked='lights'; editorTargets.lights.idx=li; break; }
     const si = spawnMarkers.indexOf(root);
     if(si>=0){ picked='spawns'; editorTargets.spawns.idx=si; selSpawns=[spawnMarkers[si]]; break; }
+    const ki = pickupMarkers.indexOf(root);
+    if(ki>=0){ picked='pickups'; selPickup=ki; break; }
     root = root.parent;
   }
-  if(picked==='props'){
+  if(picked && picked!=='pickups') selPickup = -1;   // selecting anything else releases a grabbed pickup
+  if(picked==='pickups'){ selProps.length=0; selLights.length=0; selSpawns=[]; gizmoMode='translate'; if(typeof renderEditorFields==='function') renderEditorFields(); updateSelectionHighlight(); }
+  else if(picked==='props'){
     const obj = propModels[editorTargets.props.idx];
     if(e.shiftKey && obj){
       const at = selProps.indexOf(obj);
