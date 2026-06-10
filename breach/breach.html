@@ -9895,7 +9895,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 264 · 2026-06-08';
+const BUILD_VERSION = 'build 265 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13441,9 +13441,10 @@ function renderEditorFields(){
       if(cineCfg.path.length){
         cineCfg.path.forEach((pt,i)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;align-items:center;gap:6px;font-size:11px;color:#9fe6cf;margin:2px 0;';
           const lab=document.createElement('span'); lab.textContent=(i===0?'Start':('Pt '+i)); lab.style.flex='1';
-          const go=document.createElement('button'); go.textContent='Move here'; go.style.cssText='padding:1px 7px;font-size:10px;'; go.onclick=()=>{ pushUndoSnapshot(); cineCfg.path[i]=[+camera.position.x.toFixed(3),+camera.position.y.toFixed(3),+camera.position.z.toFixed(3)]; if(typeof refreshCinePreview==='function') refreshCinePreview(); };
+          const go=document.createElement('button'); go.textContent='Go to'; go.title='Fly the editor camera to this waypoint'; go.style.cssText='padding:1px 7px;font-size:10px;'; go.onclick=()=>{ const q=cineCfg.path[i]; if(!q) return; flyPos.set(q[0],q[1],q[2]); player.pos.set(q[0],q[1],q[2]); if(editorTopView){ topPanX=q[0]; topPanZ=q[2]; } };
+          const setb=document.createElement('button'); setb.textContent='Set'; setb.title='Update this waypoint to the current camera view'; setb.style.cssText='padding:1px 7px;font-size:10px;'; setb.onclick=()=>{ pushUndoSnapshot(); cineCfg.path[i]=[+camera.position.x.toFixed(3),+camera.position.y.toFixed(3),+camera.position.z.toFixed(3)]; if(typeof refreshCinePreview==='function') refreshCinePreview(); };
           const del=document.createElement('button'); del.textContent='✕'; del.style.cssText='padding:1px 7px;font-size:10px;'; del.onclick=()=>{ pushUndoSnapshot(); cineCfg.path.splice(i,1); renderEditorFields(); };
-          r.appendChild(lab); r.appendChild(go); r.appendChild(del); b.appendChild(r); });
+          r.appendChild(lab); r.appendChild(go); r.appendChild(setb); r.appendChild(del); b.appendChild(r); });
         const clr=document.createElement('button'); clr.textContent='Clear path'; clr.style.cssText='padding:3px 10px;font-size:11px;margin:3px 0;'; clr.onclick=()=>{ pushUndoSnapshot(); cineCfg.path.length=0; renderEditorFields(); }; b.appendChild(clr);
       }
       const crow=(lab,val,mn,mx,st,suffix,set)=>{ const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent=lab; sp.style.minWidth='56px'; const inp=document.createElement('input'); inp.type='range'; inp.min=mn; inp.max=mx; inp.step=st; inp.value=val; inp.style.flex='1'; inp.style.accentColor='#38f5b5'; const nm=document.createElement('span'); nm.textContent=val+suffix; nm.style.minWidth='44px'; nm.style.textAlign='right'; inp.oninput=()=>{ nm.textContent=inp.value+suffix; set(+inp.value); }; r.appendChild(sp); r.appendChild(inp); r.appendChild(nm); b.appendChild(r); };
