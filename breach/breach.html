@@ -9895,7 +9895,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 265 · 2026-06-08';
+const BUILD_VERSION = 'build 266 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11648,6 +11648,24 @@ function updatePerfHud(){
 // Disabled / no path => deploy behaves exactly as before. Editor 'Preview' reuses the same engine.
 let cineCfg = { on:false, path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn' };
 let _cineActive=false, _cineT=0, _cineData=null, _cineReturn=null, _cineEditorPreview=false, _cinePreviewGroup=null;
+let _cineAvatar=null;   // the local player's body, shown ONLY during a cutscene (first-person play renders no body)
+// Build the local avatar at the player start so the cutscene camera has something to frame. Reuses the
+// same avatar pipeline other players are drawn with; the body is hidden again the moment the shot ends.
+function _showCineAvatar(){
+  try{
+    if(!_cineAvatar){ _cineAvatar=new THREE.Group(); scene.add(_cineAvatar); }
+    buildAvatarVisual(_cineAvatar, (typeof myCharCfg==='function') ? myCharCfg() : playerModelCfg);
+    const gy = (typeof terrainHeightAt==='function') ? terrainHeightAt(playerSpawn.x, playerSpawn.z) : 0;
+    _cineAvatar.position.set(playerSpawn.x, gy, playerSpawn.z);
+    _cineAvatar.rotation.set(0, (typeof player!=='undefined' ? player.yaw : 0), 0);   // face the spawn heading
+    _cineAvatar.visible=true;
+  }catch(e){ console.warn('cine avatar build failed', e); }
+}
+function _hideCineAvatar(){
+  if(!_cineAvatar) return;
+  if(_cineAvatar.userData.mixer){ const mi=mixers.indexOf(_cineAvatar.userData.mixer); if(mi>=0) mixers.splice(mi,1); }   // stop the idle loop costing anything during play
+  _cineAvatar.visible=false;   // keep the group for reuse; first-person play never renders it
+}
 const _cineV0=new THREE.Vector3(), _cineTgt=new THREE.Vector3();
 (function(){ if(!document.getElementById('cineCss')){ const st=document.createElement('style'); st.id='cineCss'; st.textContent='body.cine #hud,body.cine #touchUI,body.cine #pauseBtn,body.cine #prompt{display:none !important;}'; (document.head||document.documentElement).appendChild(st); } })();
 function _cineBarsEl(){
@@ -11682,11 +11700,13 @@ function startCinematic(data, editorPreview){
   if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false;
   if(typeof selBox!=='undefined' && selBox) selBox.visible=false;
   document.body.classList.add('cine'); _cineShowBars(true);
+  _showCineAvatar();
   return true;
 }
 function endCinematic(){
   if(!_cineActive) return;
   _cineActive=false; _cineShowBars(false); document.body.classList.remove('cine');
+  _hideCineAvatar();
   if(_cineReturn){ camera.fov=_cineReturn.fov; camera.updateProjectionMatrix(); dofEnabled=_cineReturn.dofEn; dofFocus=_cineReturn.dofF; if(_cineEditorPreview){ camera.position.set(_cineReturn.x,_cineReturn.y,_cineReturn.z); camera.quaternion.copy(_cineReturn.q); } }
   _cineReturn=null; _cineData=null; _cineEditorPreview=false;
   if(typeof clearMovementInput==='function') clearMovementInput();
@@ -11694,14 +11714,15 @@ function endCinematic(){
 }
 function updateCinematic(dt){
   const d=_cineData; if(!d){ endCinematic(); return; }
+  if(_cineAvatar && _cineAvatar.userData.mixer) _cineAvatar.userData.mixer.update(dt);
   _cineT += dt;
   let t=Math.min(1, _cineT/d.dur); const te=t*t*(3-2*t);   // ease in/out
   const path=d.path;
   if(path.length>=2){ const pp=pointAlongPath(path, te, false); _cineV0.set(pp[0],pp[1],pp[2]); }
   else { _cineV0.set(path[0][0], path[0][1], path[0][2]); }
   camera.position.copy(_cineV0);
-  if(d.look==='path' && path.length>=2){ const a=pointAlongPath(path, Math.min(1,te+0.02), false); _cineTgt.set(a[0],a[1],a[2]); if(_cineTgt.distanceToSquared(_cineV0)<1e-4) _cineTgt.set(playerSpawn.x, EYE, playerSpawn.z); }
-  else { _cineTgt.set(playerSpawn.x, EYE, playerSpawn.z); }
+  if(d.look==='path' && path.length>=2){ const a=pointAlongPath(path, Math.min(1,te+0.02), false); _cineTgt.set(a[0],a[1],a[2]); if(_cineTgt.distanceToSquared(_cineV0)<1e-4) _cineTgt.set(playerSpawn.x, terrainHeightAt(playerSpawn.x,playerSpawn.z)+EYE, playerSpawn.z); }
+  else { _cineTgt.set(playerSpawn.x, terrainHeightAt(playerSpawn.x,playerSpawn.z)+EYE, playerSpawn.z); }
   camera.lookAt(_cineTgt);
   const lens = d.lensFrom + (d.lensTo - d.lensFrom)*te;          // zoom keyframe: focal-length ramp over the shot
   camera.fov=lensToFov(lens); camera.updateProjectionMatrix();
