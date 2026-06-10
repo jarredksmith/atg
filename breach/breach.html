@@ -6915,8 +6915,29 @@ function loadSketchfabModel(uid, cb, errcb){
 let netIdPrefix = 's';
 let nextNid = 1;
 function genNid(){ return netIdPrefix + '-' + (nextNid++); }
+// Highest terrain within radius r of (cx,cz). A flat-bottomed object placed at this height clears the
+// uphill side of a slope instead of sinking into it. r<=0 (or flat levels) -> just the centre sample.
+function _maxTerrainOver(cx, cz, r){
+  let m = terrainHeightAt(cx, cz);
+  if(!r || r<=0.01) return m;
+  const N=8;
+  for(let i=0;i<N;i++){ const a=(i/N)*Math.PI*2, cs=Math.cos(a), sn=Math.sin(a);
+    let h=terrainHeightAt(cx+cs*r, cz+sn*r); if(h>m) m=h;
+    h=terrainHeightAt(cx+cs*r*0.5, cz+sn*r*0.5); if(h>m) m=h;   // mid-radius catches bumps under the footprint
+  }
+  return m;
+}
+// A prop's horizontal footprint radius (half its XZ diagonal). Translation-independent, so it stays valid
+// after a move; serialize and placement use the SAME value so the terrain lift round-trips exactly.
+function _propFootR(o){
+  const src=o.userData.src, sc=o.scale;
+  if(src==='box') return 0.5*Math.hypot(Math.abs(sc.x), Math.abs(sc.z));
+  if(src==='sphere'||src==='cylinder'||src==='cone') return 0.5*Math.max(Math.abs(sc.x), Math.abs(sc.z));
+  try{ const b=new THREE.Box3().setFromObject(o); if(isFinite(b.min.x) && !b.isEmpty()) return 0.5*Math.hypot(b.max.x-b.min.x, b.max.z-b.min.z); }catch(e){}
+  return 1.0;
+}
 function finalizeProp(obj, src, t, gltf, slot, animMode, mat, nid){
-  obj.position.set(t[0], t[1] + terrainHeightAt(t[0], t[2]), t[2]);   // sit on the terrain surface (terrainHeightAt is 0 on flat levels)
+  obj.position.set(t[0], t[1], t[2]);   // provisional; the terrain lift is applied below once the footprint is known
   obj.rotation.set(t[3], t[4], t[5]);
   if(t.length >= 9) obj.scale.set(t[6], t[7], t[8]);   // non-uniform (e.g. cover crates)
   else obj.scale.setScalar(t[6]);
@@ -6925,6 +6946,9 @@ function finalizeProp(obj, src, t, gltf, slot, animMode, mat, nid){
   obj.userData.nid = nid || genNid();   // assign once; load/net paths pass an existing id to keep peers aligned
   obj.userData.animMode = (animMode === 'trigger') ? 'trigger' : 'loop';
   scene.add(obj);
+  obj.updateMatrixWorld(true);
+  obj.userData.footR = _propFootR(obj);
+  obj.position.y = t[1] + _maxTerrainOver(t[0], t[2], obj.userData.footR);   // clear the HIGHEST terrain under the footprint so a slope can't bury it
   refreshPropCollider(obj);
   colliders.push(obj);
   if(slot != null) propModels[slot] = obj;   // keep saved order even with async GLB loads
@@ -8123,7 +8147,7 @@ let pickupModels = (savedLevel && savedLevel.pickupModels && typeof savedLevel.p
 let pickupMarkers = [];
 function refreshPickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m); } pickupMarkers.length=0;
   if(typeof pickupsOn!=='undefined' && !pickupsOn) return;   // pickups disabled: no editor markers
-  for(const sp of pickupSpots){ const g=buildPowerupMesh(sp.kind); g.position.set(sp.x, terrainHeightAt(sp.x,sp.z), sp.z); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.pickupMarker=true; scene.add(g); pickupMarkers.push(g); } }
+  for(const sp of pickupSpots){ const g=buildPowerupMesh(sp.kind); g.position.set(sp.x, _maxTerrainOver(sp.x,sp.z,1.2), sp.z); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.pickupMarker=true; scene.add(g); pickupMarkers.push(g); } }
 function setPickupMarkersVisible(v){ for(const m of pickupMarkers) m.visible=v; }
 function disposePickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m); } pickupMarkers.length=0; }
 function addPickupSpot(kind){ pushUndoSnapshot(); const fwd=new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw)); pickupSpots.push({ x:+(player.pos.x+fwd.x*6).toFixed(2), z:+(player.pos.z+fwd.z*6).toFixed(2), kind:kind||'health' }); selPickup = pickupSpots.length-1; refreshPickupMarkers(); renderEditorFields(); }
@@ -8172,7 +8196,7 @@ function spawnPowerups(){
   if(!pickupsOn) return;             // pickups disabled for this level
   const spots = (pickupSpots && pickupSpots.length) ? pickupSpots : powerupLayout();
   for(const spot of spots){
-    const mesh = buildPowerupMesh(spot.kind); mesh.position.set(spot.x, terrainHeightAt(spot.x,spot.z), spot.z); scene.add(mesh);
+    const mesh = buildPowerupMesh(spot.kind); mesh.position.set(spot.x, _maxTerrainOver(spot.x,spot.z,1.2), spot.z); scene.add(mesh);
     powerups.push({ id:_puId++, x:spot.x, z:spot.z, kind:spot.kind, ready:true, cd:0, mesh });
   }
 }
@@ -9895,7 +9919,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 267 · 2026-06-08';
+const BUILD_VERSION = 'build 268 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12782,7 +12806,7 @@ function propEntry(o){
   return e;
 }
 // live transform tuple + helpers for prop sync
-function propTuple(o){ return [o.position.x, o.position.y - terrainHeightAt(o.position.x, o.position.z), o.position.z, o.rotation.x,o.rotation.y,o.rotation.z, o.scale.x,o.scale.y,o.scale.z]; }
+function propTuple(o){ return [o.position.x, o.position.y - _maxTerrainOver(o.position.x, o.position.z, o.userData.footR||0), o.position.z, o.rotation.x,o.rotation.y,o.rotation.z, o.scale.x,o.scale.y,o.scale.z]; }
 function tupleEq(a,b){ if(!a||!b) return false; for(let i=0;i<9;i++){ if(Math.abs(a[i]-b[i])>1e-4) return false; } return true; }
 function propByNid(nid){ for(const o of propModels){ if(o && o.userData.nid===nid) return o; } return null; }
 function propIndexByNid(nid){ for(let i=0;i<propModels.length;i++){ const o=propModels[i]; if(o && o.userData.nid===nid) return i; } return -1; }
@@ -14564,7 +14588,7 @@ function getSelPos(){
 function setSelPos(v){
   if(selPickup>=0){
     const g=pickupMarkers[selPickup], sp=pickupSpots[selPickup];
-    if(g && sp){ sp.x=+v.x.toFixed(2); sp.z=+v.z.toFixed(2); g.position.set(sp.x, terrainHeightAt(sp.x,sp.z), sp.z); }
+    if(g && sp){ sp.x=+v.x.toFixed(2); sp.z=+v.z.toFixed(2); g.position.set(sp.x, _maxTerrainOver(sp.x,sp.z,1.2), sp.z); }
     return;
   }
   if(editorActive==='station' && station){
