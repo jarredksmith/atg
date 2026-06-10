@@ -9928,7 +9928,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 276 · 2026-06-08';
+const BUILD_VERSION = 'build 277 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12858,6 +12858,39 @@ const CAMPAIGN_KEY='breach_campaign_v1';
 function loadCampaign(){ try{ const j=JSON.parse(localStorage.getItem(CAMPAIGN_KEY)); if(j && Array.isArray(j.levels)) return j; }catch(e){} return { levels:[] }; }
 let campaign = loadCampaign();
 function saveCampaign(){ try{ localStorage.setItem(CAMPAIGN_KEY, JSON.stringify(campaign)); return true; }catch(e){ return false; } }
+// Export the whole campaign (all levels) to one .json the player can share. Levels reference assets by
+// URL / sketchfab id (not embedded), so the recipient needs those reachable (and a Sketchfab token for
+// sketchfab models). Import accepts a campaign file OR a single-level file (wrapped as a 1-level campaign).
+function _exportCampaign(){
+  try{
+    if(!campaign.levels.length){ if(typeof flashToast==='function') flashToast('Add levels before exporting'); return; }
+    const payload = { kind:'breach-campaign', version:1, levels: campaign.levels };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type:'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const stamp = new Date().toISOString().slice(0,16).replace(/[:T]/g,'-');
+    a.href = url; a.download = 'breach-campaign-' + stamp + '.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 4000);
+    if(typeof flashToast==='function') flashToast('Exported ' + campaign.levels.length + ' level' + (campaign.levels.length>1?'s':'') + ' - share the .json');
+  }catch(e){ if(typeof flashToast==='function') flashToast('Export failed'); }
+}
+function _importCampaignFile(file){
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    let data; try{ data = JSON.parse(reader.result); }catch(e){ if(typeof flashToast==='function') flashToast('Import failed: not valid JSON'); return; }
+    let levels = null;
+    if(data && Array.isArray(data.levels)) levels = data.levels;          // a campaign file
+    else if(data && (data.props || data.world)) levels = [data];          // a single-level file -> 1-level campaign
+    if(!levels || !levels.length){ if(typeof flashToast==='function') flashToast('Import failed: no levels in that file'); return; }
+    if(campaign.levels.length && !confirm('Replace your current campaign (' + campaign.levels.length + ' level' + (campaign.levels.length>1?'s':'') + ') with the imported ' + levels.length + '?')) return;
+    campaign.levels = levels.map((lv,i)=> Object.assign({}, lv, { name: (lv && lv.name!=null) ? lv.name : ('Level '+(i+1)) }));
+    campaignEditIdx = -1; saveCampaign(); renderCampaignPanel();
+    if(typeof flashToast==='function') flashToast('Imported ' + campaign.levels.length + ' level' + (campaign.levels.length>1?'s':'') + ' - hit Play campaign');
+  };
+  reader.readAsText(file);
+}
 let campaignActive=false, campaignIdx=0, _campaignComplete=false;
 let campaignEditIdx=-1;   // campaign slot currently loaded in the editor for re-editing (-1 = none)
 function _campaignLoad(i){ const lv=campaign.levels[i]; if(!lv) return; loadLevelFromNet(lv); startGame(); }
@@ -12878,6 +12911,11 @@ function renderCampaignPanel(){
   const repB=document.createElement('button'); repB.textContent='\u27f3 Replace last'; repB.onclick=()=>{ if(campaign.levels.length){ campaign.levels[campaign.levels.length-1]=serializeLevel(); saveCampaign(); renderCampaignPanel(); } };
   const clrB=document.createElement('button'); clrB.textContent='Clear all'; clrB.onclick=()=>{ campaign.levels=[]; campaignEditIdx=-1; saveCampaign(); renderCampaignPanel(); };
   r2.appendChild(repB); r2.appendChild(clrB); host.appendChild(r2);
+  const r3=document.createElement('div'); r3.className='row2'; r3.style.marginTop='6px';
+  const expB=document.createElement('button'); expB.textContent='Export campaign'; expB.title='Download all levels as one .json file to share'; expB.onclick=()=>{ _exportCampaign(); };
+  const impB=document.createElement('button'); impB.textContent='Import campaign'; impB.title='Load a campaign .json (replaces the current campaign)'; impB.onclick=()=>{ _campImp.value=''; _campImp.click(); };
+  r3.appendChild(expB); r3.appendChild(impB); host.appendChild(r3);
+  const _campImp=document.createElement('input'); _campImp.type='file'; _campImp.accept='.json,application/json'; _campImp.style.display='none'; _campImp.onchange=()=>{ _importCampaignFile(_campImp.files && _campImp.files[0]); }; host.appendChild(_campImp);
   if(campaignEditIdx>=0 && campaign.levels[campaignEditIdx]){
     const _enm=campaign.levels[campaignEditIdx].name||('Level '+(campaignEditIdx+1));
     const er=document.createElement('div'); er.className='row2'; er.style.marginTop='6px';
