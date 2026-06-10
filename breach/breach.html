@@ -8149,6 +8149,8 @@ let _puId = 1;
 // level has none, spawnPowerups() falls back to the auto buff layout. Markers are an editor-only preview.
 let selPickup = -1;   // editor: index of the pickup spot grabbed by the gizmo (-1 = none)
 let pickupSpots = (savedLevel && Array.isArray(savedLevel.pickups)) ? savedLevel.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : [];
+let audioZones = (savedLevel && Array.isArray(savedLevel.audioZones)) ? savedLevel.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : [];
+let audioZoneMarkers = []; const _zoneRT = [];   // editor ring markers + per-zone runtime playback state
 let newPickupKind = 'health';
 let pickupsOn = !(savedLevel && savedLevel.pickupsOn === false);   // off => no pickups at all (not even the default fallback set)
 let pickupModels = (savedLevel && savedLevel.pickupModels && typeof savedLevel.pickupModels==='object') ? JSON.parse(JSON.stringify(savedLevel.pickupModels)) : {};   // kind -> {url, scale}: custom model in place of the floating icon
@@ -8160,6 +8162,52 @@ function setPickupMarkersVisible(v){ for(const m of pickupMarkers) m.visible=v; 
 function disposePickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m); } pickupMarkers.length=0; }
 function addPickupSpot(kind){ pushUndoSnapshot(); const fwd=new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw)); pickupSpots.push({ x:+(player.pos.x+fwd.x*6).toFixed(2), z:+(player.pos.z+fwd.z*6).toFixed(2), kind:kind||'health' }); selPickup = pickupSpots.length-1; refreshPickupMarkers(); renderEditorFields(); }
 function removePickupSpot(i){ pushUndoSnapshot(); pickupSpots.splice(i,1); selPickup=-1; refreshPickupMarkers(); renderEditorFields(); }
+// ---------- Audio zones: ambient sounds that fade up as the player nears the center ----------
+function disposeAudioZoneMarkers(){ for(const m of audioZoneMarkers){ scene.remove(m); try{ m.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); }catch(e){} } audioZoneMarkers.length=0; }
+function refreshAudioZoneMarkers(){
+  disposeAudioZoneMarkers();
+  const vis=(typeof editorOpen!=='undefined' && editorOpen);
+  for(const z of audioZones){
+    const r=Math.max(1,+z.r||14);
+    const grp=new THREE.Group();
+    const ring=new THREE.Mesh(new THREE.RingGeometry(Math.max(0.3,r-0.4), r, 56), new THREE.MeshBasicMaterial({ color:0x4fd0ff, transparent:true, opacity:0.45, side:THREE.DoubleSide, depthWrite:false }));
+    ring.rotation.x=-Math.PI/2; ring.position.y=0.06; grp.add(ring);
+    const dot=new THREE.Mesh(new THREE.SphereGeometry(0.55,14,10), new THREE.MeshBasicMaterial({ color:0x4fd0ff, transparent:true, opacity:0.85, depthWrite:false }));
+    dot.position.y=0.8; grp.add(dot);
+    grp.position.set(+z.x||0, _maxTerrainOver(+z.x||0,+z.z||0,r), +z.z||0);
+    grp.visible=vis; grp.userData.audioZoneMarker=true; scene.add(grp); audioZoneMarkers.push(grp);
+  }
+}
+function stopAudioZones(){ for(const rt of _zoneRT){ if(rt && rt.src){ try{ rt.src.stop(); }catch(e){} try{ rt.src.disconnect(); }catch(e){} } } _zoneRT.length=0; }
+function updateAudioZones(){
+  if(!audioZones.length || !actx || !sfxBus) return;
+  const live = gameOn && !editorOpen && !gameOver
+    && !(typeof _cineActive!=='undefined' && _cineActive)
+    && !(typeof _levelLoaderActive!=='undefined' && _levelLoaderActive)
+    && !(typeof shopOpen!=='undefined' && shopOpen)
+    && !(typeof choosingUpgrade!=='undefined' && choosingUpgrade)
+    && !(typeof paused!=='undefined' && paused);
+  for(let i=0;i<audioZones.length;i++){
+    const z=audioZones[i]; const rt=_zoneRT[i]||(_zoneRT[i]={src:null,gain:null,playing:false,inside:false});
+    const r=Math.max(1,+z.r||14);
+    const dx=player.pos.x-(+z.x||0), dz=player.pos.z-(+z.z||0); const d=Math.hypot(dx,dz);
+    const inside = live && !!z.url && d<r;
+    const vol = inside ? Math.max(0,(z.vol!=null?+z.vol:0.8)*(1-d/r)) : 0;   // linear falloff: full at center, silent at edge
+    const buf=_soundBuffers[z.url];
+    if(z.url && buf===undefined && live) loadSound(z.url);
+    if(z.loop!==false){
+      if(inside && !rt.playing && buf && buf.duration!==undefined){
+        try{ rt.src=actx.createBufferSource(); rt.src.buffer=buf; rt.src.loop=true; rt.gain=actx.createGain(); rt.gain.gain.value=0; rt.src.connect(rt.gain).connect(sfxBus); rt.src.start(); rt.playing=true; }catch(e){}
+      }
+      if(rt.gain){ try{ rt.gain.gain.setTargetAtTime(vol, actx.currentTime, 0.08); }catch(e){ try{ rt.gain.gain.value=vol; }catch(_){} } }
+    } else {
+      if(inside && !rt.inside && buf && buf.duration!==undefined){
+        try{ const src=actx.createBufferSource(); src.buffer=buf; const g=actx.createGain(); g.gain.value=vol; src.connect(g).connect(sfxBus); src.start(); }catch(e){}
+      }
+    }
+    rt.inside = inside;
+  }
+}
 const WEAPON_PICKUP_KINDS = { rifle:1, smg:1, shotgun:1, launcher:1 };
 function buildPowerupMesh(kind){
   const k = POWERUP_KINDS[kind] || POWERUP_KINDS.health;
@@ -8637,6 +8685,7 @@ function loadLevelFromNet(level){
   // per-player characters: the client keeps its own avatar; the host's character arrives via the welcome 'char' field
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; gameCfg.noRespawn = !!level.game.noRespawn; }
   extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null; if(typeof refreshExtractMarker==='function') refreshExtractMarker();   // restore the per-level extraction spot (campaign / co-op load path)
+  audioZones = Array.isArray(level.audioZones) ? level.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : []; if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; refreshPlayerSpawnMarker(); }
   if(level.weapons){ for(const k in WEAPONS){ const wd=level.weapons[k]; if(wd){ WEAPONS[k].model=wd.model||''; WEAPONS[k].view=wd.view||null; } } }
@@ -9928,7 +9977,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 278 · 2026-06-08';
+const BUILD_VERSION = 'build 280 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11798,6 +11847,7 @@ function loop(){
   const rawDt = Math.min(clock.getDelta(), 0.05);
   let dt = rawDt;
   updatePerfHud();   // measure real frame time every frame (before any early-out)
+  if(typeof updateAudioZones==='function') updateAudioZones();   // ambient audio zones: proximity-based volume (silent unless in live play)
   if(_pathPreviewGroup && !editorOpen){ scene.remove(_pathPreviewGroup); try{ _pathPreviewGroup.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); }catch(e){} _pathPreviewGroup=null; }   // editor waypoint markers never linger into play
   if(_cinePreviewGroup && !editorOpen){ scene.remove(_cinePreviewGroup); try{ _cinePreviewGroup.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); }catch(e){} _cinePreviewGroup=null; }   // cine path preview is editor-only
   if(_cineAvatar && _cineAvatar.visible && !editorOpen && !_cineActive){ _hideCineAvatar(); }   // editor authoring body never lingers into play
@@ -12564,7 +12614,7 @@ const PRIM_ICON = {
 };
 const MODE_SECTIONS = {
   build:   ['gizmo','object','material','transform'],
-  scene:   ['world'],
+  scene:   ['world','audiozones'],
   enemies: ['enemies'],
   rules:   ['game','loot'],
   kit:     ['object','transform'],   // 'object' carries the weapon model import + per-weapon shoot sound; music/SFX live in Scene
@@ -12841,6 +12891,7 @@ function serializeLevel(){
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
     pickupsOn: pickupsOn,
     pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind })),
+    audioZones: audioZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, url:z.url||'', vol:+z.vol, loop:!!z.loop })),
     pickupModels: Object.keys(pickupModels).reduce((a,k)=>{ const m=pickupModels[k]; if(m&&m.url){ a[k]={ url:m.url, scale:m.scale||1 }; } return a; }, {}),
     game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave, noRespawn: !!gameCfg.noRespawn },
     dmgNum:  { on: dmgNumCfg.on !== false, size: dmgNumCfg.size, hit: dmgNumCfg.hitColor, kill: dmgNumCfg.killColor },
@@ -12897,6 +12948,37 @@ function _campaignLoad(i){ const lv=campaign.levels[i]; if(!lv) return; loadLeve
 function startCampaign(){ if(!campaign.levels.length){ if(typeof flashToast==='function') flashToast('Add a level to the campaign first'); return; } campaignActive=true; campaignIdx=0; _campaignComplete=false; _campaignLoad(0); }
 function _captureLoadout(){ const a={}; for(const k of owned){ const w=WEAPONS[k]; if(w) a[k]={ mag:w.mag, reserve:w.reserve }; } return { owned:[...owned], wep:curWep, hp:player.hp, ammo:a }; }
 function _restoreLoadout(c){ if(!c) return; owned.length=0; for(const k of c.owned) owned.push(k); for(const k in c.ammo){ if(WEAPONS[k]){ WEAPONS[k].mag=c.ammo[k].mag; WEAPONS[k].reserve=c.ammo[k].reserve; } } curWep=(c.wep && owned.includes(c.wep))?c.wep:owned[0]; player.hp=Math.max(1, c.hp||player.hp); if(typeof switchWeapon==='function') switchWeapon(curWep); if(typeof updateHUD==='function') updateHUD(); }
+function renderAudioZonesPanel(){
+  const host = editorEl && editorEl.querySelector('#edAudioZones'); if(!host) return;
+  host.innerHTML='';
+  const info=document.createElement('div'); info.className='hint'; info.style.margin='2px 0 6px';
+  info.innerHTML='Ambient <b>audio zones</b>. Drop a zone, give it a sound file URL, and set its radius. The volume rises as the player nears the center (full at the middle, silent at the edge). Loops by default. The blue ring shows the radius in the editor.';
+  host.appendChild(info);
+  const addB=document.createElement('button'); addB.textContent='\u2795 Add zone at me'; addB.title='Drop a new audio zone at your current position'; addB.onclick=()=>{ pushUndoSnapshot(); audioZones.push({ x:+player.pos.x.toFixed(2), z:+player.pos.z.toFixed(2), r:14, url:'', vol:0.8, loop:true }); refreshAudioZoneMarkers(); renderAudioZonesPanel(); };
+  host.appendChild(addB);
+  const st=document.createElement('div'); st.className='hint'; st.style.margin='6px 0 2px'; st.textContent = audioZones.length ? (audioZones.length+' zone'+(audioZones.length>1?'s':'')+':') : 'No zones yet.';
+  host.appendChild(st);
+  const slider=(label, val, min, max, step, on, fmt)=>{ const w=document.createElement('div'); w.style.cssText='margin:4px 0;'; const lab=document.createElement('div'); lab.style.cssText='display:flex;justify-content:space-between;font-size:10px;color:#9fe6cf;'; const nm=document.createElement('span'); nm.textContent=label; const vv=document.createElement('span'); vv.textContent=fmt(val); lab.appendChild(nm); lab.appendChild(vv); const inp=document.createElement('input'); inp.type='range'; inp.min=min; inp.max=max; inp.step=step; inp.value=val; inp.style.cssText='width:100%;accent-color:#38f5b5;'; inp.oninput=()=>{ const v=parseFloat(inp.value); vv.textContent=fmt(v); on(v); }; inp.onchange=()=>{ pushUndoSnapshot(); }; w.appendChild(lab); w.appendChild(inp); return w; };
+  audioZones.forEach((z,i)=>{
+    const card=document.createElement('div'); card.style.cssText='border:1px solid #243640;border-radius:6px;padding:6px 7px;margin:5px 0;background:#0c1418;';
+    const top=document.createElement('div'); top.style.cssText='display:flex;align-items:center;gap:6px;margin-bottom:5px;';
+    const lbl=document.createElement('div'); lbl.textContent='Zone '+(i+1); lbl.style.cssText='flex:1;font-size:12px;color:#9fe6cf;font-weight:600;';
+    const moveB=document.createElement('button'); moveB.textContent='Move here'; moveB.title='Recenter this zone on your current position'; moveB.style.cssText='padding:1px 7px;font-size:11px;'; moveB.onclick=()=>{ pushUndoSnapshot(); z.x=+player.pos.x.toFixed(2); z.z=+player.pos.z.toFixed(2); refreshAudioZoneMarkers(); };
+    const delB=document.createElement('button'); delB.textContent='\u2715'; delB.title='Remove this zone'; delB.style.cssText='padding:1px 7px;font-size:11px;'; delB.onclick=()=>{ pushUndoSnapshot(); audioZones.splice(i,1); stopAudioZones(); refreshAudioZoneMarkers(); renderAudioZonesPanel(); };
+    top.appendChild(lbl); top.appendChild(moveB); top.appendChild(delB); card.appendChild(top);
+    card.appendChild(_sndRow('Sound', ()=>z.url||'', v=>{ z.url=(v||'').trim(); }));   // same input/test/status widget as the other sounds
+    const fsBtn=document.createElement('button'); fsBtn.textContent='Search Freesound'; fsBtn.title='Find a free CC sound and assign it to this zone'; fsBtn.style.cssText='padding:2px 9px;font-size:11px;margin:1px 0 2px;'; let fsBox=null;
+    fsBtn.onclick=()=>{ if(fsBox){ fsBox.remove(); fsBox=null; fsBtn.textContent='Search Freesound'; return; } fsBox=renderFreesoundBrowser(card, ()=>renderAudioZonesPanel(), { label:'Zone '+(i+1), set:v=>{ z.url=(v||'').trim(); } }); card.appendChild(fsBox); fsBtn.textContent='Hide Freesound'; };
+    card.appendChild(fsBtn);
+    card.appendChild(slider('Radius', z.r, 3, 90, 1, (v)=>{ z.r=v; refreshAudioZoneMarkers(); }, (v)=>v.toFixed(0)+' m'));
+    card.appendChild(slider('Max volume', (z.vol!=null?z.vol:0.8), 0, 1, 0.05, (v)=>{ z.vol=v; }, (v)=>Math.round(v*100)+'%'));
+    const ll=document.createElement('label'); ll.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:11px;margin-top:5px;cursor:pointer;';
+    const lc=document.createElement('input'); lc.type='checkbox'; lc.checked=z.loop!==false; lc.style.cssText='width:14px;height:14px;accent-color:#38f5b5;cursor:pointer;'; lc.onchange=()=>{ pushUndoSnapshot(); z.loop=lc.checked; stopAudioZones(); };
+    ll.appendChild(lc); const ls=document.createElement('span'); ls.textContent='Loop (ambient). Off = play once each time you enter.'; ll.appendChild(ls); card.appendChild(ll);
+    host.appendChild(card);
+  });
+  refreshAudioZoneMarkers();
+}
 function renderCampaignPanel(){
   const host = editorEl && editorEl.querySelector('#edCampaign'); if(!host) return;
   host.innerHTML='';
@@ -12969,6 +13051,7 @@ function restoreLevel(level){
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; } else { playerSpawn.x=0; playerSpawn.z=0; playerSpawn.yaw=0; }
   refreshPlayerSpawnMarker();
   extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null;
+  audioZones = Array.isArray(level.audioZones) ? level.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : []; if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
   if(level.grenade){ const G=level.grenade; if(G.model!=null) GRENADE.model=G.model||''; if(G.scale!=null) GRENADE.scale=G.scale; if(G.radius!=null) GRENADE.radius=G.radius; if(G.damage!=null) GRENADE.damage=G.damage; if(G.fuse!=null) GRENADE.fuse=G.fuse; if(G.throwForce!=null) GRENADE.throwForce=G.throwForce; loadGrenadeModel(); if(editorTargets.grenade.sync) editorTargets.grenade.sync(); }
   // gun / aim / station
   if(level.gun){ if(level.gun.url && level.gun.url!==gunModelUrl) swapGunModel(level.gun.url); Object.assign(editorTargets.gun.state, level.gun.state||{}); editorTargets.gun.apply(); }
@@ -13304,6 +13387,7 @@ function buildEditorPanel(){
     + sec('Enemies', 'enemies', '<div id="edEnemies"></div>')
     + sec('Game / waves', 'game', '<div id="edGame"></div>')
     + sec('Loot', 'loot', '<div id="edLoot"></div>')
+    + sec('Audio zones', 'audiozones', '<div id="edAudioZones"></div>')
     + sec('Level file', 'levelfile',
         '<div class="row2"><button id="edSave">💾 Save</button><button id="edClear">Clear save</button></div>'
       + '<div class="row2" style="margin-top:6px"><button id="edShare">🔗 Copy share link</button></div>'
@@ -13322,6 +13406,7 @@ function buildEditorPanel(){
     const cl=ed.querySelector('#edCollapse'); if(cl) cl.onclick=()=>{ const c=ed.classList.toggle('collapsed'); cl.textContent=c?'\u2303':'\u2304'; cl.title=c?'Expand panel':'Collapse panel'; };
   })();
   if(typeof renderCampaignPanel==='function') renderCampaignPanel();
+  if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
   // restore saved width + wire drag-to-resize (drag the left edge; wider = more room for the crowded panels)
   try{ const w = parseInt(localStorage.getItem('breach_editor_width')||'',10); if(w>=260 && w<=window.innerWidth*0.92) p.style.width = w+'px'; }catch(e){}
   (function(){
@@ -15109,6 +15194,7 @@ function toggleEditor(){
     if(isTouch){ editorFreeFly=true; flyInit=false; }   // mobile: fly-around editing (joystick moves, drag the left side to look)
     for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible = true; }
     if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(true);
+    if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers();
     if(typeof refreshCinePreview==='function') refreshCinePreview();   // show the dotted camera path while editing
     const mm=$('minimap'); if(mm) mm.style.display='none';        // declutter combat HUD while editing
     const wp=$('wavePanel'); if(wp) wp.style.display='none';
@@ -15187,6 +15273,7 @@ function startGame(){
   reloading=false; score=0; wave=1; credits=0; grenadeCount=0; runKills=0;
   if(typeof startObjective==='function') startObjective();   // reset survival timer for this run
   if(typeof disposePickupMarkers==='function') disposePickupMarkers();   // remove editor previews; the live (grabbable) pads are spawned next
+  if(typeof disposeAudioZoneMarkers==='function') disposeAudioZoneMarkers(); if(typeof stopAudioZones==='function') stopAudioZones();   // hide zone rings + reset zone playback for a fresh run
   if(typeof spawnPowerups==='function') spawnPowerups();   // lay out map powerups for this run
   if(typeof preloadVfx==='function') preloadVfx();   // warm the flipbook VFX textures (no-op if already loaded)
   if(pvpMode()) credits = 150;   // starting stipend so the economy is usable from the first life
