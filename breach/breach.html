@@ -6028,10 +6028,67 @@ function wall(w,h,d,x,y,z){
   const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), wallMat);
   m.position.set(x,y,z); m.castShadow = m.receiveShadow = true; scene.add(m); return m;
 }
+// ---------- Optional terrain: a displaced height-mesh for the floor. Absent by default; when worldCfg.terrain
+// is set the flat floor becomes a subdivided, displaced plane. terrainHeightAt() returns 0 with no terrain,
+// so every ground hook below is a no-op on flat levels. (Classic movement walks the terrain; Physics mode
+// keeps a flat collider slab for now.) ----------
+function _terrainRng(seed){ let a=(seed|0)||1; return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+// Pure: bilinear sample of an NxN height grid (h[row*N+col]) at normalized u,v in [0,1].
+function _sampleHeightGrid(h, N, u, v){
+  u = u<0?0:(u>1?1:u); v = v<0?0:(v>1?1:v);
+  const fx=u*(N-1), fz=v*(N-1);
+  const x0=Math.floor(fx), z0=Math.floor(fz), x1=Math.min(N-1,x0+1), z1=Math.min(N-1,z0+1);
+  const tx=fx-x0, tz=fz-z0;
+  const a=h[z0*N+x0], b=h[z0*N+x1], c=h[z1*N+x0], d=h[z1*N+x1];
+  return (a*(1-tx)+b*tx)*(1-tz)+(c*(1-tx)+d*tx)*tz;
+}
+// Pure: build an (seg+1)^2 height grid from seeded value noise (two octaves), faded to 0 at the edges so
+// the terrain meets the boundary walls cleanly.
+function generateTerrain(seg, amp, freq, seed){
+  seg=Math.max(2, seg|0); amp=+amp||0; freq=Math.max(1, freq|0);
+  const rnd=_terrainRng(seed);
+  const g1=freq+1, g2=freq*2+1, n1=[], n2=[];
+  for(let i=0;i<g1*g1;i++) n1.push(rnd());
+  for(let i=0;i<g2*g2;i++) n2.push(rnd());
+  const N=seg+1, h=new Array(N*N);
+  for(let r=0;r<N;r++) for(let c=0;c<N;c++){
+    const u=c/(N-1), v=r/(N-1);
+    const e=_sampleHeightGrid(n1,g1,u,v)*0.7 + _sampleHeightGrid(n2,g2,u,v)*0.3;   // 0..1
+    const edge=Math.min(c, N-1-c, r, N-1-r)/(N*0.5);
+    const fall=Math.min(1, edge*3);   // smooth falloff to 0 at the border
+    h[r*N+c]=(e-0.5)*2*amp*fall;
+  }
+  return h;
+}
+// World-space height at (x,z); 0 if no terrain is set.
+function terrainHeightAt(x, z){
+  if(typeof worldCfg==='undefined' || !worldCfg) return 0;
+  const t=worldCfg.terrain; if(!t || !t.h || !t.h.length || !t.seg) return 0;
+  const N=(t.seg|0)+1;
+  return _sampleHeightGrid(t.h, N, (x+ARENA)/(ARENA*2), (z+ARENA)/(ARENA*2));
+}
+let _terrainApplied;
+// Rebuild the floor geometry from worldCfg.terrain. Cheap-guarded: only rebuilds when the terrain actually
+// changed (or force=true, e.g. an arena resize), so it can be called every applyWorldCfg without cost.
+function setTerrainFromCfg(force){
+  const t=(typeof worldCfg!=='undefined' && worldCfg) ? worldCfg.terrain : null;
+  if(!force && t===_terrainApplied) return;
+  _terrainApplied=t;
+  if(floor.geometry) floor.geometry.dispose();
+  if(t && t.h && t.h.length && t.seg){
+    const seg=t.seg|0;
+    const geo=new THREE.PlaneGeometry(ARENA*2, ARENA*2, seg, seg);
+    const pos=geo.attributes.position;
+    for(let i=0;i<pos.count;i++){ const lx=pos.getX(i), ly=pos.getY(i); pos.setZ(i, terrainHeightAt(lx, -ly)); }   // local +Z -> world up after the -PI/2 X rotation; local Y -> world -Z
+    pos.needsUpdate=true; geo.computeVertexNormals();
+    floor.geometry=geo;
+  } else {
+    floor.geometry=new THREE.PlaneGeometry(ARENA*2, ARENA*2);
+  }
+}
 function rebuildArena(){
-  // floor
-  floor.geometry.dispose();
-  floor.geometry = new THREE.PlaneGeometry(ARENA*2, ARENA*2);
+  // floor (flat, or a displaced height-mesh when worldCfg.terrain is set)
+  setTerrainFromCfg(true);
   // grid
   if(grid){ scene.remove(grid); grid.geometry.dispose(); }
   const divs = Math.max(8, Math.round(ARENA*2/2.5));
@@ -7128,7 +7185,7 @@ const player = {
 };
 const EYE = 1.7;            // standing camera height above the surface the player stands on
 // ---- World movement settings (editable in the editor's World panel; saved with the level) ----
-const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, launchPower:1, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorRough:0.95, floorMetal:0.1, floorTex:'', floorTexN:'', floorTexR:'', floorTile:0, floorTileU:0, floorTileV:0, floorRot:0, wallColor:0x1a242b, wallRough:0.8, wallMetal:0.2, wallTex:'', wallTexN:'', wallTexR:'', wallTile:0, wallTileU:0, wallTileV:0, wallRot:0, sky_hdri:'', skyBright:1, skyRot:0, wallsVisible:true, fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4 };
+const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, launchPower:1, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorRough:0.95, floorMetal:0.1, floorTex:'', floorTexN:'', floorTexR:'', floorTile:0, floorTileU:0, floorTileV:0, floorRot:0, wallColor:0x1a242b, wallRough:0.8, wallMetal:0.2, wallTex:'', wallTexN:'', wallTexR:'', wallTile:0, wallTileU:0, wallTileV:0, wallRot:0, sky_hdri:'', skyBright:1, skyRot:0, wallsVisible:true, fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4, terrain:null };
 let worldCfg = Object.assign({}, DEFAULT_WORLD, (savedLevel && savedLevel.world) || {});
 
 // Apply (or clear) a tiling texture on a shared material. Stores the current url on the material under
@@ -7360,6 +7417,7 @@ function applyWorldCfg(){
   // HDRI / equirectangular sky
   if(typeof applySkyHdri==='function'){ try{ applySkyHdri(worldCfg.sky_hdri||''); }catch(e){ console.warn('sky apply failed', e); } }
   if(typeof applySkyRotation==='function') applySkyRotation();   // re-orient the cached sky if only rotation changed
+  if(typeof setTerrainFromCfg==='function') setTerrainFromCfg();   // rebuild the floor height-mesh only if terrain changed
 }
 let editorOpen = false;        // transform editor panel open — declared early to stay TDZ-safe during init
 let _editorOpenFlag = false;   // mirror of editorOpen, read by applyWorldCfg at init
@@ -7387,6 +7445,7 @@ function typingInField(e){
 addEventListener('keydown', e=>{
   // If a text field has focus, let it handle the key — don't record movement or fire any shortcut.
   if(typingInField(e)) return;
+  if(_cineActive){ endCinematic(); return; }   // any key skips the intro flythrough
   keys[e.code]=true;
   if(e.code==='Tab'){ if(!e.repeat) openRadial(); e.preventDefault(); return; }   // radial deploy menu
   // Crouch is Ctrl, so crouch+WASD lands on browser shortcuts: Ctrl+S (save page), Ctrl+D (bookmark),
@@ -8325,7 +8384,7 @@ function updateBots(dt){
       if(Math.abs(b.evx)<0.05) b.evx=0; if(Math.abs(b.evz)<0.05) b.evz=0;
     }
     { const top=(typeof surfaceTopAt==='function')?surfaceTopAt(b.pos.x,b.pos.z):-Infinity;   // gravity + land on the floor or a prop top under the feet
-      const groundY=(top>-Infinity && top<=b.pos.y+STEP)?Math.max(0,top):0;
+      const _bg=terrainHeightAt(b.pos.x,b.pos.z); const groundY=(top>-Infinity && top<=b.pos.y+STEP)?Math.max(_bg,top):_bg;
       if(b.pos.y>groundY+0.04 || (b.vy||0)>0){ b.vy=(b.vy||0)-GRAV*dt; b.pos.y+=b.vy*dt; if(b.vy<=0 && b.pos.y<=groundY){ b.pos.y=groundY; b.vy=0; b.grounded=true; } else b.grounded=false; }
       else { b.pos.y=groundY; b.vy=0; b.grounded=true; }
     }
@@ -8539,6 +8598,7 @@ function loadLevelFromNet(level){
   pickupSpots = Array.isArray(level.pickups) ? level.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : []; pickupModels = (level.pickupModels && typeof level.pickupModels==='object') ? JSON.parse(JSON.stringify(level.pickupModels)) : {}; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }   // adopt the host's sky / ground / fog
   if(level.audio && NET.mode!=='client'){ try{ audioSettings.musicUrl=(typeof level.audio.musicUrl==='string')?level.audio.musicUrl:''; audioSettings.sounds=_sanitizeSounds(level.audio.sounds); if(typeof saveAudioSettings==='function') saveAudioSettings(); if(typeof preloadCustomSounds==='function') preloadCustomSounds(); if(_musicOn){ stopMusic(); startMusic(); } }catch(e){ console.warn('level audio apply failed', e); } }
+  if(level.cine){ cineCfg.on=!!level.cine.on; cineCfg.path=Array.isArray(level.cine.path)?level.cine.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lens=+level.cine.lens||35; cineCfg.dur=+level.cine.dur||6; cineCfg.look=(level.cine.look==='path')?'path':'spawn'; } else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lens=35; cineCfg.dur=6; cineCfg.look='spawn'; }
   // per-player characters: the client keeps its own avatar; the host's character arrives via the welcome 'char' field
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; }
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
@@ -9832,7 +9892,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 255 · 2026-06-08';
+const BUILD_VERSION = 'build 257 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11423,16 +11483,17 @@ function propSurfaceAt(obj, x, z){
   return top;
 }
 function groundHeightAt(x, z, feetY){
+  const g = terrainHeightAt(x, z);
   const top = surfaceTopAt(x, z);
-  if(top === -Infinity) return 0;
-  if(top <= feetY + STEP) return Math.max(0, top);            // flat ground or a low step
+  if(top === -Infinity) return g;
+  if(top <= feetY + STEP) return Math.max(g, top);            // flat ground (or terrain) or a low step
   // Above a step: follow it only if it's a walkable RAMP (a sloped surface), not a tall flat ledge or a wall.
   if(top <= feetY + RAMP_RISE){
     const e = 0.4, hx = surfaceTopAt(x + e, z), hz = surfaceTopAt(x, z + e);
     const slope = Math.hypot((hx > -Infinity ? hx - top : 0), (hz > -Infinity ? hz - top : 0)) / e;
-    if(slope > RAMP_SLOPE_MIN && slope < RAMP_SLOPE_MAX) return Math.max(0, top);   // walk up the ramp surface
+    if(slope > RAMP_SLOPE_MIN && slope < RAMP_SLOPE_MAX) return Math.max(g, top);   // walk up the ramp surface
   }
-  return 0; // arena floor (surface is a tall flat ledge or too steep -> can't auto-climb)
+  return g; // arena floor / terrain (surface is a tall flat ledge or too steep -> can't auto-climb)
 }
 // Can the player's center occupy (x,z) at this foot height? (floor or a surface within a step)
 // Can the player's center occupy (x,z) at this foot height? Solid geometry that fills the player's
@@ -11446,7 +11507,7 @@ function clearAt(x, z, feetY){
   // That edge test is what lets you walk straight onto a sloped model from the ground, instead of being
   // fenced a body-radius away by its axis-aligned bounding box (which spans the model's full height).
   const surf = surfaceTopAt(x, z);
-  const standY = (surf > -Infinity && surf <= feetY + STEP + 1e-4) ? Math.max(0, surf) : feetY;
+  const standY = (surf > -Infinity && surf <= feetY + STEP + 1e-4) ? Math.max(terrainHeightAt(x,z), surf) : feetY;
   const bandLo = standY + STEP, bandHi = standY + PLAYER_HEIGHT;
   for(const c of colliders){
     const bs = (c.userData && (c.userData.boxes || (c.userData.box && [c.userData.box]))); if(!bs) continue;
@@ -11551,6 +11612,69 @@ function updatePerfHud(){
     + 'draws '+_perfCalls+'   tris '+(_perfTris/1000).toFixed(0)+'k   geom '+mem.geometries+'   tex '+mem.textures+'<br>'
     + 'enemies '+enemies.length+'   mixers '+mixers.length+(dofEnabled?'   <span style="color:#ffd166">DoF ON</span>':'');
 }
+// ---------- Cinematic intro camera: author a fly-through in the editor, play it on deploy ----------
+// Reuses pointAlongPath. The camera rides cineCfg.path over cineCfg.dur seconds, framing either the player
+// start ('spawn') or its travel direction ('path'), letterboxed with the HUD hidden. Any input skips it.
+// Disabled / no path => deploy behaves exactly as before. Editor 'Preview' reuses the same engine.
+let cineCfg = { on:false, path:[], lens:35, dur:6, look:'spawn' };
+let _cineActive=false, _cineT=0, _cineData=null, _cineReturn=null, _cineEditorPreview=false;
+const _cineV0=new THREE.Vector3(), _cineTgt=new THREE.Vector3();
+(function(){ if(!document.getElementById('cineCss')){ const st=document.createElement('style'); st.id='cineCss'; st.textContent='body.cine #hud,body.cine #touchUI,body.cine #pauseBtn,body.cine #prompt{display:none !important;}'; (document.head||document.documentElement).appendChild(st); } })();
+function _cineBarsEl(){
+  let el=document.getElementById('cineBars');
+  if(!el){
+    el=document.createElement('div'); el.id='cineBars';
+    el.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:60;opacity:0;transition:opacity .35s;';
+    const top=document.createElement('div'), bot=document.createElement('div');
+    const barCss='position:absolute;left:0;right:0;height:0;background:#000;transition:height .5s cubic-bezier(.4,0,.2,1);';
+    top.style.cssText=barCss+'top:0;'; bot.style.cssText=barCss+'bottom:0;';
+    const tip=document.createElement('div'); tip.style.cssText='position:absolute;right:18px;bottom:8%;color:#cfe;opacity:.65;font:600 12px system-ui,sans-serif;letter-spacing:.04em;';
+    tip.textContent='Press any key / tap to skip';
+    el.appendChild(top); el.appendChild(bot); el.appendChild(tip); el._top=top; el._bot=bot;
+    document.body.appendChild(el);
+  }
+  return el;
+}
+function _cineShowBars(show){
+  const el=_cineBarsEl();
+  if(show){ const vw=innerWidth, vh=innerHeight, barH=Math.max(0,(vh - vw/2.39)/2); el._top.style.height=barH+'px'; el._bot.style.height=barH+'px'; el.style.opacity='1'; }
+  else { el._top.style.height='0'; el._bot.style.height='0'; el.style.opacity='0'; }
+}
+function lensToFov(mm){ const f=Math.max(8, +mm||35), sensorH=24; return 2*Math.atan((sensorH/2)/f)*180/Math.PI; }   // vertical FOV, full-frame sensor
+function cineHasData(){ return !!(cineCfg && cineCfg.path && cineCfg.path.length>=1); }
+function startCinematic(data, editorPreview){
+  if(!data || !data.path || !data.path.length) return false;
+  _cineData={ path:data.path.map(q=>q.slice()), lens:+data.lens||35, dur:Math.max(0.2,+data.dur||6), look:(data.look==='path'?'path':'spawn') };
+  _cineActive=true; _cineT=0; _cineEditorPreview=!!editorPreview;
+  _cineReturn={ x:camera.position.x, y:camera.position.y, z:camera.position.z, q:camera.quaternion.clone(), fov:camera.fov };
+  if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false;
+  if(typeof selBox!=='undefined' && selBox) selBox.visible=false;
+  document.body.classList.add('cine'); _cineShowBars(true);
+  return true;
+}
+function endCinematic(){
+  if(!_cineActive) return;
+  _cineActive=false; _cineShowBars(false); document.body.classList.remove('cine');
+  if(_cineReturn){ camera.fov=_cineReturn.fov; camera.updateProjectionMatrix(); if(_cineEditorPreview){ camera.position.set(_cineReturn.x,_cineReturn.y,_cineReturn.z); camera.quaternion.copy(_cineReturn.q); } }
+  _cineReturn=null; _cineData=null; _cineEditorPreview=false;
+  if(typeof clearMovementInput==='function') clearMovementInput();
+}
+function updateCinematic(dt){
+  const d=_cineData; if(!d){ endCinematic(); return; }
+  _cineT += dt;
+  let t=Math.min(1, _cineT/d.dur); const te=t*t*(3-2*t);   // ease in/out
+  const path=d.path;
+  if(path.length>=2){ const pp=pointAlongPath(path, te, false); _cineV0.set(pp[0],pp[1],pp[2]); }
+  else { _cineV0.set(path[0][0], path[0][1], path[0][2]); }
+  camera.position.copy(_cineV0);
+  if(d.look==='path' && path.length>=2){ const a=pointAlongPath(path, Math.min(1,te+0.02), false); _cineTgt.set(a[0],a[1],a[2]); if(_cineTgt.distanceToSquared(_cineV0)<1e-4) _cineTgt.set(playerSpawn.x, EYE, playerSpawn.z); }
+  else { _cineTgt.set(playerSpawn.x, EYE, playerSpawn.z); }
+  camera.lookAt(_cineTgt);
+  camera.fov=lensToFov(d.lens); camera.updateProjectionMatrix();
+  if(_cineT>=d.dur) endCinematic();
+}
+function maybeStartIntroCine(){ if(cineCfg.on && cineHasData()) startCinematic({ path:cineCfg.path, lens:cineCfg.lens, dur:cineCfg.dur, look:cineCfg.look }, false); }
+addEventListener('pointerdown', ()=>{ if(_cineActive) endCinematic(); });
 function loop(){
   requestAnimationFrame(loop);
   const rawDt = Math.min(clock.getDelta(), 0.05);
@@ -11560,6 +11684,7 @@ function loop(){
   { const v = gameOn && !gameOver && !shopOpen && !editorOpen && !choosingUpgrade && !paused;   // show ❚❚ only during live play
     if(v!==_pbShow){ _pbShow=v; const pb=document.getElementById('pauseBtn'); if(pb) pb.style.display = v?'flex':'none'; } }
   if(hitStop > 0){ hitStop -= rawDt; dt = rawDt * 0.12; }   // impact freeze: slow the sim briefly (real-time countdown)
+  if(_cineActive){ updateCinematic(rawDt); renderScene(scene,camera); return; }   // intro/preview flythrough owns the camera; freeze the sim
   if(!gameOn) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }
   if((shopOpen || choosingUpgrade || (paused && NET.mode==='off')) && !(duelDead && pvpMode())) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }  // freeze world while shopping / picking an upgrade / paused (solo) — but never while waiting to respawn
 
@@ -11956,7 +12081,7 @@ function loop(){
       en.mesh.position.z = Math.max(-elim, Math.min(elim, en.mesh.position.z));
 
       const near = en._near || players[0];
-      en.mesh.position.y = 1.4 + Math.sin(t*4+en.id)*0.08 + (en.launchY||0);
+      en.mesh.position.y = terrainHeightAt(en.mesh.position.x, en.mesh.position.z) + 1.4 + Math.sin(t*4+en.id)*0.08 + (en.launchY||0);
       const fx = (en._faceX!=null) ? en._faceX : near.pos.x, fz = (en._faceZ!=null) ? en._faceZ : near.pos.z;
       if(en.grounded===false){   // launched -> tumble through the air
         en._spin=(en._spin||0)+(Math.hypot(en.evx||0,en.evz||0)+Math.abs(en.vy||0))*dt*0.5;
@@ -12600,6 +12725,7 @@ function serializeLevel(){
     extract: extractSpot ? { x: +extractSpot.x.toFixed(3), z: +extractSpot.z.toFixed(3) } : null,
     grenade: { model: GRENADE.model, scale: GRENADE.scale, radius: GRENADE.radius, damage: GRENADE.damage, fuse: GRENADE.fuse, throwForce: GRENADE.throwForce },
     audio:   { musicUrl: (audioSettings.musicUrl||''), sounds: _sanitizeSounds(audioSettings.sounds) },   // music track + custom SFX travel with the level (volumes/mute stay per-device)
+    cine:    { on: cineCfg.on, path: cineCfg.path.map(q=>q.slice()), lens: cineCfg.lens, dur: cineCfg.dur, look: cineCfg.look },
   };
 }
 function saveLevel(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(serializeLevel())); return true; } catch(e){ return false; } }
@@ -12691,6 +12817,7 @@ function restoreLevel(level){
   // world + loot
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }
   if(level.audio){ try{ audioSettings.musicUrl=(typeof level.audio.musicUrl==='string')?level.audio.musicUrl:''; audioSettings.sounds=_sanitizeSounds(level.audio.sounds); if(typeof saveAudioSettings==='function') saveAudioSettings(); if(typeof preloadCustomSounds==='function') preloadCustomSounds(); if(_musicOn){ stopMusic(); startMusic(); } }catch(e){ console.warn('level audio apply failed', e); } }
+  if(level.cine){ cineCfg.on=!!level.cine.on; cineCfg.path=Array.isArray(level.cine.path)?level.cine.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lens=+level.cine.lens||35; cineCfg.dur=+level.cine.dur||6; cineCfg.look=(level.cine.look==='path')?'path':'spawn'; } else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lens=35; cineCfg.dur=6; cineCfg.look='spawn'; }
   if(level.player) applyPlayerLevel(level.player);
   if(level.chest){ chestModelUrl = level.chest.url||''; chestModelScale = level.chest.scale||1; }
   if(level.coin){ const c=level.coin; coinCfg.url=c.url||''; coinCfg.scale=c.scale||1; coinCfg.on=c.on!==false; }
@@ -13219,7 +13346,40 @@ function renderEditorFields(){
     { const b=subSec('Floor','floor',true);
       colorRow(b,'Floor color','floorColor'); slider(b,'Floor roughness','floorRough',0,1,0.05); slider(b,'Floor metalness','floorMetal',0,1,0.05);
       texRow(b,'https://\u2026/floor.jpg (tiles)','floorTex'); slider(b,'Floor tile W','floorTileU',0,80,0.5); slider(b,'Floor tile H','floorTileV',0,80,0.5); slider(b,'Floor rotate\u00b0','floorRot',0,360,5);
-      { const fh=document.createElement('div'); b.appendChild(fh); renderTexSearch(fh,(maps)=>{ pushUndoSnapshot(); worldCfg.floorTex=maps.map||''; worldCfg.floorTexN=maps.normal||''; worldCfg.floorTexR=maps.rough||''; applyWorldCfg(); renderEditorFields(); }); } }
+      { const fh=document.createElement('div'); b.appendChild(fh); renderTexSearch(fh,(maps)=>{ pushUndoSnapshot(); worldCfg.floorTex=maps.map||''; worldCfg.floorTexN=maps.normal||''; worldCfg.floorTexR=maps.rough||''; applyWorldCfg(); renderEditorFields(); }); }
+      { const tb=document.createElement('div'); tb.style.cssText='margin-top:8px;border-top:1px solid #1d2b33;padding-top:7px;';
+        const tl=document.createElement('div'); tl.className='hint'; tl.style.margin='0 0 5px'; tl.innerHTML='<b>Terrain</b> \u2014 rolling height-mesh. Classic movement walks it; Physics mode floor stays flat for now.'; tb.appendChild(tl);
+        const tcur=worldCfg.terrain||null;
+        const trow=(lab,val,mn,mx,st)=>{ const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:3px 0;'; const sp=document.createElement('span'); sp.textContent=lab; sp.style.minWidth='52px'; const inp=document.createElement('input'); inp.type='range'; inp.min=mn; inp.max=mx; inp.step=st; inp.value=val; inp.style.flex='1'; inp.style.accentColor='#38f5b5'; const nm=document.createElement('span'); nm.textContent=val; nm.style.minWidth='26px'; nm.style.textAlign='right'; inp.oninput=()=>{ nm.textContent=inp.value; }; r.appendChild(sp); r.appendChild(inp); r.appendChild(nm); tb.appendChild(r); return inp; };
+        const ampIn=trow('Height', tcur?(tcur.amp!=null?tcur.amp:6):6, 0, 18, 0.5);
+        const freqIn=trow('Detail', tcur?(tcur.freq||3):3, 1, 8, 1);
+        const br=document.createElement('div'); br.style.cssText='display:flex;gap:6px;margin-top:5px;';
+        const gen=document.createElement('button'); gen.textContent=tcur?'Regenerate':'Generate terrain'; gen.style.cssText='flex:1;padding:5px 8px;font-size:11px;cursor:pointer;';
+        gen.onclick=()=>{ pushUndoSnapshot(); const amp=+ampIn.value, freq=(+freqIn.value)|0, seed=(Date.now()&0x7fffffff); worldCfg.terrain={ seg:48, amp:amp, freq:freq, seed:seed, h:generateTerrain(48, amp, freq, seed) }; setTerrainFromCfg(true); renderEditorFields(); };
+        const flat=document.createElement('button'); flat.textContent='Flatten'; flat.style.cssText='padding:5px 10px;font-size:11px;cursor:pointer;'; flat.disabled=!tcur;
+        flat.onclick=()=>{ pushUndoSnapshot(); worldCfg.terrain=null; setTerrainFromCfg(true); renderEditorFields(); };
+        br.appendChild(gen); br.appendChild(flat); tb.appendChild(br); b.appendChild(tb); } }
+    { const b=subSec('Cinematic','cine',true);
+      { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 6px;cursor:pointer;';
+        const c=document.createElement('input'); c.type='checkbox'; c.checked=!!cineCfg.on; c.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+        c.onchange=()=>{ pushUndoSnapshot(); cineCfg.on=c.checked; };
+        const sp=document.createElement('span'); sp.innerHTML='<b>Play intro flythrough on deploy</b>'; r.appendChild(c); r.appendChild(sp); b.appendChild(r); }
+      hint(b,'Fly the editor camera to a spot, Add a waypoint, repeat. 2+ points moves the camera; 1 point is a held shot. The shot frames your player start (or its travel direction). Deploy to watch; any key or tap skips.','0 0 6px');
+      { const add=document.createElement('button'); add.textContent='+ Add camera waypoint (current view)'; add.style.cssText='width:100%;padding:5px 8px;font-size:11px;cursor:pointer;margin-bottom:4px;';
+        add.onclick=()=>{ pushUndoSnapshot(); cineCfg.path.push([+camera.position.x.toFixed(3), +camera.position.y.toFixed(3), +camera.position.z.toFixed(3)]); renderEditorFields(); }; b.appendChild(add); }
+      if(cineCfg.path.length){
+        cineCfg.path.forEach((pt,i)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;align-items:center;gap:6px;font-size:11px;color:#9fe6cf;margin:2px 0;';
+          const lab=document.createElement('span'); lab.textContent=(i===0?'Start':('Pt '+i)); lab.style.flex='1';
+          const go=document.createElement('button'); go.textContent='Move here'; go.style.cssText='padding:1px 7px;font-size:10px;'; go.onclick=()=>{ pushUndoSnapshot(); cineCfg.path[i]=[+camera.position.x.toFixed(3),+camera.position.y.toFixed(3),+camera.position.z.toFixed(3)]; };
+          const del=document.createElement('button'); del.textContent='✕'; del.style.cssText='padding:1px 7px;font-size:10px;'; del.onclick=()=>{ pushUndoSnapshot(); cineCfg.path.splice(i,1); renderEditorFields(); };
+          r.appendChild(lab); r.appendChild(go); r.appendChild(del); b.appendChild(r); });
+        const clr=document.createElement('button'); clr.textContent='Clear path'; clr.style.cssText='padding:3px 10px;font-size:11px;margin:3px 0;'; clr.onclick=()=>{ pushUndoSnapshot(); cineCfg.path.length=0; renderEditorFields(); }; b.appendChild(clr);
+      }
+      const crow=(lab,val,mn,mx,st,suffix,set)=>{ const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent=lab; sp.style.minWidth='56px'; const inp=document.createElement('input'); inp.type='range'; inp.min=mn; inp.max=mx; inp.step=st; inp.value=val; inp.style.flex='1'; inp.style.accentColor='#38f5b5'; const nm=document.createElement('span'); nm.textContent=val+suffix; nm.style.minWidth='44px'; nm.style.textAlign='right'; inp.oninput=()=>{ nm.textContent=inp.value+suffix; set(+inp.value); }; r.appendChild(sp); r.appendChild(inp); r.appendChild(nm); b.appendChild(r); };
+      crow('Lens', cineCfg.lens, 14, 120, 1, 'mm', v=>{ cineCfg.lens=v; });
+      crow('Duration', cineCfg.dur, 1, 20, 0.5, 's', v=>{ cineCfg.dur=v; });
+      { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent='Framing'; sp.style.minWidth='56px'; const sel=document.createElement('select'); sel.style.cssText='flex:1;font-size:11px;'; [['spawn','Aim at player start'],['path','Look along path']].forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(cineCfg.look===o[0]) op.selected=true; sel.appendChild(op); }); sel.onchange=()=>{ cineCfg.look=sel.value; }; r.appendChild(sp); r.appendChild(sel); b.appendChild(r); }
+      { const prev=document.createElement('button'); prev.textContent='▶ Preview'; prev.style.cssText='width:100%;padding:6px 8px;font-size:12px;cursor:pointer;margin-top:4px;'; prev.disabled=!cineCfg.path.length; prev.onclick=()=>{ startCinematic({ path:cineCfg.path, lens:cineCfg.lens, dur:cineCfg.dur, look:cineCfg.look }, true); }; b.appendChild(prev); } }
     { const b=subSec('Walls','walls',true);
       { const vr=document.createElement('label'); vr.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 6px;cursor:pointer;';
         const vc=document.createElement('input'); vc.type='checkbox'; vc.checked=(worldCfg.wallsVisible!==false); vc.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
@@ -14785,6 +14945,7 @@ function startGame(){
   updateHUD(); updateBuffs(0);
   resetDynamicProps();        // dynamic objects return to their authored spots each deploy
   teardownInstancing(); buildInstancing();   // (re)collapse repeated static shapes for play
+  if(typeof maybeStartIntroCine==='function') maybeStartIntroCine();   // optional authored intro flythrough (no-op if disabled / no path)
   tryPointerLock();
 }
 // ---- Persistent best + end-of-run summary (localStorage; survives refresh/sessions) ----
