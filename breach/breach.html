@@ -6821,6 +6821,7 @@ function gltfManager(){
 let _glbPending = 0;   // in-flight async GLB loads (drives the level loading screen so assets don't pop in)
 let _skyPending = false;   // sky HDRI / panorama load in flight
 let _texPending = 0;       // world floor/wall surface-map loads in flight
+let _levelLoaderEl=null, _levelLoaderActive=false;   // declared early: loop() reads _levelLoaderActive before the loader-UI section runs
 // Model loads are throttled to a few at a time and retried on failure. Restoring a level full of props used
 // to fire every GLB at once, bursting the CORS proxy / model host into HTTP 429 (rate-limited) so most models
 // silently failed. The queue keeps concurrency low; transient failures (esp. 429) retry with backoff.
@@ -9927,7 +9928,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 274 · 2026-06-08';
+const BUILD_VERSION = 'build 275 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15098,7 +15099,6 @@ function toggleEditor(){
 }
 
 // ---------- Game state ----------
-let _levelLoaderEl=null, _levelLoaderActive=false;
 function _levelAssetsPending(){ return _glbPending>0 || _skyPending || _texPending>0; }   // models, sky, or surface textures still loading
 function showLevelLoader(){
   if(!_levelLoaderEl){
