@@ -643,7 +643,7 @@
     <div id="mpStatus"></div>
   </div>
 </div>
-<div id="charPicker" class="modalBack hidden" style="z-index:25">
+<div id="charPicker" class="modalBack hidden" style="z-index:90">
   <div class="modalCard">
     <button class="modalClose" data-close="charPicker">✕</button>
     <h2>CHOOSE A CHARACTER</h2>
@@ -8810,11 +8810,11 @@ function _charHex(i){ return '#'+CHARACTERS[i].color.toString(16).padStart(6,'0'
 function updateCharBtnLabel(){ const rc=(myRosterIdx>=0 && charRoster[myRosterIdx])?charRoster[myRosterIdx]:null; const nm=rc?_esc(rc.name):CHARACTERS[myCharIdx].name; const html='CHARACTER: <b style="color:'+_charHex(myCharIdx)+'">'+nm+'</b> \u25b8'; ['charBtn','lobbyCharBtn'].forEach(id=>{ const b=document.getElementById(id); if(b) b.innerHTML=html; }); }
 function renderCharGrid(){ const g=document.getElementById('charGrid'); if(!g) return; g.innerHTML='';
   if(charRoster.length){
-    const lab=document.createElement('div'); lab.textContent='CHARACTER'; lab.style.cssText='flex-basis:100%;width:100%;color:#7fe6cf;font-size:10px;letter-spacing:2px;margin:4px 0 1px;'; g.appendChild(lab);
+    const lab=document.createElement('div'); lab.textContent='CHARACTER'; lab.style.cssText='grid-column:1/-1;color:#7fe6cf;font-size:10px;letter-spacing:2px;margin:4px 0 1px;'; g.appendChild(lab);
     const mk=(idx,name,grad)=>{ const card=document.createElement('div'); card.className='charCard'+(idx===myRosterIdx?' sel':''); const sw=document.createElement('div'); sw.className='charSwatch'; sw.style.background=grad; const nm=document.createElement('div'); nm.className='charName'; nm.textContent=name; card.appendChild(sw); card.appendChild(nm); card.onclick=()=>selectRosterChar(idx); g.appendChild(card); };
     mk(-1, 'Default', 'linear-gradient(135deg,#3a4750,#222c32)');
     charRoster.forEach((c,i)=> mk(i, c.name||('Character '+(i+1)), 'linear-gradient(135deg,#1f6f7a,#0f3038)'));
-    const lab2=document.createElement('div'); lab2.textContent='COLOR'; lab2.style.cssText='flex-basis:100%;width:100%;color:#7fe6cf;font-size:10px;letter-spacing:2px;margin:6px 0 1px;'; g.appendChild(lab2);
+    const lab2=document.createElement('div'); lab2.textContent='COLOR'; lab2.style.cssText='grid-column:1/-1;color:#7fe6cf;font-size:10px;letter-spacing:2px;margin:6px 0 1px;'; g.appendChild(lab2);
   }
   CHARACTERS.forEach((c,i)=>{ const card=document.createElement('div'); card.className='charCard'+(i===myCharIdx?' sel':''); const sw=document.createElement('div'); sw.className='charSwatch'; sw.style.background=_charHex(i); const nm=document.createElement('div'); nm.className='charName'; nm.textContent=c.name; card.appendChild(sw); card.appendChild(nm); card.onclick=()=>selectChar(i); g.appendChild(card); }); }
 function selectRosterChar(i){ myRosterIdx=(i>=0 && charRoster[i])?i:-1; renderCharGrid(); updateCharBtnLabel(); if(typeof previewAvatar!=='undefined' && previewAvatar) buildAvatarVisual(previewAvatar, myCharCfg()); if(NET.mode!=='off') broadcastMyChar(); }
@@ -10019,7 +10019,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 288 · 2026-06-08';
+const BUILD_VERSION = 'build 289 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15323,6 +15323,7 @@ function waitAssetsThenReveal(){
   requestAnimationFrame(tick);
 }
 function startGame(){
+  if(typeof closeModal==='function'){ closeModal('charPicker'); closeModal('lobby'); closeModal('mpModal'); }   // never start a match with a menu modal still open over the game
   if(_levelAssetsPending()){ showLevelLoader(); waitAssetsThenReveal(); }   // hold a loading screen so assets (models, sky, textures) don't pop in mid-game
   clearMovementInput();   // start fresh: no input held over from a previous round/death
   if(_pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; }   // hide editor path markers during play
