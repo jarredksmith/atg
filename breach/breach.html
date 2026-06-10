@@ -6916,7 +6916,7 @@ let netIdPrefix = 's';
 let nextNid = 1;
 function genNid(){ return netIdPrefix + '-' + (nextNid++); }
 function finalizeProp(obj, src, t, gltf, slot, animMode, mat, nid){
-  obj.position.set(t[0], t[1], t[2]);
+  obj.position.set(t[0], t[1] + terrainHeightAt(t[0], t[2]), t[2]);   // sit on the terrain surface (terrainHeightAt is 0 on flat levels)
   obj.rotation.set(t[3], t[4], t[5]);
   if(t.length >= 9) obj.scale.set(t[6], t[7], t[8]);   // non-uniform (e.g. cover crates)
   else obj.scale.setScalar(t[6]);
@@ -8120,7 +8120,7 @@ let pickupModels = (savedLevel && savedLevel.pickupModels && typeof savedLevel.p
 let pickupMarkers = [];
 function refreshPickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m); } pickupMarkers.length=0;
   if(typeof pickupsOn!=='undefined' && !pickupsOn) return;   // pickups disabled: no editor markers
-  for(const sp of pickupSpots){ const g=buildPowerupMesh(sp.kind); g.position.set(sp.x,0,sp.z); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.pickupMarker=true; scene.add(g); pickupMarkers.push(g); } }
+  for(const sp of pickupSpots){ const g=buildPowerupMesh(sp.kind); g.position.set(sp.x, terrainHeightAt(sp.x,sp.z), sp.z); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.pickupMarker=true; scene.add(g); pickupMarkers.push(g); } }
 function setPickupMarkersVisible(v){ for(const m of pickupMarkers) m.visible=v; }
 function disposePickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m); } pickupMarkers.length=0; }
 function addPickupSpot(kind){ pushUndoSnapshot(); const fwd=new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw)); pickupSpots.push({ x:+(player.pos.x+fwd.x*6).toFixed(2), z:+(player.pos.z+fwd.z*6).toFixed(2), kind:kind||'health' }); refreshPickupMarkers(); renderEditorFields(); }
@@ -8169,7 +8169,7 @@ function spawnPowerups(){
   if(!pickupsOn) return;             // pickups disabled for this level
   const spots = (pickupSpots && pickupSpots.length) ? pickupSpots : powerupLayout();
   for(const spot of spots){
-    const mesh = buildPowerupMesh(spot.kind); mesh.position.set(spot.x, 0, spot.z); scene.add(mesh);
+    const mesh = buildPowerupMesh(spot.kind); mesh.position.set(spot.x, terrainHeightAt(spot.x,spot.z), spot.z); scene.add(mesh);
     powerups.push({ id:_puId++, x:spot.x, z:spot.z, kind:spot.kind, ready:true, cd:0, mesh });
   }
 }
@@ -9892,7 +9892,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 260 · 2026-06-08';
+const BUILD_VERSION = 'build 262 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11706,14 +11706,21 @@ function updateCinematic(dt){
   if(_cineT>=d.dur) endCinematic();
 }
 function maybeStartIntroCine(){ if(cineCfg.on && cineHasData()) startCinematic({ path:cineCfg.path, lensFrom:cineCfg.lensFrom, lensTo:cineCfg.lensTo, focusOn:cineCfg.focusOn, focusFrom:cineCfg.focusFrom, focusTo:cineCfg.focusTo, dur:cineCfg.dur, look:cineCfg.look }, false); }
+function _dashPts(v, dash, gap){
+  const out=[], step=dash+gap;
+  for(let i=0;i<v.length-1;i++){ const a=v[i], b=v[i+1], len=a.distanceTo(b); if(len<1e-4) continue;
+    const dir=b.clone().sub(a).multiplyScalar(1/len); let d=0;
+    while(d<len){ const e=Math.min(d+dash, len); out.push(a.clone().addScaledVector(dir,d), a.clone().addScaledVector(dir,e)); d+=step; } }
+  return out;
+}
 function refreshCinePreview(){
   try{
     if(_cinePreviewGroup){ scene.remove(_cinePreviewGroup); _cinePreviewGroup.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); _cinePreviewGroup=null; }
     if(!editorOpen || !cineCfg.path || !cineCfg.path.length) return;
     const g=new THREE.Group();
     const pts=cineCfg.path.map(q=>new THREE.Vector3(q[0],q[1],q[2]));
-    if(pts.length>=2){ const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineDashedMaterial({ color:0xffcf6b, dashSize:0.7, gapSize:0.45, transparent:true, opacity:0.9, depthTest:false })); line.computeLineDistances(); line.renderOrder=998; g.add(line); }
-    if(pts.length>=1 && typeof playerSpawn!=='undefined'){ const aim=new THREE.Line(new THREE.BufferGeometry().setFromPoints([pts[pts.length-1], new THREE.Vector3(playerSpawn.x, EYE, playerSpawn.z)]), new THREE.LineDashedMaterial({ color:0x4aa3ff, dashSize:0.5, gapSize:0.6, transparent:true, opacity:0.45, depthTest:false })); aim.computeLineDistances(); aim.renderOrder=998; g.add(aim); }
+    if(pts.length>=2){ const line=new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(_dashPts(pts,0.7,0.45)), new THREE.LineBasicMaterial({ color:0xffcf6b, transparent:true, opacity:0.95, depthTest:false })); line.renderOrder=998; g.add(line); }
+    if(pts.length>=1 && typeof playerSpawn!=='undefined'){ const aim=new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(_dashPts([pts[pts.length-1], new THREE.Vector3(playerSpawn.x, EYE, playerSpawn.z)],0.5,0.6)), new THREE.LineBasicMaterial({ color:0x4aa3ff, transparent:true, opacity:0.5, depthTest:false })); aim.renderOrder=998; g.add(aim); }
     cineCfg.path.forEach((q,i)=>{ const m=new THREE.Mesh(new THREE.SphereGeometry(0.4,10,8), new THREE.MeshBasicMaterial({ color: i===0?0x38f5b5:0xffcf6b, depthTest:false })); m.position.set(q[0],q[1],q[2]); m.renderOrder=999; g.add(m); });
     scene.add(g); _cinePreviewGroup=g;
   }catch(e){ /* path preview is cosmetic; never let it break the editor */ }
@@ -12277,8 +12284,8 @@ const editorTargets = {
     getUrl(){ return stationModelUrl; },
     setUrl(u){ swapStationModel(u); },
     apply(){ const s=this.state;
-      if(station){ station.group.position.set(s.px,s.py,s.pz); station.pos.set(s.px,s.py,s.pz);
-        if(station.light) station.light.position.set(s.px,3+s.py,s.pz); applyStationLight(); }
+      if(station){ const _sty=s.py + terrainHeightAt(s.px,s.pz); station.group.position.set(s.px,_sty,s.pz); station.pos.set(s.px,_sty,s.pz);
+        if(station.light) station.light.position.set(s.px,3+_sty,s.pz); applyStationLight(); }
       const o=this.obj(); if(o){ o.scale.setScalar(s.s); o.rotation.set(s.rx*RAD, s.ry*RAD, s.rz*RAD);
         station.group.updateMatrixWorld(true); refreshPropCollider(o); } },   // keep collision boxes in sync with the transform
     code(){ const s=this.state;
@@ -12740,7 +12747,7 @@ function propEntry(o){
   return e;
 }
 // live transform tuple + helpers for prop sync
-function propTuple(o){ return [o.position.x,o.position.y,o.position.z, o.rotation.x,o.rotation.y,o.rotation.z, o.scale.x,o.scale.y,o.scale.z]; }
+function propTuple(o){ return [o.position.x, o.position.y - terrainHeightAt(o.position.x, o.position.z), o.position.z, o.rotation.x,o.rotation.y,o.rotation.z, o.scale.x,o.scale.y,o.scale.z]; }
 function tupleEq(a,b){ if(!a||!b) return false; for(let i=0;i<9;i++){ if(Math.abs(a[i]-b[i])>1e-4) return false; } return true; }
 function propByNid(nid){ for(const o of propModels){ if(o && o.userData.nid===nid) return o; } return null; }
 function propIndexByNid(nid){ for(let i=0;i<propModels.length;i++){ const o=propModels[i]; if(o && o.userData.nid===nid) return i; } return -1; }
