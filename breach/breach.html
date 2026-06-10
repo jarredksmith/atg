@@ -659,6 +659,7 @@
     <div id="lobbyPlayers"></div>
     <div id="lobbyCount" class="mpHint" style="text-align:center;margin-top:6px"></div>
     <div id="lobbyBots" class="mpRow hidden" style="margin-top:10px;align-items:center;gap:8px;justify-content:center"><span class="mpHint">Fill with bots</span><input id="lobbyBotN" type="number" min="0" max="7" value="0" style="width:56px"></div>
+    <div class="mpRow" style="margin-top:10px"><button id="lobbyCharBtn" class="mpBtn" style="width:100%;text-align:left">CHARACTER ▸</button></div>
     <div class="mpActions" style="margin-top:14px;justify-content:center;gap:10px">
       <button id="lobbyStart" class="mpBtn coop hidden">START MATCH</button>
       <button id="lobbyLeave" class="mpBtn">Leave</button>
@@ -8805,7 +8806,7 @@ let _charBcT=null;
 function _scheduleCharBroadcast(){ if(NET.mode==='off') return; if(_charBcT) clearTimeout(_charBcT); _charBcT=setTimeout(()=>{ _charBcT=null; broadcastMyChar(); }, 400); }
 function addCharRing(g, color){ const geo=new THREE.RingGeometry(0.34,0.5,28); geo.rotateX(-Math.PI/2); const m=new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent:true, opacity:0.85, side:THREE.DoubleSide, depthWrite:false })); m.position.y=0.05; m.raycast=()=>{}; g.add(m); g.userData.charRing=m; }
 function _charHex(i){ return '#'+CHARACTERS[i].color.toString(16).padStart(6,'0'); }
-function updateCharBtnLabel(){ const b=document.getElementById('charBtn'); if(b) b.innerHTML='CHARACTER: <b style="color:'+_charHex(myCharIdx)+'">'+CHARACTERS[myCharIdx].name+'</b> \u25b8'; }
+function updateCharBtnLabel(){ const rc=(myRosterIdx>=0 && charRoster[myRosterIdx])?charRoster[myRosterIdx]:null; const nm=rc?_esc(rc.name):CHARACTERS[myCharIdx].name; const html='CHARACTER: <b style="color:'+_charHex(myCharIdx)+'">'+nm+'</b> \u25b8'; ['charBtn','lobbyCharBtn'].forEach(id=>{ const b=document.getElementById(id); if(b) b.innerHTML=html; }); }
 function renderCharGrid(){ const g=document.getElementById('charGrid'); if(!g) return; g.innerHTML='';
   if(charRoster.length){
     const lab=document.createElement('div'); lab.textContent='CHARACTER'; lab.style.cssText='flex-basis:100%;width:100%;color:#7fe6cf;font-size:10px;letter-spacing:2px;margin:4px 0 1px;'; g.appendChild(lab);
@@ -8815,7 +8816,7 @@ function renderCharGrid(){ const g=document.getElementById('charGrid'); if(!g) r
     const lab2=document.createElement('div'); lab2.textContent='COLOR'; lab2.style.cssText='flex-basis:100%;width:100%;color:#7fe6cf;font-size:10px;letter-spacing:2px;margin:6px 0 1px;'; g.appendChild(lab2);
   }
   CHARACTERS.forEach((c,i)=>{ const card=document.createElement('div'); card.className='charCard'+(i===myCharIdx?' sel':''); const sw=document.createElement('div'); sw.className='charSwatch'; sw.style.background=_charHex(i); const nm=document.createElement('div'); nm.className='charName'; nm.textContent=c.name; card.appendChild(sw); card.appendChild(nm); card.onclick=()=>selectChar(i); g.appendChild(card); }); }
-function selectRosterChar(i){ myRosterIdx=(i>=0 && charRoster[i])?i:-1; renderCharGrid(); if(typeof previewAvatar!=='undefined' && previewAvatar) buildAvatarVisual(previewAvatar, myCharCfg()); if(NET.mode!=='off') broadcastMyChar(); }
+function selectRosterChar(i){ myRosterIdx=(i>=0 && charRoster[i])?i:-1; renderCharGrid(); updateCharBtnLabel(); if(typeof previewAvatar!=='undefined' && previewAvatar) buildAvatarVisual(previewAvatar, myCharCfg()); if(NET.mode!=='off') broadcastMyChar(); }
 function selectChar(i){ if(i<0||i>=CHARACTERS.length) return; myCharIdx=i; try{ localStorage.setItem('breach_char', String(i)); }catch(e){} updateCharBtnLabel(); renderCharGrid(); if(typeof previewAvatar!=='undefined' && previewAvatar) buildAvatarVisual(previewAvatar, myCharCfg()); if(NET.mode!=='off') broadcastMyChar(); }
 function openCharPicker(){ renderCharGrid(); const m=document.getElementById('charPicker'); if(m) m.classList.remove('hidden'); }
 function makeRemotePlayer(name, cfg){
@@ -9192,7 +9193,7 @@ function enterLobby(){   // host
   const sb=document.getElementById('lobbyStart'); if(sb) sb.classList.remove('hidden');
   const bw=document.getElementById('lobbyBots'), bn=document.getElementById('lobbyBotN');
   if(bw && bn){ if(pvpMode() && NET.gameMode==='duel'){ bw.classList.add('hidden'); } else { bw.classList.remove('hidden'); bn.value=NET.botCount||0; } }
-  openModal('lobby'); refreshLobby(); announceRoom();
+  updateCharBtnLabel(); openModal('lobby'); refreshLobby(); announceRoom();
 }
 function refreshLobby(){ if(NET.mode!=='host') return; renderLobby(lobbyRoster()); broadcastLobby(); }
 function broadcastLobby(){ if(NET.mode!=='host') return; const roster=lobbyRoster(); for(const id in NET.conns){ try{ NET.conns[id].send({t:'lobby', mode:NET.gameMode, players:roster}); }catch(e){} } }
@@ -9203,6 +9204,8 @@ function showClientLobby(){
   const hint=document.getElementById('lobbyHint'); if(hint) hint.textContent='Waiting for the host to start\u2026';
   const sb=document.getElementById('lobbyStart'); if(sb) sb.classList.add('hidden');
   const bw=document.getElementById('lobbyBots'); if(bw) bw.classList.add('hidden');
+  if(NET.pendingLevel && Array.isArray(NET.pendingLevel.roster)) charRoster = NET.pendingLevel.roster.map(_sanitizeCharCfg);   // make the host's character models pickable while waiting in the lobby
+  updateCharBtnLabel();
   openModal('lobby');
   if(NET.lobbyRoster) renderLobby(NET.lobbyRoster);
 }
@@ -10014,7 +10017,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 284 · 2026-06-08';
+const BUILD_VERSION = 'build 285 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15661,7 +15664,7 @@ function populateSoundEditor(host){
 }
 
 function bindMenu(){
-  { const cb=document.getElementById('charBtn'); if(cb) cb.onclick=openCharPicker; updateCharBtnLabel(); }
+  { const cb=document.getElementById('charBtn'); if(cb) cb.onclick=openCharPicker; const lcb=document.getElementById('lobbyCharBtn'); if(lcb) lcb.onclick=openCharPicker; updateCharBtnLabel(); }
   { const sb=document.getElementById('lobbyStart'); if(sb) sb.onclick=startMatch; const lv=document.getElementById('lobbyLeave'); if(lv) lv.onclick=()=>{ unannounceRoom(); location.reload(); }; }
   { const rf=document.getElementById('mpRefresh'); if(rf) rf.onclick=refreshGamesList; refreshGamesList(); setInterval(()=>{ const m=document.getElementById('mpModal'); if(m && !m.classList.contains('hidden') && lobbyEnabled()) refreshGamesList(); }, 4000); window.addEventListener('beforeunload', ()=>{ try{ unannounceRoom(); }catch(e){} }); }
   if(MENU_HTML===null){ const ov0=document.getElementById('overlay'); if(ov0) MENU_HTML = ov0.innerHTML; }   // capture the full start menu once, before any death/win screen overwrites it
