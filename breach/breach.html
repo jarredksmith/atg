@@ -8542,7 +8542,7 @@ function duelDie(){
 function duelRespawn(){
   duelDead = false; duelInvuln = 1.2;
   const sp = randomSpawn();
-  player.hp = player.maxHp; player.pos.set(sp.x, EYE, sp.z); player.vel.set(0,0,0);
+  player.hp = player.maxHp; player.pos.set(sp.x, terrainHeightAt(sp.x, sp.z)+EYE, sp.z); player.vel.set(0,0,0);
   player.yaw = sp.yaw; player.pitch = 0;
   refillAllWeapons(); buffs.shield=0;
   const ov=document.getElementById('overlay'); if(ov) ov.classList.add('hidden');
@@ -9892,7 +9892,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 259 · 2026-06-08';
+const BUILD_VERSION = 'build 260 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10311,13 +10311,40 @@ function addStaticColliderFor(o){
   physWorld.createCollider(RAPIER.ColliderDesc.cuboid(_psize.x/2, _psize.y/2, _psize.z/2).setFriction(0.9).setRestitution(0.1), rb);
 }
 // (Re)build the whole physics world from the current scene state.
+// Build a world-space triangle mesh from the displaced floor geometry so the physics floor matches the
+// visible terrain exactly (rather than guessing Rapier's heightfield layout). Returns null on a flat floor.
+function _terrainTrimesh(){
+  try{
+    const terr = (typeof worldCfg!=='undefined' && worldCfg) ? worldCfg.terrain : null;
+    if(!terr || !terr.h || !terr.h.length) return null;
+    const geo = floor.geometry; if(!geo || !geo.attributes || !geo.attributes.position || !geo.index) return null;
+    floor.updateMatrixWorld(true);
+    const pos = geo.attributes.position, m = floor.matrixWorld, _t = new THREE.Vector3();
+    const verts = new Float32Array(pos.count*3);
+    for(let i=0;i<pos.count;i++){ _t.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(m); verts[i*3]=_t.x; verts[i*3+1]=_t.y; verts[i*3+2]=_t.z; }
+    const a = geo.index.array, idx = new Uint32Array(a.length); for(let i=0;i<a.length;i++) idx[i]=a[i];
+    return { verts, idx };
+  }catch(e){ return null; }
+}
 function buildPhysWorld(){
   if(!PHYS_OK) return;
   destroyPhysWorld();
   physWorld = new RAPIER.World({ x:0, y:-GRAV, z:0 });
   physWorld.timestep = PHYS_DT;
-  // arena floor: thick fixed slab with its top face at y = 0
-  const fb = physWorld.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0,-2,0));
+  // arena floor. With terrain: a trimesh matching the visible height-mesh is the walkable surface, backed by
+  // a deep flat slab as a safety net. Flat levels keep the simple slab with its top at y = 0.
+  let slabTop = 0;
+  const _tri = _terrainTrimesh();
+  if(_tri && _tri.verts.length>=9){
+    try{
+      const terr = worldCfg && worldCfg.terrain; let minH=0;
+      if(terr && terr.h){ minH=Infinity; for(let i=0;i<terr.h.length;i++){ if(terr.h[i]<minH) minH=terr.h[i]; } }
+      const tb = physWorld.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+      physWorld.createCollider(RAPIER.ColliderDesc.trimesh(_tri.verts, _tri.idx).setFriction(0.9).setRestitution(0.0), tb);
+      slabTop = Math.min(0, minH) - 2;   // safety slab sits below the lowest valley so it never interferes
+    }catch(e){ console.warn('terrain collider failed; using flat floor', e); slabTop = 0; }
+  }
+  const fb = physWorld.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0, slabTop-2, 0));
   physWorld.createCollider(RAPIER.ColliderDesc.cuboid(ARENA, 2, ARENA).setFriction(0.9).setRestitution(0.1), fb);
   for(const c of colliders) addStaticColliderFor(c);   // walls + all static props (dynamic props aren't in this list)
   for(const o of dynamicProps) createBodyFor(o);
@@ -13366,7 +13393,7 @@ function renderEditorFields(){
       texRow(b,'https://\u2026/floor.jpg (tiles)','floorTex'); slider(b,'Floor tile W','floorTileU',0,80,0.5); slider(b,'Floor tile H','floorTileV',0,80,0.5); slider(b,'Floor rotate\u00b0','floorRot',0,360,5);
       { const fh=document.createElement('div'); b.appendChild(fh); renderTexSearch(fh,(maps)=>{ pushUndoSnapshot(); worldCfg.floorTex=maps.map||''; worldCfg.floorTexN=maps.normal||''; worldCfg.floorTexR=maps.rough||''; applyWorldCfg(); renderEditorFields(); }); }
       { const tb=document.createElement('div'); tb.style.cssText='margin-top:8px;border-top:1px solid #1d2b33;padding-top:7px;';
-        const tl=document.createElement('div'); tl.className='hint'; tl.style.margin='0 0 5px'; tl.innerHTML='<b>Terrain</b> \u2014 rolling height-mesh. Classic movement walks it; Physics mode floor stays flat for now.'; tb.appendChild(tl);
+        const tl=document.createElement('div'); tl.className='hint'; tl.style.margin='0 0 5px'; tl.innerHTML='<b>Terrain</b> \u2014 rolling height-mesh. Walks correctly in both Classic and Physics movement.'; tb.appendChild(tl);
         const tcur=worldCfg.terrain||null;
         const trow=(lab,val,mn,mx,st)=>{ const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:3px 0;'; const sp=document.createElement('span'); sp.textContent=lab; sp.style.minWidth='52px'; const inp=document.createElement('input'); inp.type='range'; inp.min=mn; inp.max=mx; inp.step=st; inp.value=val; inp.style.flex='1'; inp.style.accentColor='#38f5b5'; const nm=document.createElement('span'); nm.textContent=val; nm.style.minWidth='26px'; nm.style.textAlign='right'; inp.oninput=()=>{ nm.textContent=inp.value; }; r.appendChild(sp); r.appendChild(inp); r.appendChild(nm); tb.appendChild(r); return inp; };
         const ampIn=trow('Height', tcur?(tcur.amp!=null?tcur.amp:6):6, 0, 18, 0.5);
@@ -14917,7 +14944,7 @@ function startGame(){
   if(typeof ensurePlayerPreview==='function') ensurePlayerPreview(false);   // drop the editor's stand-in avatar
   initAudio();
   startMusic();
-  player.hp=100; player.maxHp=100; run = { ...RUN0 }; if(typeof closeUpgradePicker==='function') closeUpgradePicker(); player.pos.set(playerSpawn.x, EYE, playerSpawn.z); player.vel.set(0,0,0);
+  player.hp=100; player.maxHp=100; run = { ...RUN0 }; if(typeof closeUpgradePicker==='function') closeUpgradePicker(); player.pos.set(playerSpawn.x, terrainHeightAt(playerSpawn.x, playerSpawn.z)+EYE, playerSpawn.z); player.vel.set(0,0,0);
   player.yaw=playerSpawn.yaw; player.pitch=0; player.onGround=true;
   // reset weapons
   owned = ['rifle']; curWep='rifle';
@@ -14966,7 +14993,7 @@ function startGame(){
     giveDuelLoadout();
     if(NET.mode==='host') spawnBots(NET.botCount||0);
     const sp = randomSpawn();
-    player.pos.set(sp.x, EYE, sp.z); player.yaw = sp.yaw;
+    player.pos.set(sp.x, terrainHeightAt(sp.x, sp.z)+EYE, sp.z); player.yaw = sp.yaw;
     toSpawn = 0;
     if(NET.mode==='host' && !NET.duelScore[0]) NET.duelScore[0]=0;
     duelHUD();
