@@ -6819,6 +6819,8 @@ function gltfManager(){
   _gltfMgr = m; return m;
 }
 let _glbPending = 0;   // in-flight async GLB loads (drives the level loading screen so assets don't pop in)
+let _skyPending = false;   // sky HDRI / panorama load in flight
+let _texPending = 0;       // world floor/wall surface-map loads in flight
 // Model loads are throttled to a few at a time and retried on failure. Restoring a level full of props used
 // to fire every GLB at once, bursting the CORS proxy / model host into HTTP 429 (rate-limited) so most models
 // silently failed. The queue keeps concurrency low; transient failures (esp. 429) retry with backoff.
@@ -7223,15 +7225,16 @@ function _loadSurfaceMap(mat, slot, url, ru, rv, srgb, rot){   // load/clear one
   mat[key] = url;
   if(!url){ if(mat[slot]){ mat[slot] = null; mat.needsUpdate = true; } return; }
   const loader = new THREE.TextureLoader(); loader.setCrossOrigin('anonymous');
-  const finish = (tex)=>{ if(mat[key] !== url){ if(tex.dispose) tex.dispose(); return; }   // a newer url won the race
+  let _tdone=false; const _texFin=()=>{ if(_tdone) return; _tdone=true; _texPending=Math.max(0,_texPending-1); }; _texPending++;   // count toward the level loading screen so materials don't pop in
+  const finish = (tex)=>{ _texFin(); if(mat[key] !== url){ if(tex.dispose) tex.dispose(); return; }   // a newer url won the race
     _surfTf(tex, ru, rv, rot);
     if(srgb){ if('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace; else if('encoding' in tex) tex.encoding = 3001; }
     mat[slot] = tex; mat.needsUpdate = true; };
   const pUrl = proxied(url);
   loader.load(pUrl, finish, undefined, ()=>{
-    if(mat[key] !== url) return;
-    if(pUrl !== url) loader.load(url, finish, undefined, ()=>{ if(mat[key]===url) console.warn('Surface map load failed (CORS?):', url); });   // direct fallback
-    else console.warn('Surface map load failed:', url);
+    if(mat[key] !== url){ _texFin(); return; }
+    if(pUrl !== url) loader.load(url, finish, undefined, ()=>{ _texFin(); if(mat[key]===url) console.warn('Surface map load failed (CORS?):', url); });   // direct fallback
+    else { _texFin(); console.warn('Surface map load failed:', url); }
   });
 }
 // Color + optional normal/roughness maps on a shared surface material (floor / walls). Separate U/V tiling
@@ -7316,6 +7319,7 @@ function applySkyHdri(url){
   url = (url||'').trim();
   if(_skyHdriUrl === url) return;
   _skyHdriUrl = url;
+  _skyPending = false;   // set true below only if we actually kick off a network load
   if(!url){
     scene.background = new THREE.Color((worldCfg && worldCfg.fogColor!=null ? worldCfg.fogColor : 0x070b10)>>>0);
     if(scene.environment){ scene.environment = null; }
@@ -7336,6 +7340,7 @@ function applySkyHdri(url){
   }
   const onTex = (tex)=>{
     if(_skyHdriUrl !== url){ tex.dispose && tex.dispose(); return; }
+    _skyPending = false;
     if(!_isHdr){ if('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace; else if('encoding' in tex) tex.encoding = 3001; }   // HDR is linear/float; only LDR panoramas get the sRGB tag
     if(_skyOrigTex && _skyOrigTex !== tex && _skyOrigTex.dispose){ try{ _skyOrigTex.dispose(); }catch(_){ } }
     _skyOrigTex = tex; _skyOrigKind = _isHdr ? 'hdr' : 'ldr';
@@ -7346,17 +7351,17 @@ function applySkyHdri(url){
   // works for hosts that already send permissive CORS headers.
   const loader = _isHdr ? new THREE.RGBELoader() : new THREE.TextureLoader();
   if(loader.setCrossOrigin) loader.setCrossOrigin('anonymous'); else loader.crossOrigin = 'anonymous';
-  const proxiedUrl = proxied(url);
+  const proxiedUrl = proxied(url); _skyPending = true;
   skyStatus(_isHdr ? 'Loading HDR sky…' : 'Loading sky…');
   loader.load(proxiedUrl, onTex, undefined, ()=>{
     if(_skyHdriUrl !== url) return;
     if(proxiedUrl !== url){
       loader.load(url, onTex, undefined, ()=>{
         if(_skyHdriUrl !== url) return;
-        skyStatus('Could not load that sky image. The host may block cross-origin loading — re-host the .jpg alongside your game, or update your CORS proxy to allow image files (see polypizza-proxy.js).', true);
+        _skyPending = false; skyStatus('Could not load that sky image. The host may block cross-origin loading — re-host the .jpg alongside your game, or update your CORS proxy to allow image files (see polypizza-proxy.js).', true);
       });
     } else {
-      skyStatus('Could not load that sky image (network or CORS error).', true);
+      _skyPending = false; skyStatus('Could not load that sky image (network or CORS error).', true);
     }
   });
 }
@@ -8625,7 +8630,7 @@ function loadLevelFromNet(level){
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns) buildSpawnMarker(sp); } setSpawnMarkersVisible(editorOpen);
   pickupsOn = (level.pickupsOn !== false);
   pickupSpots = Array.isArray(level.pickups) ? level.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : []; pickupModels = (level.pickupModels && typeof level.pickupModels==='object') ? JSON.parse(JSON.stringify(level.pickupModels)) : {}; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
-  if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }   // adopt the host's sky / ground / fog
+  if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); _skyHdriUrl = null; applyWorldCfg(); }   // adopt the host's sky / ground / fog (reset the sky guard so each level's sky re-applies cleanly, even mid-campaign)
   if(level.audio && NET.mode!=='client'){ try{ audioSettings.musicUrl=(typeof level.audio.musicUrl==='string')?level.audio.musicUrl:''; audioSettings.sounds=_sanitizeSounds(level.audio.sounds); if(typeof saveAudioSettings==='function') saveAudioSettings(); if(typeof preloadCustomSounds==='function') preloadCustomSounds(); if(_musicOn){ stopMusic(); startMusic(); } }catch(e){ console.warn('level audio apply failed', e); } }
   if(level.cine){ const lc=level.cine; cineCfg.on=!!lc.on; cineCfg.path=Array.isArray(lc.path)?lc.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lensFrom=+lc.lensFrom||+lc.lens||35; cineCfg.lensTo=+lc.lensTo||+lc.lens||cineCfg.lensFrom; cineCfg.focusOn=!!lc.focusOn; cineCfg.focusFrom=+lc.focusFrom||8; cineCfg.focusTo=+lc.focusTo||cineCfg.focusFrom; cineCfg.dur=+lc.dur||6; cineCfg.look=(lc.look==='path')?'path':'spawn'; } else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; }
   // per-player characters: the client keeps its own avatar; the host's character arrives via the welcome 'char' field
@@ -9922,7 +9927,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 272 · 2026-06-08';
+const BUILD_VERSION = 'build 274 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11799,6 +11804,7 @@ function loop(){
     if(v!==_pbShow){ _pbShow=v; const pb=document.getElementById('pauseBtn'); if(pb) pb.style.display = v?'flex':'none'; } }
   if(hitStop > 0){ hitStop -= rawDt; dt = rawDt * 0.12; }   // impact freeze: slow the sim briefly (real-time countdown)
   if(_cineActive){ updateCinematic(rawDt); renderScene(scene,camera); return; }   // intro/preview flythrough owns the camera; freeze the sim
+  if(_levelLoaderActive){ pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }   // hold the world frozen behind the level loading screen until assets finish loading
   if(!gameOn) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }
   if((shopOpen || choosingUpgrade || (paused && NET.mode==='off')) && !(duelDead && pvpMode())) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }  // freeze world while shopping / picking an upgrade / paused (solo) — but never while waiting to respawn
 
@@ -15093,6 +15099,7 @@ function toggleEditor(){
 
 // ---------- Game state ----------
 let _levelLoaderEl=null, _levelLoaderActive=false;
+function _levelAssetsPending(){ return _glbPending>0 || _skyPending || _texPending>0; }   // models, sky, or surface textures still loading
 function showLevelLoader(){
   if(!_levelLoaderEl){
     const el=document.createElement('div'); el.id='levelLoader';
@@ -15116,8 +15123,8 @@ function waitAssetsThenReveal(){
     if(!_levelLoaderActive) return;
     const now=performance.now();
     const lab=_levelLoaderEl && _levelLoaderEl.querySelector('#levelLoaderLabel');
-    if(lab) lab.textContent = _glbPending>0 ? ('Loading assets\u2026 '+_glbPending+' left') : 'Loading level\u2026';
-    if(_glbPending<=0){ if(!zeroAt) zeroAt=now; if(now-zeroAt>=240){ reveal(); return; } }
+    if(lab){ const parts=[]; if(_glbPending>0) parts.push(_glbPending+' model'+(_glbPending===1?'':'s')); if(_texPending>0) parts.push(_texPending+' texture'+(_texPending===1?'':'s')); if(_skyPending) parts.push('sky'); lab.textContent = parts.length ? ('Loading '+parts.join(', ')+'\u2026') : 'Loading level\u2026'; }
+    if(!_levelAssetsPending()){ if(!zeroAt) zeroAt=now; if(now-zeroAt>=240){ reveal(); return; } }
     else { zeroAt=0; }
     if(now-t0>=15000){ reveal(); return; }   // safety: never trap the player behind the loader
     requestAnimationFrame(tick);
@@ -15125,7 +15132,7 @@ function waitAssetsThenReveal(){
   requestAnimationFrame(tick);
 }
 function startGame(){
-  if(_glbPending>0){ showLevelLoader(); waitAssetsThenReveal(); }   // hold a loading screen so assets don't pop in mid-game
+  if(_levelAssetsPending()){ showLevelLoader(); waitAssetsThenReveal(); }   // hold a loading screen so assets (models, sky, textures) don't pop in mid-game
   clearMovementInput();   // start fresh: no input held over from a previous round/death
   if(_pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; }   // hide editor path markers during play
   closeModal('mpModal'); closeModal('instrModal');   // drop any open menu modal as the world starts
