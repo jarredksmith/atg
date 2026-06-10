@@ -9928,7 +9928,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 277 · 2026-06-08';
+const BUILD_VERSION = 'build 278 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12927,7 +12927,7 @@ function renderCampaignPanel(){
   host.appendChild(st);
   campaign.levels.forEach((lv,i)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;align-items:center;gap:5px;font-size:12px;color:#cfeee2;margin:2px 0;'+((i===campaignEditIdx)?'outline:1px solid #38f5b5;border-radius:5px;padding:2px 3px;':'');
     const nm=document.createElement('input'); nm.type='text'; nm.value=(lv.name!=null?lv.name:('Level '+(i+1))); nm.title=((lv.game&&lv.game.objective)||'eliminate')+' · '+((lv.props&&lv.props.length)||0)+' props'; nm.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 6px;font-size:12px;'; nm.onchange=()=>{ lv.name=nm.value.trim()||('Level '+(i+1)); saveCampaign(); };
-    const ed=document.createElement('button'); ed.textContent='Edit'; ed.title='Load this level back into the editor to change it'; ed.style.cssText='padding:1px 7px;font-size:11px;'; ed.onclick=()=>{ if(typeof pushUndoSnapshot==='function') pushUndoSnapshot(); restoreLevel(campaign.levels[i]); campaignEditIdx=i; if(typeof renderEditorFields==='function') renderEditorFields(); if(typeof flashToast==='function') flashToast('Editing "'+(lv.name||('Level '+(i+1)))+'" - Save to campaign when done'); };
+    const ed=document.createElement('button'); ed.textContent='Edit'; ed.title='Load this level back into the editor to change it'; ed.style.cssText='padding:1px 7px;font-size:11px;'; ed.onclick=()=>{ if(typeof pushUndoSnapshot==='function') pushUndoSnapshot(); restoreLevel(campaign.levels[i]); campaignEditIdx=i; if(typeof renderEditorFields==='function') renderEditorFields(); if(typeof renderCampaignPanel==='function') renderCampaignPanel(); if(typeof flashToast==='function') flashToast('Editing "'+(lv.name||('Level '+(i+1)))+'" - Save to campaign when done'); };
     const up=document.createElement('button'); up.textContent='▲'; up.style.cssText='padding:1px 6px'; up.onclick=()=>{ if(i>0){ const t=campaign.levels[i-1]; campaign.levels[i-1]=campaign.levels[i]; campaign.levels[i]=t; campaignEditIdx=-1; saveCampaign(); renderCampaignPanel(); } };
     const dn=document.createElement('button'); dn.textContent='▼'; dn.style.cssText='padding:1px 6px'; dn.onclick=()=>{ if(i<campaign.levels.length-1){ const t=campaign.levels[i+1]; campaign.levels[i+1]=campaign.levels[i]; campaign.levels[i]=t; campaignEditIdx=-1; saveCampaign(); renderCampaignPanel(); } };
     const del=document.createElement('button'); del.textContent='✕'; del.style.cssText='padding:1px 7px'; del.onclick=()=>{ campaign.levels.splice(i,1); campaignEditIdx=-1; saveCampaign(); renderCampaignPanel(); };
