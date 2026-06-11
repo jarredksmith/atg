@@ -10265,7 +10265,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 322 · 2026-06-11';
+const BUILD_VERSION = 'build 323 · 2026-06-11';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14918,7 +14918,7 @@ function renderEditorFields(){
         wrow.appendChild(b);
       }
       urlHost.appendChild(wrow);
-      if(editorMode==='gun'){   // animation mapping for this weapon's model (idle loops; shoot/reload fire on gameplay)
+      if(editorActive==='gun'){   // animation mapping for this weapon's model (idle loops; shoot/reload fire on gameplay) -- 'gun' is an editorActive TARGET, not an editorMode
         const ch=document.createElement('div'); ch.className='hint'; ch.style.margin='4px 0 3px'; ch.innerHTML='<b>Animations</b> — if the model has clips: idle loops, shoot plays per shot, reload plays on R';
         urlHost.appendChild(ch);
         const names=(_gunClipNames[curWep]||[]).slice();
