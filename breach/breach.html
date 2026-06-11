@@ -8853,15 +8853,18 @@ function updateOwnAvatar(){
   _ownPrevX=player.pos.x; _ownPrevZ=player.pos.z;
 }
 function tpCameraPushback(){
-  // keep the look direction (yaw/pitch already applied), pull the camera straight back, lift a touch, pull in past walls
+  // orbit the camera around a fixed pivot on the character: place it straight back along the view axis so the
+  // pivot lands on the crosshair for every yaw/pitch. The body then stays centered and only rotates in place
+  // (no swinging around the reticle), and looking down puts the camera cleanly overhead.
   const cp=Math.cos(player.pitch), sp=Math.sin(player.pitch), cy=Math.cos(player.yaw), sy=Math.sin(player.yaw);
-  const fx=-cp*sy, fy=sp, fz=-cp*cy;   // camera forward for YXZ yaw/pitch
-  const eye=player.pos; let dist=TP_DIST;
+  const fx=-cp*sy, fy=sp, fz=-cp*cy;   // view forward for YXZ yaw/pitch
+  const px=player.pos.x, py=player.pos.y-0.3, pz=player.pos.z;   // pivot: upper chest (player.pos is the eye)
+  let dist=TP_DIST;
   if(!_tpCaster) _tpCaster=new THREE.Raycaster();
-  _tpCaster.set(_tpEye.set(eye.x,eye.y,eye.z), _tpBack.set(-fx,-fy,-fz)); _tpCaster.far=TP_DIST;
+  _tpCaster.set(_tpEye.set(px,py,pz), _tpBack.set(-fx,-fy,-fz)); _tpCaster.far=TP_DIST;
   const hits=_tpCaster.intersectObjects(colliders, false);
-  if(hits.length) dist=Math.max(TP_MIN, hits[0].distance-0.35);   // don't clip through the wall behind us
-  camera.position.set(eye.x - fx*dist, eye.y - fy*dist + TP_HEIGHT, eye.z - fz*dist);
+  if(hits.length) dist=Math.max(TP_MIN, hits[0].distance-0.35);   // don't clip through a wall behind us
+  camera.position.set(px - fx*dist, py - fy*dist, pz - fz*dist);   // no perpendicular lift -> pivot stays on the crosshair
 }
 // ---- per-player characters: each player owns + broadcasts their avatar config; others build from it ----
 function myCharCfg(){ const c=(myRosterIdx>=0 && charRoster[myRosterIdx]) ? charRoster[myRosterIdx] : playerModelCfg; return { url:c.url||'', scale:c.scale||1, face:c.face||0, rx:c.rx||0, rz:c.rz||0, xoff:c.xoff||0, yoff:c.yoff||0, zoff:c.zoff||0, clips:Object.assign({}, c.clips||{}), tint:(CHARACTERS[myCharIdx]?CHARACTERS[myCharIdx].color:null) }; }
@@ -10097,7 +10100,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 299 · 2026-06-08';
+const BUILD_VERSION = 'build 300 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
