@@ -6256,6 +6256,49 @@ function playModelAnimations(root, gltf, mode){
   root.userData.animMode = mode;
   return mixer;
 }
+// --- animated gun viewmodels: idle loops; shoot/reload are one-shots triggered by gameplay -------------
+// Clips resolve by name (override per weapon via WEAPONS[k].clips). If a model has animations but none
+// match (and nothing is mapped), the caller falls back to the loop-everything prop behavior.
+const _GUN_CLIP_RE = { idle:/idle|pose|stand|breath|hold/i, shoot:/shoot|fire|shot|attack|recoil|blast/i, reload:/reload|recharge|mag|clip|insert/i };
+const _gunClipNames = {};   // weapon key -> clip names discovered on its loaded model (drives the editor picker)
+function _resolveGunClip(gltf, clips, st){
+  const want = clips && clips[st];
+  if(want){ const c=gltf.animations.find(a=>(a.name||'')===want); if(c) return c; }
+  return gltf.animations.find(a=>_GUN_CLIP_RE[st].test(a.name||'')) || null;
+}
+function playGunStates(root, gltf, clips){
+  if(!gltf || !gltf.animations || !gltf.animations.length) return null;
+  const idle=_resolveGunClip(gltf,clips,'idle'), shoot=_resolveGunClip(gltf,clips,'shoot'), reload=_resolveGunClip(gltf,clips,'reload');
+  if(!idle && !shoot && !reload) return null;   // nothing recognizable -> caller falls back to loop-all
+  const mixer=new THREE.AnimationMixer(root); const acts={};
+  if(idle){ acts.idle=mixer.clipAction(idle); acts.idle.loop=THREE.LoopRepeat; acts.idle.play(); }
+  for(const [st,clip] of [['shoot',shoot],['reload',reload]]){
+    if(!clip) continue; const a=mixer.clipAction(clip); a.loop=THREE.LoopOnce; a.clampWhenFinished=false; acts[st]=a; a.userData={ dur: clip.duration||0.001 };
+  }
+  mixer.addEventListener('finished',(e)=>{ if((acts.shoot&&e.action===acts.shoot)||(acts.reload&&e.action===acts.reload)){ e.action.stop(); if(acts.idle) acts.idle.reset().play(); } });
+  mixers.push(mixer); root.userData.mixer=mixer; root.userData.gunStates=acts;
+  return mixer;
+}
+// Fire a one-shot gun clip (shoot/reload) on the active weapon's model, time-scaled to the gameplay
+// window: shoot never outlasts the fire interval; reload spans the actual reload time.
+function triggerGunAnim(st){
+  const model=gunModelByWep[curWep]; const acts=model && model.userData && model.userData.gunStates; const a=acts && acts[st];
+  if(!a) return;
+  const w=WEAPONS[curWep]; const dur=(a.userData&&a.userData.dur)||0.001; let win=dur;
+  if(st==='shoot') win=Math.max(0.05,(w.fireRate||300)/1000);
+  else if(st==='reload') win=Math.max(0.2,(w.reloadMs||1000)/1000);
+  a.timeScale=Math.min(4, Math.max(0.25, dur/win));
+  if(acts.idle) acts.idle.stop();
+  if(acts.shoot && acts.shoot!==a) acts.shoot.stop();
+  if(acts.reload && acts.reload!==a) acts.reload.stop();
+  a.reset().play();
+}
+function _rebuildGunStates(key){
+  const model=gunModelByWep[key]; if(!model) return;
+  const gltf=gltfCache[wepModelUrl(key)]; if(!gltf) return;
+  const om=model.userData.mixer; if(om){ try{ om.stopAllAction(); }catch(e){} const mi=mixers.indexOf(om); if(mi>=0) mixers.splice(mi,1); model.userData.mixer=null; model.userData.gunStates=null; model.userData.animActions=null; }
+  if(!playGunStates(model, gltf, WEAPONS[key].clips)) playModelAnimations(model, gltf);
+}
 // Enemies play ONE looping clip (prefer idle/walk/run, else the first). Playing every clip at once —
 // as props do — makes character rigs fight over the root transform and look broken.
 function playEnemyClip(root, gltf, clipName){
@@ -7781,7 +7824,8 @@ function showWeaponModel(key){
       gunModelByWep[key] = model;
       model.visible = (key === curWep);          // only show if it's still the active weapon
       if(model.visible){ if(gunPlaceholder) gunPlaceholder.visible=false; gunModel = model; sight = null; }
-      playModelAnimations(model, gltf);
+      _gunClipNames[key] = (gltf.animations||[]).map(c=>c.name||'');
+      if(!playGunStates(model, gltf, WEAPONS[key].clips)) playModelAnimations(model, gltf);   // idle/shoot/reload states when recognizable, else the old loop-everything
       if(model.visible) applyWepView(model, key);   // reassert this weapon's own framing once it's live
       console.log('Weapon model loaded:', key, url);
     },
@@ -7824,7 +7868,7 @@ const WEAPONS = {
 };
 // Restore per-weapon model + framing saved to localStorage (serialized under "weapons"). Without this the
 // hardcoded model:''/view:null above would wipe gun edits on every reload.
-if(savedLevel && savedLevel.weapons){ for(const k in WEAPONS){ const wd = savedLevel.weapons[k]; if(wd){ WEAPONS[k].model = wd.model || ''; WEAPONS[k].view = wd.view || null; } } }
+if(savedLevel && savedLevel.weapons){ for(const k in WEAPONS){ const wd = savedLevel.weapons[k]; if(wd){ WEAPONS[k].model = wd.model || ''; WEAPONS[k].view = wd.view || null; if(wd.clips) WEAPONS[k].clips = Object.assign({idle:'',shoot:'',reload:''}, wd.clips); } } }
 let owned = ['rifle'];           // weapons the player has
 let curWep = 'rifle';            // current weapon key
 loadGunModel();                  // load the starting weapon's viewmodel (now that WEAPONS/curWep exist)
@@ -7863,7 +7907,7 @@ function showWeaponToast(){
 function reload(){
   const w = W();
   if(reloading || w.mag===w.magSize || w.reserve<=0) return;
-  reloading = true; SFX.reload();
+  reloading = true; SFX.reload(); triggerGunAnim('reload');
   const need = w.magSize - w.mag;
   setTimeout(()=>{
     const take = Math.min(need, w.reserve);
@@ -8767,7 +8811,7 @@ function loadLevelFromNet(level){
   charRoster = Array.isArray(level.roster) ? level.roster.map(_sanitizeCharCfg) : []; if(typeof renderCharRosterPanel==='function') renderCharRosterPanel();
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; refreshPlayerSpawnMarker(); }
-  if(level.weapons){ for(const k in WEAPONS){ const wd=level.weapons[k]; if(wd){ WEAPONS[k].model=wd.model||''; WEAPONS[k].view=wd.view||null; } } }
+  if(level.weapons){ for(const k in WEAPONS){ const wd=level.weapons[k]; if(wd){ WEAPONS[k].model=wd.model||''; WEAPONS[k].view=wd.view||null; if(wd.clips) WEAPONS[k].clips=Object.assign({idle:'',shoot:'',reload:''}, wd.clips); } } }
   if(level.grenade){ const G=level.grenade; if(G.model!=null) GRENADE.model=G.model||''; if(G.scale!=null) GRENADE.scale=G.scale; if(G.radius!=null) GRENADE.radius=G.radius; if(G.damage!=null) GRENADE.damage=G.damage; if(G.fuse!=null) GRENADE.fuse=G.fuse; if(G.throwForce!=null) GRENADE.throwForce=G.throwForce; loadGrenadeModel(); if(editorTargets.grenade.sync) editorTargets.grenade.sync(); }
   if(level.enemies || level.enemy){   // adopt the host's per-type enemy models so clients render the same hostiles
     applyEnemyModelData(level.enemies, level.enemy);
@@ -10221,7 +10265,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 320 · 2026-06-11';
+const BUILD_VERSION = 'build 321 · 2026-06-11';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11346,11 +11390,12 @@ function shoot(){
   const w = W();
   const now = performance.now();
   if(now - lastShot < w.fireRate * run.fireMul || reloading) return;
-  if(w.melee){ if(!w.auto && firingLatch) return; firingLatch=true; lastShot=now; meleeAttack(w); return; }   // equipped melee weapon: swing it
+  if(w.melee){ if(!w.auto && firingLatch) return; firingLatch=true; lastShot=now; triggerGunAnim('shoot'); meleeAttack(w); return; }   // equipped melee weapon: swing it
   if(w.mag<=0){ if(w.reserve<=0){ meleeAttack(); return; } SFX.empty(); reload(); return; }   // out of ammo entirely -> throw hands
   if(!w.auto && firingLatch) return;     // semi-auto: one shot per click
   firingLatch = true;
   lastShot = now; w.mag--; updateHUD();
+  triggerGunAnim('shoot');   // fire the model's shoot clip if it has one
   if(w.projectile){ fireRocketShot(); firingLatch=true; return; }   // rocket launcher: fire a projectile, skip hitscan
   SFX.shoot();
   addShake(curWep==='shotgun'?0.16:(curWep==='smg'?0.045:0.08));   // recoil kick
@@ -13277,7 +13322,7 @@ function serializeLevel(){
   return {
     v: 1,
     gun:     { url: gunModelUrl,     state: Object.assign({}, editorTargets.gun.state) },
-    weapons: Object.keys(WEAPONS).reduce((acc,k)=>{ const w=WEAPONS[k]; if(w.model || w.view) acc[k]={ model:w.model||'', view:w.view||null }; return acc; }, {}),
+    weapons: Object.keys(WEAPONS).reduce((acc,k)=>{ const w=WEAPONS[k]; if(w.model || w.view || w.clips) acc[k]={ model:w.model||'', view:w.view||null, clips:w.clips||null }; return acc; }, {}),
     aim:     { state: Object.assign({}, editorTargets.aim.state) },
     aimWep:  JSON.parse(JSON.stringify(aimByWep)),
     station: { url: stationModelUrl, state: Object.assign({}, editorTargets.station.state) },
@@ -13547,7 +13592,7 @@ function restoreLevel(level){
   if(level.gun){ if(level.gun.url && level.gun.url!==gunModelUrl) swapGunModel(level.gun.url); Object.assign(editorTargets.gun.state, level.gun.state||{}); editorTargets.gun.apply(); }
   // per-weapon models + framing
   if(level.weapons && typeof level.weapons==='object'){
-    for(const k in WEAPONS){ const wd=level.weapons[k]; if(wd){ WEAPONS[k].model=wd.model||''; WEAPONS[k].view=wd.view||null; } else { WEAPONS[k].model=''; WEAPONS[k].view=null; } }
+    for(const k in WEAPONS){ const wd=level.weapons[k]; if(wd){ WEAPONS[k].model=wd.model||''; WEAPONS[k].view=wd.view||null; WEAPONS[k].clips = wd.clips ? Object.assign({idle:'',shoot:'',reload:''}, wd.clips) : undefined; } else { WEAPONS[k].model=''; WEAPONS[k].view=null; WEAPONS[k].clips=undefined; } }
     // drop cached models so they reload with their (possibly new) urls
     for(const k in gunModelByWep){ if(gunModelByWep[k]){ gun.remove(gunModelByWep[k]); gunModelByWep[k]=null; } _gunLoading[k]=false; }
     if(editorTargets.gun.syncFromWeapon) editorTargets.gun.syncFromWeapon();
@@ -14873,6 +14918,22 @@ function renderEditorFields(){
         wrow.appendChild(b);
       }
       urlHost.appendChild(wrow);
+      if(editorMode==='gun'){   // animation mapping for this weapon's model (idle loops; shoot/reload fire on gameplay)
+        const ch=document.createElement('div'); ch.className='hint'; ch.style.margin='4px 0 3px'; ch.innerHTML='<b>Animations</b> — if the model has clips: idle loops, shoot plays per shot, reload plays on R';
+        urlHost.appendChild(ch);
+        const names=(_gunClipNames[curWep]||[]).slice();
+        const wcl=WEAPONS[curWep].clips||{};
+        for(const v of [wcl.idle,wcl.shoot,wcl.reload]){ if(v && names.indexOf(v)<0) names.push(v); }
+        for(const st of ['idle','shoot','reload']){
+          const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:7px;font-size:11px;color:#9fe6cf;margin:2px 0;';
+          const sp=document.createElement('span'); sp.textContent=st; sp.style.minWidth='46px';
+          const sel=document.createElement('select'); sel.style.cssText='flex:1;font-size:11px;';
+          const auto=document.createElement('option'); auto.value=''; auto.textContent=names.length?('Auto — '+st+' by name'):'Auto — load a model first'; if(!wcl[st]) auto.selected=true; sel.appendChild(auto);
+          for(const nm of names){ const o=document.createElement('option'); o.value=nm; o.textContent=nm||'(unnamed)'; if(wcl[st]===nm) o.selected=true; sel.appendChild(o); }
+          sel.onchange=()=>{ pushUndoSnapshot(); if(!WEAPONS[curWep].clips) WEAPONS[curWep].clips={idle:'',shoot:'',reload:''}; WEAPONS[curWep].clips[st]=sel.value; _rebuildGunStates(curWep); };
+          r.appendChild(sp); r.appendChild(sel); urlHost.appendChild(r);
+        }
+      }
     }
     if(tgt.addable){
       const head = document.createElement('div'); head.className='hint'; head.style.margin='8px 0 3px';
