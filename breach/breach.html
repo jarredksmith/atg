@@ -301,6 +301,9 @@
     border-radius:7px; transition: border-color .2s, color .2s, background .2s; text-transform:uppercase;
   }
   .secBtn:hover { border-color:#38f5b5; color:#eafff7; background:rgba(56,245,181,.10); }
+  .menuBtns.menuSub { margin-top: 10px; gap: 8px; }
+  .secBtn.ghost { font-size:12px; padding:7px 16px; color:#7fb3a3; border-color:#1f4d42; background:rgba(8,18,18,.32); letter-spacing:1.5px; }
+  .secBtn.ghost:hover { border-color:#38f5b5; color:#eafff7; background:rgba(56,245,181,.08); }
   .menuCard {
     max-width: 640px; margin-left:auto; margin-right:auto;
     border:1px solid rgba(56,245,181,.14); background:rgba(8,16,18,.45);
@@ -584,12 +587,14 @@
   <button id="startBtn">Deploy</button>
   <div class="menuBtns">
     <button id="campaignBtn" class="secBtn">🎖 Play campaign</button>
-    <button id="loadCampBtn" class="secBtn">📂 Load campaign</button>
-    <input type="file" id="menuCampFile" accept=".json,application/json" style="display:none">
     <button id="mpOpenBtn" class="secBtn">🌐 Multiplayer</button>
     <button id="editBtn" class="secBtn">🛠 Build / edit level</button>
-    <button id="instrBtn" class="secBtn">❔ Instructions</button>
-    <button id="fsBtn" class="secBtn" style="display:none">⛶ Fullscreen</button>
+  </div>
+  <div class="menuBtns menuSub">
+    <button id="loadCampBtn" class="secBtn ghost">📂 Load campaign</button>
+    <button id="instrBtn" class="secBtn ghost">❔ Instructions</button>
+    <button id="fsBtn" class="secBtn ghost" style="display:none">⛶ Fullscreen</button>
+    <input type="file" id="menuCampFile" accept=".json,application/json" style="display:none">
   </div>
 </div>
 
@@ -6847,20 +6852,23 @@ let _levelLoaderEl=null, _levelLoaderActive=false;   // declared early: loop() r
 // silently failed. The queue keeps concurrency low; transient failures (esp. 429) retry with backoff.
 const _glbQueue = []; let _glbActive = 0; const GLB_MAX_CONCURRENT = 3;
 function _glbPump(){ while(_glbActive < GLB_MAX_CONCURRENT && _glbQueue.length){ const task = _glbQueue.shift(); _glbActive++; task(); } }
+const _glbWaiters = {};   // url -> [{cb,errcb}] all riding a single in-flight load, so a model shared by several avatars (or a prewarm + the real build) is fetched once
 function loadGLTFCached(url, cb, errcb){
   if(gltfCache[url]){ cb(gltfCache[url]); return; }   // cached: synchronous, nothing to wait on
+  if(_glbWaiters[url]){ _glbWaiters[url].push({cb:cb,errcb:errcb}); return; }   // a load for this url is already in flight; ride along instead of fetching again
+  const waiters=[{cb:cb,errcb:errcb}]; _glbWaiters[url]=waiters;
   _glbPending++;
-  let _fin=false; const _done=()=>{ if(_fin) return; _fin=true; _glbPending=Math.max(0,_glbPending-1); };
+  let _fin=false; const _done=()=>{ if(_fin) return; _fin=true; _glbPending=Math.max(0,_glbPending-1); delete _glbWaiters[url]; };
   const _release=()=>{ _glbActive=Math.max(0,_glbActive-1); _glbPump(); };
-  const _cb=(g)=>{ _done(); _release(); cb(g); };
+  const _cb=(g)=>{ _done(); _release(); for(const w of waiters){ try{ w.cb && w.cb(g); }catch(e){} } };
   let _tries=0;
   const _ec=(e)=>{
     if(++_tries<=2){ _release(); setTimeout(()=>{ _glbQueue.push(start); _glbPump(); }, 500*_tries + Math.random()*400); return; }   // retry transient failures (429 rate-limit) with backoff
-    _done(); _release(); errcb && errcb(e);
+    _done(); _release(); for(const w of waiters){ try{ w.errcb && w.errcb(e); }catch(_){} }
   };
   const start = ()=>{
     if(url && url.indexOf('sketchfab:')===0){ loadSketchfabModel(url.slice(10), (gltf)=>{ gltfCache[url]=gltf; _cb(gltf); }, _ec); return; }
-    if(!THREE.GLTFLoader){ _done(); _release(); errcb && errcb(new Error('GLTFLoader unavailable')); return; }
+    if(!THREE.GLTFLoader){ _done(); _release(); for(const w of waiters){ try{ w.errcb && w.errcb(new Error('GLTFLoader unavailable')); }catch(_){} } return; }
     const mgr = gltfManager();
     if(mgr){
       // Pass the ORIGINAL url: the manager proxies it (and sub-resources resolve against the real origin,
@@ -10193,7 +10201,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 315 · 2026-06-11';
+const BUILD_VERSION = 'build 317 · 2026-06-11';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15706,8 +15714,20 @@ function waitAssetsThenReveal(){
   };
   requestAnimationFrame(tick);
 }
+// Multiplayer: every player's chosen character is known at match start (NET.charById; clients get it in
+// the welcome packet). Remote avatars are only built when their first state packet arrives, which is AFTER
+// this gate, so without prewarming the loader sees 0 pending models and reveals before they load -> players
+// pop from capsule to model mid-match. Kicking the loads off here makes the existing loader wait for them.
+function _prewarmMatchModels(){
+  if(NET.mode!=='host' && NET.mode!=='client') return;
+  const urls=new Set();
+  try{ const mc=(typeof myCharCfg==='function')?myCharCfg():null; if(mc && mc.url) urls.add(mc.url); }catch(e){}
+  if(NET.charById){ for(const id in NET.charById){ const c=NET.charById[id]; if(c && c.url) urls.add(c.url); } }
+  urls.forEach(u=>{ try{ loadGLTFCached(u, ()=>{}, ()=>{}); }catch(e){} });
+}
 function startGame(){
   if(typeof closeModal==='function'){ closeModal('charPicker'); closeModal('lobby'); closeModal('mpModal'); }   // never start a match with a menu modal still open over the game
+  if(typeof _prewarmMatchModels==='function') _prewarmMatchModels();   // kick off known players' character GLBs BEFORE the gate so the loader waits for them
   if(_levelAssetsPending()){ showLevelLoader(); waitAssetsThenReveal(); }   // hold a loading screen so assets (models, sky, textures) don't pop in mid-game
   clearMovementInput();   // start fresh: no input held over from a previous round/death
   if(_pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; }   // hide editor path markers during play
