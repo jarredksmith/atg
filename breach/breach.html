@@ -8964,7 +8964,7 @@ function setRemoteState(id, msg){
   const rp=ensureRemotePlayer(id, msg.n);
   rp.posEye.set(msg.p[0], msg.p[1], msg.p[2]);
   rp.target.set(msg.p[0], Math.max(0, msg.p[1]-EYE), msg.p[2]);   // feet on floor
-  rp.yaw = msg.y; if(msg.hp!=null) rp.hp=msg.hp; if(msg.w!=null) rp.wep=msg.w;
+  rp.yaw = msg.y; if(msg.hp!=null) rp.hp=msg.hp; if(msg.w!=null) rp.wep=msg.w; rp.air = !!msg.j;
 }
 
 // ---- client-side display meshes for the host's enemies & coins ----
@@ -8987,9 +8987,9 @@ function upsertCoinMesh(c){
 
 // ---- host: build + send the authoritative world snapshot ----
 function serializeWorld(){
-  const P=[{ id:0, p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:owned.indexOf(curWep), hp:Math.max(0,player.hp), n:NET.name||'Host' }];
+  const P=[{ id:0, p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:owned.indexOf(curWep), hp:Math.max(0,player.hp), j:player.onGround?0:1, n:NET.name||'Host' }];
   for(const id in NET.players){ const rp=NET.players[id];
-    P.push({ id:+id, p:[rp.posEye.x,rp.posEye.y,rp.posEye.z], y:rp.yaw, pi:0, w:rp.wep, hp:rp.hp, n:rp.name }); }
+    P.push({ id:+id, p:[rp.posEye.x,rp.posEye.y,rp.posEye.z], y:rp.yaw, pi:0, w:rp.wep, hp:rp.hp, j:rp.air?1:0, n:rp.name }); }
   for(const b of bots){ if(b.dead) continue; P.push({ id:b.id, p:[b.pos.x,EYE,b.pos.z], y:b.yaw, pi:0, w:0, hp:b.hp, n:b.name }); }
   const E=enemies.map(e=>({ id:e.id, p:[e.mesh.position.x,e.mesh.position.y,e.mesh.position.z] }));
   const C=coins.map(c=>({ id:c.id, p:[c.mesh.position.x,c.mesh.position.z] }));
@@ -9089,7 +9089,7 @@ function applyWorld(msg){
   const seen=new Set();
   for(const pl of msg.P){ if(pl.id===NET.myId) continue; seen.add(pl.id);
     const rp=ensureRemotePlayer(pl.id, pl.n);
-    rp.posEye.set(pl.p[0],pl.p[1],pl.p[2]); rp.target.set(pl.p[0], Math.max(0,pl.p[1]-EYE), pl.p[2]); rp.yaw=pl.y; rp.hp=pl.hp; rp.wep=pl.w; }
+    rp.posEye.set(pl.p[0],pl.p[1],pl.p[2]); rp.target.set(pl.p[0], Math.max(0,pl.p[1]-EYE), pl.p[2]); rp.yaw=pl.y; rp.hp=pl.hp; rp.wep=pl.w; rp.air=!!pl.j; }
   for(const id in NET.players){ if(!seen.has(+id)) removeRemotePlayer(+id); }
   const es=new Set();
   for(const e of msg.E){ es.add(e.id); upsertEnemyMesh(e); }
@@ -9134,7 +9134,9 @@ function netInterpolate(dt){
     if(rp.mesh.userData.hasModel && rp.mesh.userData.visual && rp.mesh.userData.visual.userData.stateActions){
       const md=Math.hypot(rp.mesh.position.x-_px, rp.mesh.position.z-_pz);   // per-frame travel -> run / walk / idle
       let _st = md>0.10 ? 'run' : (md>0.02 ? 'walk' : 'idle');
+      if(rp.air) _st='jump';                                          // airborne flag travels in the state packet
       if(rp._fireT && performance.now() < rp._fireT) _st='attack';   // brief attack pose after a networked shot
+      if(rp.hp!=null && rp.hp<=0) _st='die';                          // dead peers hold the death pose (recovers when hp is restored)
       setEnemyAnimState(rp.mesh, _st);
     } }
   if(NET.mode==='client'){
@@ -9154,7 +9156,7 @@ function netTick(dt){
   if(NET.sendTimer<=0){
     NET.sendTimer=0.05;
     if(NET.mode==='client' && NET.conn && NET.conn.open){
-      try{ NET.conn.send({ t:'st', p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:owned.indexOf(curWep), hp:Math.max(0,player.hp), n:NET.name }); }catch(e){}
+      try{ NET.conn.send({ t:'st', p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:owned.indexOf(curWep), hp:Math.max(0,player.hp), j:player.onGround?0:1, n:NET.name }); }catch(e){}
       if(heldProp && heldNidLocal!=null){ const tgt=_localHoldTarget(); try{ NET.conn.send({ t:'hold', nid:heldNidLocal, p:[tgt.x,tgt.y,tgt.z] }); }catch(e){} }
     } else if(NET.mode==='host'){
       broadcastWorld();
@@ -10160,7 +10162,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 305 · 2026-06-08';
+const BUILD_VERSION = 'build 306 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
