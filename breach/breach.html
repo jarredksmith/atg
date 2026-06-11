@@ -678,6 +678,7 @@
     <button id="pauseResume" class="pBtnPrimary">Resume</button>
     <button id="pauseEditHud" class="pBtnGhost" style="display:none">✿ Customize controls</button>
     <button id="pauseMoveMode" class="pBtnGhost">Movement: Classic</button>
+    <button id="pauseCamMode" class="pBtnGhost">Camera: First person</button>
     <div class="pauseAudio">
       <label class="paLbl"><input type="checkbox" id="muteCb"> Mute all</label>
       <label class="paLbl">🔊 Master<input type="range" id="volMaster" min="0" max="100" value="80"></label>
@@ -8766,13 +8767,14 @@ function buildAvatarVisual(g, cfg){
     const head=new THREE.Mesh(new THREE.ConeGeometry(0.22,0.5,8), new THREE.MeshStandardMaterial({ color:0x9fd8ff, emissive:0x2f7fff, emissiveIntensity:.4 }));
     head.rotation.x=Math.PI/2; head.position.set(0,1.55,-0.45); head.raycast=()=>{}; wrap.add(head);   // points -Z (forward); head zone is the proxy below
     g.add(wrap); g.userData.visual=wrap; g.userData.hasModel=false;
-    const hpx=_mkHeadProxy(1.66, 0.32); g.add(hpx); g.userData.headProxy=hpx;
+    const hpx=_mkHeadProxy(1.66, 0.32); g.add(hpx); g.userData.headProxy=hpx; if(g.userData.noHit) hpx.raycast=()=>{};
   };
   if(!mc.url){ useCapsule(); return; }
   useCapsule();   // placeholder until the GLB arrives
+  g.userData._loadingUrl = mc.url;   // per-group token so a stale load is discarded (NOT tied to the local player's model)
   loadGLTFCached(mc.url,
     (gltf)=>{
-      if(playerModelCfg.url!==mc.url) return;   // url changed before this load resolved
+      if(g.userData._loadingUrl!==mc.url) return;   // a newer model was requested for THIS avatar before the load resolved
       if(g.userData.visual){ g.remove(g.userData.visual); g.userData.visual=null; }
       const model=THREE.cloneSkinned(gltf.scene);
       model.scale.setScalar(mc.scale||1);
@@ -8789,8 +8791,8 @@ function buildAvatarVisual(g, cfg){
       model.rotation.x = (mc.rx||0); model.rotation.z = (mc.rz||0); model.rotation.y += (mc.face||0);   // full orient: pitch / roll / facing
       g.userData.visual=model; g.userData.hasModel=true;
       model.userData.seat={ p:model.position.clone(), q:model.quaternion.clone(), s:model.scale.clone() };   // re-pinned each frame so root-motion can't fling the model
-      const hb=h*0.82; const px=new THREE.Mesh(new THREE.CylinderGeometry(fr,fr,hb,10), _ENEMY_PROXY_MAT); px.position.y=hb/2; g.add(px); g.userData.hitProxy=px;
-      const rs=Math.min(Math.max(fr*0.7,0.26),0.45); const hpx=_mkHeadProxy(h-rs, rs); g.add(hpx); g.userData.headProxy=hpx;
+      const hb=h*0.82; const px=new THREE.Mesh(new THREE.CylinderGeometry(fr,fr,hb,10), _ENEMY_PROXY_MAT); px.position.y=hb/2; g.add(px); g.userData.hitProxy=px; if(g.userData.noHit) px.raycast=()=>{};
+      const rs=Math.min(Math.max(fr*0.7,0.26),0.45); const hpx=_mkHeadProxy(h-rs, rs); g.add(hpx); g.userData.headProxy=hpx; if(g.userData.noHit) hpx.raycast=()=>{};
       if(mc===playerModelCfg){ playerModelClips = (gltf.animations||[]).map(a=>a.name||''); if(typeof refreshPlayerClipOptions==='function') refreshPlayerClipOptions(); }   // clip names feed the editor for the local model only
       const mx=playEnemyStates(model, gltf, mc.clips);   // idle/walk/run, crossfaded by the avatar's movement
       if(mx) g.userData.mixer=mx;
@@ -8799,6 +8801,34 @@ function buildAvatarVisual(g, cfg){
   );
 }
 function rebuildAvatars(){ for(const id in NET.players){ const rp=NET.players[id]; if(rp && rp.mesh) buildAvatarVisual(rp.mesh, rp.modelCfg); } if(typeof previewAvatar!=='undefined' && previewAvatar) buildAvatarVisual(previewAvatar); _scheduleCharBroadcast(); }
+// ---- Third-person chase camera (toggle in the pause menu) ----
+let tpMode = (()=>{ try{ return localStorage.getItem('breach_tp')==='1'; }catch(e){ return false; } })();
+const TP_DIST = 4.2, TP_HEIGHT = 0.55, TP_MIN = 1.1;   // chase distance back / lift / closest pull-in past walls
+let _ownAvatar=null, _ownAvatarKey='', _tpCaster=null;
+const _tpBack=new THREE.Vector3(), _tpEye=new THREE.Vector3();
+function ensureOwnAvatar(){
+  const cfg=myCharCfg(); const key=(cfg.url||'')+'|'+(cfg.tint==null?'x':cfg.tint)+'|'+(cfg.scale||1)+'|'+(cfg.face||0);
+  if(_ownAvatar && _ownAvatarKey===key) return _ownAvatar;
+  if(!_ownAvatar){ _ownAvatar=new THREE.Group(); _ownAvatar.userData.noHit=true; scene.add(_ownAvatar); }   // noHit: never let the player's own body intercept their shots/picks
+  buildAvatarVisual(_ownAvatar, cfg); _ownAvatarKey=key; return _ownAvatar;
+}
+function updateOwnAvatar(){
+  if(!(tpMode && gameOn && !editorOpen && !duelDead)){ if(_ownAvatar) _ownAvatar.visible=false; return; }
+  const a=ensureOwnAvatar(); a.visible=true;
+  a.position.set(player.pos.x, player.pos.y-EYE, player.pos.z);   // group origin is at the feet; player.pos is the eye
+  a.rotation.y = player.yaw;
+}
+function tpCameraPushback(){
+  // keep the look direction (yaw/pitch already applied), pull the camera straight back, lift a touch, pull in past walls
+  const cp=Math.cos(player.pitch), sp=Math.sin(player.pitch), cy=Math.cos(player.yaw), sy=Math.sin(player.yaw);
+  const fx=-cp*sy, fy=sp, fz=-cp*cy;   // camera forward for YXZ yaw/pitch
+  const eye=player.pos; let dist=TP_DIST;
+  if(!_tpCaster) _tpCaster=new THREE.Raycaster();
+  _tpCaster.set(_tpEye.set(eye.x,eye.y,eye.z), _tpBack.set(-fx,-fy,-fz)); _tpCaster.far=TP_DIST;
+  const hits=_tpCaster.intersectObjects(colliders, false);
+  if(hits.length) dist=Math.max(TP_MIN, hits[0].distance-0.35);   // don't clip through the wall behind us
+  camera.position.set(eye.x - fx*dist, eye.y - fy*dist + TP_HEIGHT, eye.z - fz*dist);
+}
 // ---- per-player characters: each player owns + broadcasts their avatar config; others build from it ----
 function myCharCfg(){ const c=(myRosterIdx>=0 && charRoster[myRosterIdx]) ? charRoster[myRosterIdx] : playerModelCfg; return { url:c.url||'', scale:c.scale||1, face:c.face||0, rx:c.rx||0, rz:c.rz||0, xoff:c.xoff||0, yoff:c.yoff||0, zoff:c.zoff||0, clips:Object.assign({}, c.clips||{}), tint:(CHARACTERS[myCharIdx]?CHARACTERS[myCharIdx].color:null) }; }
 function applyRemoteChar(id, cfg){ if(cfg==null || +id===NET.myId) return; NET.charById[id]=cfg; const rp=NET.players[id]; if(rp){ rp.modelCfg=cfg; if(rp.mesh){ buildAvatarVisual(rp.mesh, cfg); if(teamMode() && NET.teams[id]!=null) tintAvatar(rp.mesh, NET.teams[id]); } } }
@@ -10019,7 +10049,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 289 · 2026-06-08';
+const BUILD_VERSION = 'build 291 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10893,6 +10923,20 @@ function damageProp(obj, dmg, point, dir, power, byId){
   return false;
 }
 // Step the simulation (fixed timestep) and sync dynamic meshes from their bodies. Host/solo only.
+// A pure client doesn't own dynamic-prop simulation (the host streams those), but the local player's
+// Rapier character controller still needs the world STEPPED every frame so its ground/wall queries stay
+// fresh. Without it the KCC never finds the floor and the player floats -- or rises forever after a jump.
+// Prop bodies are pinned to their host-synced mesh poses so they stay solid obstacles instead of free-falling.
+function stepClientPlayerPhys(dt){
+  if(!physWorld) return;
+  for(const o of dynamicProps){ const b=o.userData.phys && o.userData.phys.body; if(!b) continue;
+    b.setTranslation({x:o.position.x,y:o.position.y,z:o.position.z}, false);
+    const q=o.quaternion; if(b.setRotation) b.setRotation({x:q.x,y:q.y,z:q.z,w:q.w}, false);
+    if(b.setLinvel) b.setLinvel({x:0,y:0,z:0}, false); if(b.setAngvel) b.setAngvel({x:0,y:0,z:0}, false);
+  }
+  physAccum += Math.min(dt, 0.1);
+  let n=0; while(physAccum >= PHYS_DT && n < PHYS_MAX_SUBSTEPS){ physWorld.step(); physAccum -= PHYS_DT; n++; }
+}
 function updatePhysics(dt){
   if(!physWorld) return;
   driveAllHeld();   // command velocity of any grabbed prop toward its hold point before stepping
@@ -12080,7 +12124,9 @@ function loop(){
       camera.rotation.z  = (Math.random()-0.5) * 0.06 * s;
       shake = Math.max(0, shake - dt*2.2);
     } else { shake = 0; camera.rotation.z = 0; }
+    if(tpMode && gameOn && !duelDead){ gun.visible=false; tpCameraPushback(); }   // third-person chase cam (first-person above is the default)
   }
+  updateOwnAvatar();   // show + place the player's own body in third person (hidden otherwise)
 
   // PvP death killcam — while waiting to respawn, pan the view onto whoever killed you
   if(duelDead && pvpMode()){
@@ -12333,7 +12379,7 @@ function loop(){
   }
 
   // physics: host/solo simulate dynamic props; clients receive their transforms via the snapshot.
-  { const _a=perfOn?_pnow():0; if(!editorOpen && NET.mode!=='client'){ updatePhysics(dt); updateThrownDamage(dt); } if(perfOn)_prof.phys+=_pnow()-_a; }
+  { const _a=perfOn?_pnow():0; if(!editorOpen){ if(NET.mode!=='client'){ updatePhysics(dt); updateThrownDamage(dt); } else if(playerPhysMode && playerBody && physWorld){ stepClientPlayerPhys(dt); } } if(perfOn)_prof.phys+=_pnow()-_a; }
   if(typeof updateFragments==='function') updateFragments();   // advance/cleanup destruction debris
   updateLightBudget();
 
@@ -15743,6 +15789,7 @@ function bindPauseMenu(){
   const r=document.getElementById('pauseResume'); if(r) r.onclick=resumeGame;
   const eh=document.getElementById('pauseEditHud'); if(eh) eh.onclick=()=>{ const pm=document.getElementById('pauseMenu'); if(pm) pm.classList.add('hidden'); enterTouchEdit(); };
   const mm=document.getElementById('pauseMoveMode'); if(mm){ const upd=()=>{ mm.textContent='Movement: '+(playerPhysMode?'Physics (beta)':'Classic'); }; upd(); mm.onclick=()=>{ playerPhysMode=!playerPhysMode; _kccBroken=false; try{ localStorage.setItem('breach_player_phys', playerPhysMode?'1':'0'); }catch(e){} upd(); }; }
+  const cmb=document.getElementById('pauseCamMode'); if(cmb){ const updc=()=>{ cmb.textContent='Camera: '+(tpMode?'Third person':'First person'); }; updc(); cmb.onclick=()=>{ tpMode=!tpMode; try{ localStorage.setItem('breach_tp', tpMode?'1':'0'); }catch(e){} updc(); }; }
   const x=document.getElementById('pauseExit'); if(x) x.onclick=exitToMenu;
   const mc=document.getElementById('muteCb'); if(mc){ mc.checked=audioSettings.muted; mc.onchange=()=>{ audioSettings.muted=mc.checked; applyAudioSettings(); saveAudioSettings(); }; }
   const vM=document.getElementById('volMaster'); if(vM){ vM.value=Math.round(audioSettings.master*100); vM.oninput=()=>{ audioSettings.master=(+vM.value)/100; applyAudioSettings(); saveAudioSettings(); }; }
