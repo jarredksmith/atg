@@ -8732,7 +8732,7 @@ function loadLevelFromNet(level){
   pickupSpots = Array.isArray(level.pickups) ? level.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : []; pickupModels = (level.pickupModels && typeof level.pickupModels==='object') ? JSON.parse(JSON.stringify(level.pickupModels)) : {}; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); _skyHdriUrl = null; applyWorldCfg(); }   // adopt the host's sky / ground / fog (reset the sky guard so each level's sky re-applies cleanly, even mid-campaign)
   if(level.audio && NET.mode!=='client'){ try{ audioSettings.musicUrl=(typeof level.audio.musicUrl==='string')?level.audio.musicUrl:''; audioSettings.sounds=_sanitizeSounds(level.audio.sounds); if(typeof saveAudioSettings==='function') saveAudioSettings(); if(typeof preloadCustomSounds==='function') preloadCustomSounds(); if(_musicOn){ stopMusic(); startMusic(); } }catch(e){ console.warn('level audio apply failed', e); } }
-  if(level.cine){ const lc=level.cine; cineCfg.on=!!lc.on; cineCfg.path=Array.isArray(lc.path)?lc.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lensFrom=+lc.lensFrom||+lc.lens||35; cineCfg.lensTo=+lc.lensTo||+lc.lens||cineCfg.lensFrom; cineCfg.focusOn=!!lc.focusOn; cineCfg.focusFrom=+lc.focusFrom||8; cineCfg.focusTo=+lc.focusTo||cineCfg.focusFrom; cineCfg.dur=+lc.dur||6; cineCfg.look=(lc.look==='path')?'path':'spawn'; } else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; }
+  _applyCine(level.cine);
   // per-player characters: the client keeps its own avatar; the host's character arrives via the welcome 'char' field
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; gameCfg.noRespawn = !!level.game.noRespawn; }
   extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null; if(typeof refreshExtractMarker==='function') refreshExtractMarker();   // restore the per-level extraction spot (campaign / co-op load path)
@@ -10180,7 +10180,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 310 · 2026-06-08';
+const BUILD_VERSION = 'build 311 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12021,6 +12021,11 @@ function updatePerfHud(){
 // start ('spawn') or its travel direction ('path'), letterboxed with the HUD hidden. Any input skips it.
 // Disabled / no path => deploy behaves exactly as before. Editor 'Preview' reuses the same engine.
 let cineCfg = { on:false, path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn' };
+function _applyCine(lc){
+  if(lc){ cineCfg.on=!!lc.on; cineCfg.path=Array.isArray(lc.path)?lc.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lensFrom=+lc.lensFrom||+lc.lens||35; cineCfg.lensTo=+lc.lensTo||+lc.lens||cineCfg.lensFrom; cineCfg.focusOn=!!lc.focusOn; cineCfg.focusFrom=+lc.focusFrom||8; cineCfg.focusTo=+lc.focusTo||cineCfg.focusFrom; cineCfg.dur=+lc.dur||6; cineCfg.look=(lc.look==='path')?'path':'spawn'; }
+  else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; }
+}
+_applyCine(savedLevel && savedLevel.cine);   // restore a saved cinematic on page reload (boot path doesn't go through restoreLevel)
 let _cineActive=false, _cineT=0, _cineData=null, _cineReturn=null, _cineEditorPreview=false, _cinePreviewGroup=null;
 let _cineAvatar=null;   // the local player's body, shown during a cutscene AND while authoring one in the editor
 let cineShowChar=true;   // editor: stand the character at the player start while building a cinematic
@@ -13440,7 +13445,7 @@ function restoreLevel(level){
   // world + loot
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); applyWorldCfg(); }
   if(level.audio){ try{ audioSettings.musicUrl=(typeof level.audio.musicUrl==='string')?level.audio.musicUrl:''; audioSettings.sounds=_sanitizeSounds(level.audio.sounds); if(typeof saveAudioSettings==='function') saveAudioSettings(); if(typeof preloadCustomSounds==='function') preloadCustomSounds(); if(_musicOn){ stopMusic(); startMusic(); } }catch(e){ console.warn('level audio apply failed', e); } }
-  if(level.cine){ const lc=level.cine; cineCfg.on=!!lc.on; cineCfg.path=Array.isArray(lc.path)?lc.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lensFrom=+lc.lensFrom||+lc.lens||35; cineCfg.lensTo=+lc.lensTo||+lc.lens||cineCfg.lensFrom; cineCfg.focusOn=!!lc.focusOn; cineCfg.focusFrom=+lc.focusFrom||8; cineCfg.focusTo=+lc.focusTo||cineCfg.focusFrom; cineCfg.dur=+lc.dur||6; cineCfg.look=(lc.look==='path')?'path':'spawn'; } else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; }
+  _applyCine(level.cine);
   if(level.player) applyPlayerLevel(level.player);
   if(level.chest){ chestModelUrl = level.chest.url||''; chestModelScale = level.chest.scale||1; }
   if(level.coin){ const c=level.coin; coinCfg.url=c.url||''; coinCfg.scale=c.scale||1; coinCfg.on=c.on!==false; }
