@@ -9990,8 +9990,8 @@ function remoteFire(pid, o, d){
   if(rp){ rp._fireT = performance.now()+220; if(rp.mesh) setEnemyAnimState(rp.mesh,'attack'); }   // brief attack pose (held in netInterpolate)
   if(typeof SFX!=='undefined' && SFX.shootAt){ SFX.shootAt(from); }   // distance-attenuated shot (falls back to nothing if unsupported)
 }
-function tracer(from, to){
-  const tc=tracerCfg; if(!tc.on) return;
+function tracer(from, to, force){
+  const tc=tracerCfg; if(!tc.on && !force) return;
   const d = new THREE.Vector3().subVectors(to, from); const len = d.length(); if(len < 0.05) return;
   const m = new THREE.MeshBasicMaterial({ color:tc.color, transparent:true, opacity:tc.opacity, depthWrite:false });
   if(tc.glow) m.blending=THREE.AdditiveBlending;
@@ -10097,7 +10097,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 298 · 2026-06-08';
+const BUILD_VERSION = 'build 299 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12753,10 +12753,10 @@ const PRIM_ICON = {
 };
 const MODE_SECTIONS = {
   build:   ['gizmo','object','material','transform','characters'],
-  scene:   ['world','audiozones','impactfx','tracerfx'],
+  scene:   ['world','audiozones'],
   enemies: ['enemies'],
   rules:   ['game','loot'],
-  kit:     ['object','transform'],   // 'object' carries the weapon model import + per-weapon shoot sound; music/SFX live in Scene
+  kit:     ['object','transform','impactfx','tracerfx'],   // 'object' carries the weapon model import + per-weapon shoot sound; impact/streak FX; music/SFX live in Scene
   files:   ['levelfile','campaign'],
 };
 const MODE_TARGETS = {
@@ -13121,7 +13121,7 @@ function renderTracerFxPanel(){
   slider('width',0.2,6,0.05); slider('life',0.2,5,0.05); slider('opacity',0.1,1,0.02);
   const tg=document.createElement('input'); tg.type='checkbox'; tg.checked=!!tracerCfg.glow; tg.onchange=()=>{ tracerCfg.glow=tg.checked; }; row('Glow', tg);
   const br=document.createElement('div'); br.className='row2'; br.style.marginTop='6px';
-  const test=document.createElement('button'); test.textContent='Test streak'; test.title='Fire a sample streak straight ahead'; test.onclick=()=>{ const d=new THREE.Vector3(); camera.getWorldDirection(d); const a=camera.position.clone().addScaledVector(d,1.0); const b=a.clone().addScaledVector(d,40); tracer(a,b); };
+  const test=document.createElement('button'); test.textContent='Test streak'; test.title='Fire a sample streak across your view'; test.onclick=()=>{ const d=new THREE.Vector3(); camera.getWorldDirection(d); const right=new THREE.Vector3().crossVectors(d, new THREE.Vector3(0,1,0)).normalize(); const mid=camera.position.clone().addScaledVector(d,5); let n=0; const fire=()=>{ tracer(mid.clone().addScaledVector(right,-3), mid.clone().addScaledVector(right,3), true); if(++n<8) setTimeout(fire,55); }; fire(); };
   const rst=document.createElement('button'); rst.textContent='Reset'; rst.onclick=()=>{ tracerCfg=Object.assign({}, DEFAULT_TRACER); renderTracerFxPanel(); };
   br.appendChild(test); br.appendChild(rst); wrap.appendChild(br);
   host.appendChild(wrap);
