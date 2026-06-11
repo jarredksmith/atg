@@ -8763,9 +8763,9 @@ function makeNameSprite(text, team){
 }
 const remoteBodyGeo = new THREE.CapsuleGeometry(0.5, 1.2, 4, 8);
 // ---- Player avatar (what teammates / duel opponents see). Default = blue capsule; swappable for a GLB. ----
-const PLAYER_MODEL0 = { url:'', scale:1, face:0, rx:0, rz:0, yoff:0, xoff:0, zoff:0, clips:{ idle:'', walk:'', run:'', attack:'' } };   // face/rx/rz in radians
+const PLAYER_MODEL0 = { url:'', scale:1, face:0, rx:0, rz:0, yoff:0, xoff:0, zoff:0, thumb:'', clips:{ idle:'', walk:'', run:'', attack:'' } };   // thumb = Poly Pizza/Sketchfab preview image; face/rx/rz in radians
 let playerModelCfg = Object.assign({}, PLAYER_MODEL0, { clips:{ idle:'', walk:'', run:'', attack:'' } });
-function _sanitizeCharCfg(c){ c=c||{}; return { name:(typeof c.name==='string'&&c.name)||'Character', url:c.url||'', scale:+c.scale||1, face:+c.face||0, rx:+c.rx||0, rz:+c.rz||0, xoff:+c.xoff||0, yoff:+c.yoff||0, zoff:+c.zoff||0, clips:Object.assign({idle:'',walk:'',run:'',attack:''}, (c.clips&&typeof c.clips==='object')?c.clips:{}) }; }
+function _sanitizeCharCfg(c){ c=c||{}; return { name:(typeof c.name==='string'&&c.name)||'Character', url:c.url||'', scale:+c.scale||1, face:+c.face||0, rx:+c.rx||0, rz:+c.rz||0, xoff:+c.xoff||0, yoff:+c.yoff||0, zoff:+c.zoff||0, thumb:(typeof c.thumb==='string'?c.thumb:''), clips:Object.assign({idle:'',walk:'',run:'',attack:''}, (c.clips&&typeof c.clips==='object')?c.clips:{}) }; }
 let charRoster = (savedLevel && Array.isArray(savedLevel.roster)) ? savedLevel.roster.map(_sanitizeCharCfg) : [];   // authored multiplayer character models
 let myRosterIdx = -1;   // which roster character the local player picked (-1 = default player model)
 const CHARACTERS = [
@@ -8885,7 +8885,7 @@ function tpCameraPushback(){
   camera.position.set(px - fx*dist, py - fy*dist, pz - fz*dist);   // no perpendicular lift -> pivot stays on the crosshair
 }
 // ---- per-player characters: each player owns + broadcasts their avatar config; others build from it ----
-function myCharCfg(){ const c=(myRosterIdx>=0 && charRoster[myRosterIdx]) ? charRoster[myRosterIdx] : playerModelCfg; return { url:c.url||'', scale:c.scale||1, face:c.face||0, rx:c.rx||0, rz:c.rz||0, xoff:c.xoff||0, yoff:c.yoff||0, zoff:c.zoff||0, clips:Object.assign({}, c.clips||{}), tint:(CHARACTERS[myCharIdx]?CHARACTERS[myCharIdx].color:null) }; }
+function myCharCfg(){ const c=(myRosterIdx>=0 && charRoster[myRosterIdx]) ? charRoster[myRosterIdx] : playerModelCfg; return { url:c.url||'', scale:c.scale||1, face:c.face||0, rx:c.rx||0, rz:c.rz||0, xoff:c.xoff||0, yoff:c.yoff||0, zoff:c.zoff||0, thumb:c.thumb||'', clips:Object.assign({}, c.clips||{}), tint:(CHARACTERS[myCharIdx]?CHARACTERS[myCharIdx].color:null) }; }
 function applyRemoteChar(id, cfg){ if(cfg==null || +id===NET.myId) return; NET.charById[id]=cfg; const rp=NET.players[id]; if(rp){ rp.modelCfg=cfg; if(rp.mesh){ buildAvatarVisual(rp.mesh, cfg); if(teamMode() && NET.teams[id]!=null) tintAvatar(rp.mesh, NET.teams[id]); } } }
 function broadcastMyChar(){ const cfg=myCharCfg(); if(NET.mode==='host'){ NET.charById[0]=cfg; for(const id in NET.conns){ try{ NET.conns[id].send({t:'char', from:0, cfg}); }catch(e){} } } else if(NET.mode==='client' && NET.conn){ try{ NET.conn.send({t:'char', cfg}); }catch(e){} } }
 let _charBcT=null;
@@ -8909,9 +8909,11 @@ function _ensureThumbR(){
   }catch(e){ _thumbR=false; return false; }   // a 2nd WebGL context can fail on some devices -> fall back to the gradient
 }
 function _renderCharThumb(cfg, swatchEl){
-  if(!cfg || !cfg.url) return;
+  if(!cfg) return;
+  const apply=(url)=>{ if(swatchEl){ swatchEl.style.backgroundImage='url("'+url+'")'; swatchEl.style.backgroundSize='cover'; swatchEl.style.backgroundColor='#0c2026'; } };
+  if(cfg.thumb){ apply(cfg.thumb); return; }   // use the source preview image (Poly Pizza / Sketchfab) directly — no CORS, no render needed
+  if(!cfg.url) return;
   const k=(cfg.url||'')+'|'+(cfg.scale||1)+'|'+(cfg.face||0);
-  const apply=(url)=>{ if(swatchEl){ swatchEl.style.backgroundImage='url('+url+')'; swatchEl.style.backgroundSize='cover'; swatchEl.style.backgroundColor='#0c2026'; } };
   if(_thumbCache[k]){ apply(_thumbCache[k]); return; }
   if(!_ensureThumbR()) return;
   loadGLTFCached(cfg.url, (gltf)=>{
@@ -10158,7 +10160,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 304 · 2026-06-08';
+const BUILD_VERSION = 'build 305 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12547,7 +12549,7 @@ function prsTransform(min,max,perAxisScale){
 }
 
 function applyPlayerLevel(pl){ if(!pl) return; if(pl.state) Object.assign(editorTargets.player.state, pl.state);
-  playerModelCfg.url=(pl.url||'').trim(); const s=editorTargets.player.state;
+  playerModelCfg.url=(pl.url||'').trim(); playerModelCfg.thumb=(pl.thumb||''); const s=editorTargets.player.state;
   playerModelCfg.scale=s.s||1; playerModelCfg.face=(s.face||0)*RAD; playerModelCfg.yoff=s.yoff||0; playerModelCfg.xoff=s.xoff||0; playerModelCfg.zoff=s.zoff||0;
   playerModelCfg.clips=Object.assign({ idle:'', walk:'', run:'', attack:'' }, pl.clips||{}); rebuildAvatars(); }
 const editorTargets = {
@@ -12646,7 +12648,7 @@ const editorTargets = {
     obj: ()=>null,
     urlField: true,
     getUrl(){ return playerModelCfg.url; },
-    setUrl(u){ playerModelCfg.url=(u||'').trim(); this.apply(); },
+    setUrl(u){ playerModelCfg.url=(u||'').trim(); playerModelCfg.thumb=this.pickedThumb||''; this.pickedThumb=''; this.apply(); },
     apply(){ const s=this.state; playerModelCfg.scale=s.s; playerModelCfg.face=(s.face||0)*RAD; playerModelCfg.rx=(s.rx||0)*RAD; playerModelCfg.rz=(s.rz||0)*RAD; playerModelCfg.yoff=s.yoff; playerModelCfg.xoff=s.xoff; playerModelCfg.zoff=s.zoff; rebuildAvatars(); },
     code(){ return '// ===== Player avatar (remote/duel) =====\\n'
         + 'const PLAYER_MODEL_URL = ' + JSON.stringify(playerModelCfg.url) + ';\\n'
@@ -13096,7 +13098,7 @@ function serializeLevel(){
     aim:     { state: Object.assign({}, editorTargets.aim.state) },
     aimWep:  JSON.parse(JSON.stringify(aimByWep)),
     station: { url: stationModelUrl, state: Object.assign({}, editorTargets.station.state) },
-    player:  { url: playerModelCfg.url, state: Object.assign({}, editorTargets.player.state), clips: Object.assign({}, playerModelCfg.clips) },
+    player:  { url: playerModelCfg.url, thumb: playerModelCfg.thumb||'', state: Object.assign({}, editorTargets.player.state), clips: Object.assign({}, playerModelCfg.clips) },
     world:   Object.assign({}, worldCfg),
     chest:   { url: chestModelUrl, scale: chestModelScale },
     coin:    { url: coinCfg.url, scale: coinCfg.scale, on: coinCfg.on !== false },
@@ -13109,7 +13111,7 @@ function serializeLevel(){
     audioZones: audioZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, url:z.url||'', vol:+z.vol, loop:!!z.loop })),
     fx: Object.assign({}, fxCfg),
     tracer: Object.assign({}, tracerCfg),
-    roster: charRoster.map(c=>({ name:c.name, url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, clips:Object.assign({},c.clips||{}) })),
+    roster: charRoster.map(c=>({ name:c.name, url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, thumb:c.thumb||'', clips:Object.assign({},c.clips||{}) })),
     pickupModels: Object.keys(pickupModels).reduce((a,k)=>{ const m=pickupModels[k]; if(m&&m.url){ a[k]={ url:m.url, scale:m.scale||1 }; } return a; }, {}),
     game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave, noRespawn: !!gameCfg.noRespawn },
     dmgNum:  { on: dmgNumCfg.on !== false, size: dmgNumCfg.size, hit: dmgNumCfg.hitColor, kill: dmgNumCfg.killColor },
@@ -13166,7 +13168,7 @@ function _campaignLoad(i){ const lv=campaign.levels[i]; if(!lv) return; loadLeve
 function startCampaign(){ if(!campaign.levels.length){ if(typeof flashToast==='function') flashToast('No campaign yet \u2014 build one in the editor under Files > Campaign'); return; } campaignActive=true; campaignIdx=0; _campaignComplete=false; _campaignLoad(0); }
 function _captureLoadout(){ const a={}; for(const k of owned){ const w=WEAPONS[k]; if(w) a[k]={ mag:w.mag, reserve:w.reserve }; } return { owned:[...owned], wep:curWep, hp:player.hp, ammo:a }; }
 function _restoreLoadout(c){ if(!c) return; owned.length=0; for(const k of c.owned) owned.push(k); for(const k in c.ammo){ if(WEAPONS[k]){ WEAPONS[k].mag=c.ammo[k].mag; WEAPONS[k].reserve=c.ammo[k].reserve; } } curWep=(c.wep && owned.includes(c.wep))?c.wep:owned[0]; player.hp=Math.max(1, c.hp||player.hp); if(typeof switchWeapon==='function') switchWeapon(curWep); if(typeof updateHUD==='function') updateHUD(); }
-function _snapshotPlayerCharCfg(name){ const c=playerModelCfg; return _sanitizeCharCfg({ name:name||'Character', url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, clips:Object.assign({},c.clips||{}) }); }
+function _snapshotPlayerCharCfg(name){ const c=playerModelCfg; return _sanitizeCharCfg({ name:name||'Character', url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, thumb:c.thumb, clips:Object.assign({},c.clips||{}) }); }
 function _loadCharIntoEditor(i){ const c=charRoster[i]; if(!c) return; pushUndoSnapshot(); Object.assign(playerModelCfg, { url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, clips:Object.assign({},c.clips||{}) }); editorActive='player'; if(typeof ensurePlayerPreview==='function') ensurePlayerPreview(true); if(typeof previewAvatar!=='undefined' && previewAvatar && typeof buildAvatarVisual==='function') buildAvatarVisual(previewAvatar); if(typeof renderEditorFields==='function') renderEditorFields(); if(typeof flashToast==='function') flashToast('Loaded "'+(c.name||'Character')+'" onto the Player tab'); }
 function renderCharRosterPanel(){
   const host = editorEl && editorEl.querySelector('#edCharRoster'); if(!host) return;
@@ -14655,7 +14657,7 @@ function renderEditorFields(){
       const psHead=document.createElement('div'); psHead.className='hint'; psHead.style.margin='10px 0 3px'; psHead.innerHTML='<b>🔍 Poly Pizza</b> — search free models, click one to use it';
       urlHost.appendChild(psHead);
       const psHost=document.createElement('div'); urlHost.appendChild(psHost);
-      renderModelSearch(psHost, (m, st)=>{ inp.value=m.glb; if(tgt.setUrl) tgt.setUrl(m.glb); if(st) st.textContent='Using "'+m.title+'" — credit: '+(m.attribution||''); }, { placeholder:'e.g. pistol, robot, barrel' });
+      renderModelSearch(psHost, (m, st)=>{ inp.value=m.glb; tgt.pickedThumb=m.thumb||''; if(tgt.setUrl) tgt.setUrl(m.glb); if(st) st.textContent='Using "'+m.title+'" — credit: '+(m.attribution||''); }, { placeholder:'e.g. pistol, robot, barrel' });
     }
     if(tgt===editorTargets.gun){   // per-weapon shoot sound (moved here from the old Sounds tab)
       if(!audioSettings.sounds) audioSettings.sounds=_emptySounds(); if(!audioSettings.sounds.shoot) audioSettings.sounds.shoot={};
