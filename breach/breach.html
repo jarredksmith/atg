@@ -8794,7 +8794,7 @@ function buildAvatarVisual(g, cfg){
     body.position.y=1.1; body.castShadow=true; wrap.add(body);
     const head=new THREE.Mesh(new THREE.ConeGeometry(0.22,0.5,8), new THREE.MeshStandardMaterial({ color:0x9fd8ff, emissive:0x2f7fff, emissiveIntensity:.4 }));
     head.rotation.x=Math.PI/2; head.position.set(0,1.55,-0.45); head.raycast=()=>{}; wrap.add(head);   // points -Z (forward); head zone is the proxy below
-    g.add(wrap); g.userData.visual=wrap; g.userData.hasModel=false;
+    g.add(wrap); g.userData.visual=wrap; g.userData.hasModel=false; g.userData.centerLocal={ x:0, y:1.0, z:0 };
     const hpx=_mkHeadProxy(1.66, 0.32); g.add(hpx); g.userData.headProxy=hpx; if(g.userData.noHit) hpx.raycast=()=>{};
   };
   if(!mc.url){ useCapsule(); return; }
@@ -8819,6 +8819,7 @@ function buildAvatarVisual(g, cfg){
       model.rotation.x = (mc.rx||0); model.rotation.z = (mc.rz||0); model.rotation.y += (mc.face||0);   // full orient: pitch / roll / facing
       g.userData.visual=model; g.userData.hasModel=true;
       model.userData.seat={ p:model.position.clone(), q:model.quaternion.clone(), s:model.scale.clone() };   // re-pinned each frame so root-motion can't fling the model
+      g.userData.centerLocal = { x:(mc.xoff||0), y:(mc.yoff||0) + h*0.5, z:(mc.zoff||0) };   // visual centre in group space -> chase-cam pivot
       const hb=h*0.82; const px=new THREE.Mesh(new THREE.CylinderGeometry(fr,fr,hb,10), _ENEMY_PROXY_MAT); px.position.y=hb/2; g.add(px); g.userData.hitProxy=px; if(g.userData.noHit) px.raycast=()=>{};
       const rs=Math.min(Math.max(fr*0.7,0.26),0.45); const hpx=_mkHeadProxy(h-rs, rs); g.add(hpx); g.userData.headProxy=hpx; if(g.userData.noHit) hpx.raycast=()=>{};
       if(mc===playerModelCfg){ playerModelClips = (gltf.animations||[]).map(a=>a.name||''); if(typeof refreshPlayerClipOptions==='function') refreshPlayerClipOptions(); }   // clip names feed the editor for the local model only
@@ -8848,6 +8849,7 @@ function updateOwnAvatar(){
   let footY = player.pos.y-EYE;   // group origin is at the feet; player.pos is the eye
   if(player.onGround){ const r=0.4, px=player.pos.x, pz=player.pos.z; footY = Math.max(footY, terrainHeightAt(px+r,pz), terrainHeightAt(px-r,pz), terrainHeightAt(px,pz+r), terrainHeightAt(px,pz-r)); }   // clear an uphill slope instead of sinking the legs into it
   a.position.set(player.pos.x, footY, player.pos.z);
+  a.userData.footY = footY;
   a.rotation.y = player.yaw;
   // drive the animation from my own state: die > attack > jump > run/walk/idle (mirrors how peers animate me)
   if(a.userData.hasModel && a.userData.visual && a.userData.visual.userData.stateActions){
@@ -8870,7 +8872,11 @@ function tpCameraPushback(){
   // (no swinging around the reticle), and looking down puts the camera cleanly overhead.
   const cp=Math.cos(player.pitch), sp=Math.sin(player.pitch), cy=Math.cos(player.yaw), sy=Math.sin(player.yaw);
   const fx=-cp*sy, fy=sp, fz=-cp*cy;   // view forward for YXZ yaw/pitch
-  const px=player.pos.x, py=player.pos.y-0.3, pz=player.pos.z;   // pivot: upper chest (player.pos is the eye)
+  let px=player.pos.x, py=player.pos.y-0.3, pz=player.pos.z;   // fallback pivot: upper chest
+  if(_ownAvatar && _ownAvatar.userData.centerLocal){   // pivot on the model's real centre so ANY model (short/tall/offset) stays on the crosshair and only rotates, never slides
+    const cl=_ownAvatar.userData.centerLocal, fY=(_ownAvatar.userData.footY!=null)?_ownAvatar.userData.footY:(player.pos.y-EYE);
+    px=player.pos.x + cl.x*cy + cl.z*sy; pz=player.pos.z - cl.x*sy + cl.z*cy; py=fY + cl.y;
+  }
   let dist=TP_DIST;
   if(!_tpCaster) _tpCaster=new THREE.Raycaster();
   _tpCaster.set(_tpEye.set(px,py,pz), _tpBack.set(-fx,-fy,-fz)); _tpCaster.far=TP_DIST;
@@ -10152,7 +10158,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 303 · 2026-06-08';
+const BUILD_VERSION = 'build 304 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12223,8 +12229,10 @@ function loop(){
     if(!_charPrevInit){ player.yaw = 0; player.pitch = -0.15; _charPrevInit = true; }   // start behind the model, slight down-angle
     const cp=Math.cos(player.pitch), sp=Math.sin(player.pitch), cy=Math.cos(player.yaw), sy=Math.sin(player.yaw);
     const fx=-cp*sy, fy=sp, fz=-cp*cy;
-    const av=previewAvatar.position, pvy=av.y + (EYE-0.3), d=_charPrevDist;   // pivot at the chest, matching tpCameraPushback
-    camera.position.set(av.x - fx*d, pvy - fy*d, av.z - fz*d);
+    const av=previewAvatar.position, d=_charPrevDist;
+    const cl=previewAvatar.userData.centerLocal || {x:0,y:(EYE-0.3),z:0};   // centre on the model, matching tpCameraPushback
+    const pvx=av.x + cl.x*cy + cl.z*sy, pvy=av.y + cl.y, pvz=av.z - cl.x*sy + cl.z*cy;
+    camera.position.set(pvx - fx*d, pvy - fy*d, pvz - fz*d);
     camera.rotation.order='YXZ'; camera.rotation.y=player.yaw; camera.rotation.x=player.pitch; camera.rotation.z=0;
   } else {
     if(scene.fog !== SCENE_FOG) scene.fog = SCENE_FOG;
