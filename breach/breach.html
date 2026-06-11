@@ -318,7 +318,7 @@
   .charCard:hover{ transform:translateY(-2px); border-color:rgba(255,255,255,.4); }
   .charCard.sel{ border-color:#fff; box-shadow:0 0 0 2px rgba(255,255,255,.18); }
   .charSwatch{ width:44px; height:44px; border-radius:50%; margin:0 auto 8px; box-shadow:inset 0 2px 8px rgba(0,0,0,.45), 0 0 14px rgba(0,0,0,.3); }
-  .charName{ font-size:13px; letter-spacing:.04em; opacity:.92; }
+  .charName{ font-size:13px; letter-spacing:.04em; color:#e6f4ee; opacity:1; }
   @media(max-width:560px){ #charGrid{ grid-template-columns:repeat(2,1fr); } }
   #lobby .modalCard{ max-width:440px; }
   .lobbyCode{ font-size:26px; letter-spacing:.22em; font-weight:700; color:#38f5b5; text-align:center; margin:2px 0; }
@@ -8875,12 +8875,51 @@ function _scheduleCharBroadcast(){ if(NET.mode==='off') return; if(_charBcT) cle
 function addCharRing(g, color){ const geo=new THREE.RingGeometry(0.34,0.5,28); geo.rotateX(-Math.PI/2); const m=new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent:true, opacity:0.85, side:THREE.DoubleSide, depthWrite:false })); m.position.y=0.05; m.raycast=()=>{}; g.add(m); g.userData.charRing=m; }
 function _charHex(i){ return '#'+CHARACTERS[i].color.toString(16).padStart(6,'0'); }
 function updateCharBtnLabel(){ const rc=(myRosterIdx>=0 && charRoster[myRosterIdx])?charRoster[myRosterIdx]:null; const nm=rc?_esc(rc.name):CHARACTERS[myCharIdx].name; const html='CHARACTER: <b style="color:'+_charHex(myCharIdx)+'">'+nm+'</b> \u25b8'; ['charBtn','lobbyCharBtn'].forEach(id=>{ const b=document.getElementById(id); if(b) b.innerHTML=html; }); }
+// --- live 3D model thumbnails for the character picker cards (one shared offscreen renderer; results cached by model) ---
+let _thumbR=null, _thumbScene=null, _thumbCam=null; const _thumbCache={};
+function _ensureThumbR(){
+  if(_thumbR!==null) return !!_thumbR;
+  try{
+    _thumbR=new THREE.WebGLRenderer({ alpha:true, antialias:true, preserveDrawingBuffer:true });
+    _thumbR.setPixelRatio(1); _thumbR.setSize(112,112); _thumbR.setClearColor(0x000000,0);
+    _thumbScene=new THREE.Scene();
+    _thumbCam=new THREE.PerspectiveCamera(30,1,0.02,200);
+    const key=new THREE.DirectionalLight(0xffffff,1.5); key.position.set(2.5,3.5,4); _thumbScene.add(key);
+    const rim=new THREE.DirectionalLight(0x9fc6ff,0.55); rim.position.set(-3,2,-2.5); _thumbScene.add(rim);
+    _thumbScene.add(new THREE.HemisphereLight(0xffffff,0x223038,0.85));
+    return true;
+  }catch(e){ _thumbR=false; return false; }   // a 2nd WebGL context can fail on some devices -> fall back to the gradient
+}
+function _renderCharThumb(cfg, swatchEl){
+  if(!cfg || !cfg.url) return;
+  const k=(cfg.url||'')+'|'+(cfg.scale||1)+'|'+(cfg.face||0);
+  const apply=(url)=>{ if(swatchEl){ swatchEl.style.backgroundImage='url('+url+')'; swatchEl.style.backgroundSize='cover'; swatchEl.style.backgroundColor='#0c2026'; } };
+  if(_thumbCache[k]){ apply(_thumbCache[k]); return; }
+  if(!_ensureThumbR()) return;
+  loadGLTFCached(cfg.url, (gltf)=>{
+    try{
+      const src=(gltf.scene)||(gltf.scenes&&gltf.scenes[0]); if(!src) return;
+      const model=src.clone(true);
+      const root=new THREE.Group(); root.add(model); root.rotation.y=(cfg.face||0)+Math.PI*0.12;   // face + a slight 3/4 turn
+      _thumbScene.add(root); root.updateMatrixWorld(true);
+      const box=new THREE.Box3().setFromObject(root), size=box.getSize(new THREE.Vector3()), ctr=box.getCenter(new THREE.Vector3());
+      model.position.sub(ctr); root.updateMatrixWorld(true);
+      const maxd=Math.max(size.x,size.y,size.z)||1, fov=30;
+      const dist=(Math.max(size.y,size.x)*0.5)/Math.tan(fov*Math.PI/360)*1.45 + maxd*0.25;
+      _thumbCam.position.set(dist*0.4, size.y*0.1, dist); _thumbCam.lookAt(0,0,0);
+      _thumbR.render(_thumbScene, _thumbCam);
+      const url=_thumbR.domElement.toDataURL('image/png');
+      _thumbScene.remove(root);
+      _thumbCache[k]=url; apply(url);
+    }catch(e){}
+  }, ()=>{});
+}
 function renderCharGrid(){ const g=document.getElementById('charGrid'); if(!g) return; g.innerHTML='';
   if(charRoster.length){
     const lab=document.createElement('div'); lab.textContent='CHARACTER'; lab.style.cssText='grid-column:1/-1;color:#7fe6cf;font-size:10px;letter-spacing:2px;margin:4px 0 1px;'; g.appendChild(lab);
-    const mk=(idx,name,grad)=>{ const card=document.createElement('div'); card.className='charCard'+(idx===myRosterIdx?' sel':''); const sw=document.createElement('div'); sw.className='charSwatch'; sw.style.background=grad; const nm=document.createElement('div'); nm.className='charName'; nm.textContent=name; card.appendChild(sw); card.appendChild(nm); card.onclick=()=>selectRosterChar(idx); g.appendChild(card); };
-    mk(-1, 'Default', 'linear-gradient(135deg,#3a4750,#222c32)');
-    charRoster.forEach((c,i)=> mk(i, c.name||('Character '+(i+1)), 'linear-gradient(135deg,#1f6f7a,#0f3038)'));
+    const mk=(idx,name,grad,cfg)=>{ const card=document.createElement('div'); card.className='charCard'+(idx===myRosterIdx?' sel':''); const sw=document.createElement('div'); sw.className='charSwatch'; sw.style.background=grad; const nm=document.createElement('div'); nm.className='charName'; nm.textContent=name; card.appendChild(sw); card.appendChild(nm); card.onclick=()=>selectRosterChar(idx); g.appendChild(card); if(cfg && cfg.url) _renderCharThumb(cfg, sw); };
+    mk(-1, 'Default', 'linear-gradient(135deg,#3a4750,#222c32)', (playerModelCfg && playerModelCfg.url ? playerModelCfg : null));
+    charRoster.forEach((c,i)=> mk(i, c.name||('Character '+(i+1)), 'linear-gradient(135deg,#1f6f7a,#0f3038)', c));
     const lab2=document.createElement('div'); lab2.textContent='COLOR'; lab2.style.cssText='grid-column:1/-1;color:#7fe6cf;font-size:10px;letter-spacing:2px;margin:6px 0 1px;'; g.appendChild(lab2);
   }
   CHARACTERS.forEach((c,i)=>{ const card=document.createElement('div'); card.className='charCard'+(i===myCharIdx?' sel':''); const sw=document.createElement('div'); sw.className='charSwatch'; sw.style.background=_charHex(i); const nm=document.createElement('div'); nm.className='charName'; nm.textContent=c.name; card.appendChild(sw); card.appendChild(nm); card.onclick=()=>selectChar(i); g.appendChild(card); }); }
@@ -10100,7 +10139,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 300 · 2026-06-08';
+const BUILD_VERSION = 'build 301 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
