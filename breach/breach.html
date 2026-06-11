@@ -8820,28 +8820,34 @@ function rebuildAvatars(){ for(const id in NET.players){ const rp=NET.players[id
 // ---- Third-person chase camera (toggle in the pause menu) ----
 let tpMode = (()=>{ try{ return localStorage.getItem('breach_tp')==='1'; }catch(e){ return false; } })();
 const TP_DIST = 4.2, TP_HEIGHT = 0.55, TP_MIN = 1.1;   // chase distance back / lift / closest pull-in past walls
-let _ownAvatar=null, _ownAvatarKey='', _tpCaster=null, _ownPrevX=0, _ownPrevZ=0;
+let _ownAvatar=null, _ownAvatarKey='', _tpCaster=null, _ownPrevX=0, _ownPrevZ=0, _ownSpeed=0;
 const _tpBack=new THREE.Vector3(), _tpEye=new THREE.Vector3();
 function ensureOwnAvatar(){
   const cfg=myCharCfg(); const key=(cfg.url||'')+'|'+(cfg.tint==null?'x':cfg.tint)+'|'+(cfg.scale||1)+'|'+(cfg.face||0);
   if(_ownAvatar && _ownAvatarKey===key) return _ownAvatar;
   if(!_ownAvatar){ _ownAvatar=new THREE.Group(); _ownAvatar.userData.noHit=true; scene.add(_ownAvatar); }   // noHit: never let the player's own body intercept their shots/picks
-  buildAvatarVisual(_ownAvatar, cfg); _ownAvatarKey=key; return _ownAvatar;
+  buildAvatarVisual(_ownAvatar, cfg); _ownAvatarKey=key;
+  if(_ownAvatar.userData.charRing) _ownAvatar.userData.charRing.visible=false;   // your own ring is redundant in third person
+  return _ownAvatar;
 }
 function updateOwnAvatar(){
   if(!(tpMode && gameOn && !editorOpen)){ if(_ownAvatar) _ownAvatar.visible=false; return; }
   const a=ensureOwnAvatar(); a.visible=true;
-  a.position.set(player.pos.x, player.pos.y-EYE, player.pos.z);   // group origin is at the feet; player.pos is the eye
+  let footY = player.pos.y-EYE;   // group origin is at the feet; player.pos is the eye
+  if(player.onGround){ const r=0.4, px=player.pos.x, pz=player.pos.z; footY = Math.max(footY, terrainHeightAt(px+r,pz), terrainHeightAt(px-r,pz), terrainHeightAt(px,pz+r), terrainHeightAt(px,pz-r)); }   // clear an uphill slope instead of sinking the legs into it
+  a.position.set(player.pos.x, footY, player.pos.z);
   a.rotation.y = player.yaw;
   // drive the animation from my own state: die > attack > jump > run/walk/idle (mirrors how peers animate me)
   if(a.userData.hasModel && a.userData.visual && a.userData.visual.userData.stateActions){
     const dead = duelDead || (player.hp!=null && player.hp<=0);
     const md = Math.hypot(player.pos.x-_ownPrevX, player.pos.z-_ownPrevZ);   // per-frame travel (same metric peers use for me)
+    _ownSpeed = _ownSpeed*0.6 + md*0.4;   // low-pass: per-frame travel is noisy and flips walk<->run otherwise
     let st;
     if(dead) st='die';
     else if(performance.now()-lastShot < 250) st='attack';
     else if(!player.onGround) st='jump';
-    else st = md>0.10 ? 'run' : (md>0.02 ? 'walk' : 'idle');
+    else { const cur=(a.userData.visual.userData.animState)||'idle', sm=_ownSpeed;   // hysteresis: enter run high, leave run low
+      st = sm<0.012 ? 'idle' : (cur==='run' ? (sm>0.05?'run':'walk') : (sm>0.11?'run':'walk')); }
     setEnemyAnimState(a, st);
   }
   _ownPrevX=player.pos.x; _ownPrevZ=player.pos.z;
@@ -10091,7 +10097,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 297 · 2026-06-08';
+const BUILD_VERSION = 'build 298 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
