@@ -633,7 +633,7 @@
       <div class="mpDesc">Auto-balanced Red vs Blue, no friendly fire. First team to the kill target wins. Players are assigned as they join.</div>
       <div class="mpActions"><button id="mpTDM" class="mpBtn duel">Host TDM</button><span class="mpHint">first to</span><input id="mpTDMKills" type="number" min="1" max="199" value="30"><span class="mpHint">kills</span></div>
       <div class="mpActions"><button id="mpCP" class="mpBtn duel">Host KOTH</button><span class="mpHint">first to</span><input id="mpCPScore" type="number" min="50" max="999" value="200"><span class="mpHint">pts</span></div>
-      <div class="mpActions"><span class="mpHint">add</span><input id="mpBots" type="number" min="0" max="7" value="3"><span class="mpHint">AI bots to any hosted match</span></div>
+      <div class="mpActions"><span class="mpHint">add</span><input id="mpBots" type="number" min="0" max="7" value="3"><span class="mpHint">AI bots ·</span><select id="mpBotDiff" style="background:#0b1a18;color:#cfe;border:1px solid #2a5d52;border-radius:6px;padding:3px 6px;font:inherit;cursor:pointer"><option value="recruit">Recruit</option><option value="regular" selected>Regular</option><option value="veteran">Veteran</option><option value="elite">Elite</option></select></div>
     </div>
     <div class="mpSection join">
       <div class="mpTitle">→ JOIN A ROOM</div>
@@ -8339,6 +8339,7 @@ const NET = {
   duelScore:{},        // duel/ffa/tdm: playerId -> kills (host-authoritative)
   cpOwner:-1, cpCap:0, cpCapTeam:-1, cpContested:false, cpScore:{0:0,1:0},   // control-point (KOTH) state
   botCount:0,          // PvP: number of AI bots the host fills the match with
+  botDiff:'regular',   // PvP: AI skill tier (recruit/regular/veteran/elite) — tunes speed, fire rate, aim, damage, HP
   charById:{},         // playerId -> that player's character (model) config, so avatars can differ per player
   teams:{},            // tdm: playerId -> 0 (red) | 1 (blue)
   team:0,              // my team (tdm)
@@ -8418,7 +8419,15 @@ const TEAM_NAME=['RED','BLUE']; const TEAM_COLOR=[0xff4d5e, 0x3a9bff]; const TEA
 // ---------- Control Point (King of the Hill): hold the centre zone to score; first team to the target wins ----------
 const CP_RADIUS=5.5, CP_CAPTURE_TIME=4, CP_SCORE_RATE=5; const CP_POS=new THREE.Vector3(0,0,0);
 let cpZone=null; let _cpBcT=0;
-let bots=[]; const BOT_ID_BASE=900; const _bv0=new THREE.Vector3(), _bv1=new THREE.Vector3(), _bv2=new THREE.Vector3(); const BOT_NAMES=['Vex','Rook','Nyx','Zane','Echo','Kilo','Juno','Mako'];
+let bots=[]; const BOT_ID_BASE=900;
+const BOT_DIFF = {
+  recruit: { label:'Recruit', spd:0.62, cdMin:0.95, cdRand:0.7, spread:0.085, hit:0.34, dmgMin:6,  dmgRand:5, hp:80,  range:38 },
+  regular: { label:'Regular', spd:0.85, cdMin:0.55, cdRand:0.5, spread:0.040, hit:0.60, dmgMin:11, dmgRand:6, hp:100, range:52 },
+  veteran: { label:'Veteran', spd:1.00, cdMin:0.42, cdRand:0.4, spread:0.022, hit:0.78, dmgMin:13, dmgRand:7, hp:120, range:60 },
+  elite:   { label:'Elite',   spd:1.12, cdMin:0.30, cdRand:0.3, spread:0.013, hit:0.90, dmgMin:15, dmgRand:8, hp:150, range:70 },
+};
+try{ const _bd=localStorage.getItem('breach_botdiff'); if(_bd && BOT_DIFF[_bd]) NET.botDiff=_bd; }catch(e){}
+function botDiff(){ return BOT_DIFF[NET.botDiff] || BOT_DIFF.regular; } const _bv0=new THREE.Vector3(), _bv1=new THREE.Vector3(), _bv2=new THREE.Vector3(); const BOT_NAMES=['Vex','Rook','Nyx','Zane','Echo','Kilo','Juno','Mako'];
 function buildCpZone(){
   if(cpZone){ scene.remove(cpZone); cpZone=null; }
   cpZone=new THREE.Group(); cpZone.position.set(CP_POS.x,0,CP_POS.z);
@@ -8455,12 +8464,13 @@ function botById(id){ for(const b of bots){ if(b.id===+id) return b; } return nu
 function clearBots(){ for(const b of bots){ if(b.mesh) scene.remove(b.mesh); if(NET.teams) delete NET.teams[b.id]; if(NET.duelScore) delete NET.duelScore[b.id]; } bots=[]; }
 function spawnBots(n){
   clearBots(); if(!(n>0)) return;
+  const D=botDiff();
   for(let i=0;i<n;i++){
     const id=BOT_ID_BASE+i; let team=-1;
     if(teamMode()){ let c0=(NET.team===0?1:0), c1=(NET.team===1?1:0); for(const b of bots){ if(b.team===0)c0++; else if(b.team===1)c1++; } team=(c0<=c1)?0:1; }
     const nm=BOT_NAMES[i%BOT_NAMES.length]+(i>=BOT_NAMES.length?(' '+(i+1)):'');
     const sp=randomSpawn(); const mesh=makeBot(team, nm); mesh.userData.botId=id; mesh.position.set(sp.x,0,sp.z); mesh.rotation.y=sp.yaw;
-    bots.push({ id, team, name:nm, mesh, pos:new THREE.Vector3(sp.x,0,sp.z), yaw:sp.yaw, hp:100, maxHp:100, dead:false, respawnT:0, fireCd:Math.random()*0.6, strafe:Math.random()<0.5?1:-1, retargetT:0, target:null, vy:0, evx:0, evz:0, grounded:true });
+    bots.push({ id, team, name:nm, mesh, pos:new THREE.Vector3(sp.x,0,sp.z), yaw:sp.yaw, hp:D.hp, maxHp:D.hp, dead:false, respawnT:0, fireCd:Math.random()*0.6, strafe:Math.random()<0.5?1:-1, retargetT:0, target:null, vy:0, evx:0, evz:0, grounded:true });
     if(teamMode()) NET.teams[id]=team;
     NET.duelScore[id]=0;
   }
@@ -8485,7 +8495,7 @@ function _botDamage(b, tgt, dmg){
 function botDie(b){ b.dead=true; b.respawnT=2.5; if(b.mesh) b.mesh.visible=false; if(typeof netDeath==='function') netDeath(b.pos.x,0,b.pos.z); }
 function updateBots(dt){
   if(NET.mode!=='host' || !pvpMode() || !gameOn || !bots.length) return;
-  const koth = NET.gameMode==='cp', lim=ARENA-2, spd=SPEED*0.85;
+  const D=botDiff(), koth = NET.gameMode==='cp', lim=ARENA-2, spd=SPEED*D.spd;
   for(const b of bots){
     if(b.dead){ b.respawnT-=dt; if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,0,sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; if(b.mesh){ b.mesh.visible=true; b.mesh.position.set(sp.x,0,sp.z); } } continue; }
     b.retargetT-=dt;
@@ -8525,13 +8535,13 @@ function updateBots(dt){
     if(tgt && b.fireCd<=0){
       const ty=(tgt.pos.y!=null?Math.min(1.5,tgt.pos.y):1.4);
       const fdist=Math.hypot(tgt.pos.x-b.pos.x, ty-1.4, tgt.pos.z-b.pos.z);
-      if(fdist<52 && _botLOS(b.pos.x,b.pos.z, tgt.pos.x,tgt.pos.z)){
-        b.fireCd=0.55+Math.random()*0.5;
+      if(fdist<D.range && _botLOS(b.pos.x,b.pos.z, tgt.pos.x,tgt.pos.z)){
+        b.fireCd=D.cdMin+Math.random()*D.cdRand;
         const aim=_bv2.set(tgt.pos.x-b.pos.x, ty-1.4, tgt.pos.z-b.pos.z).normalize();
-        aim.x+=(Math.random()*2-1)*0.04; aim.y+=(Math.random()*2-1)*0.03; aim.z+=(Math.random()*2-1)*0.04; aim.normalize();
+        aim.x+=(Math.random()*2-1)*D.spread; aim.y+=(Math.random()*2-1)*D.spread*0.75; aim.z+=(Math.random()*2-1)*D.spread; aim.normalize();
         const o=[b.pos.x,1.4,b.pos.z], d=[aim.x,aim.y,aim.z];
         remoteFire(b.id, o, d); b._fireAnimT=performance.now()+260; for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'fire', from:b.id, o, d}); }catch(e){} }
-        if(Math.random()<0.6) _botDamage(b, tgt, 11+Math.random()*6);
+        if(Math.random()<D.hit) _botDamage(b, tgt, D.dmgMin+Math.random()*D.dmgRand);
       }
     }
   }
@@ -9269,7 +9279,8 @@ function hostStart(code, mode, killTarget){
   NET.mode='host'; NET.myId=0; NET.roomCode=code; NET.nextId=1;
   netIdPrefix='h'; seedPropSync();   // new props the host adds get 'h-' ids; existing props are already known to joiners via the welcome level
   NET.gameMode = mode || 'coop';
-  { const bi=document.getElementById('mpBots'); let bn=parseInt(bi&&bi.value,10); NET.botCount=(NET.gameMode==='duel')?0:((bn>=0&&bn<=7)?bn:0); }   // duel is always 1v1, no bots
+  { const bi=document.getElementById('mpBots'); let bn=parseInt(bi&&bi.value,10); NET.botCount=(NET.gameMode==='duel')?0:((bn>=0&&bn<=7)?bn:0); }
+  { const di=document.getElementById('mpBotDiff'); if(di && BOT_DIFF[di.value]){ NET.botDiff=di.value; try{ localStorage.setItem('breach_botdiff', di.value); }catch(e){} } }   // duel is always 1v1, no bots
   if(killTarget!=null) NET.killTarget = killTarget;
   NET.duelScore = {0:0};
   NET.teams = {0:0}; NET.team = 0;   // host starts on RED in team modes
@@ -10180,7 +10191,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 311 · 2026-06-08';
+const BUILD_VERSION = 'build 313 · 2026-06-11';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12027,6 +12038,7 @@ function _applyCine(lc){
 }
 _applyCine(savedLevel && savedLevel.cine);   // restore a saved cinematic on page reload (boot path doesn't go through restoreLevel)
 let _cineActive=false, _cineT=0, _cineData=null, _cineReturn=null, _cineEditorPreview=false, _cinePreviewGroup=null;
+let _interActive=false, _interTimer=null, _interKeyGo=null;   // campaign transition card (declared here so the render loop's freeze-check precedes it without a TDZ)
 let _cineAvatar=null;   // the local player's body, shown during a cutscene AND while authoring one in the editor
 let cineShowChar=true;   // editor: stand the character at the player start while building a cinematic
 // Build the local avatar at the player start so the cutscene camera has something to frame. Reuses the
@@ -12153,6 +12165,7 @@ function loop(){
   if(hitStop > 0){ hitStop -= rawDt; dt = rawDt * 0.12; }   // impact freeze: slow the sim briefly (real-time countdown)
   if(_levelLoaderActive){ pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }   // hold the world frozen behind the level loading screen until assets finish loading — checked BEFORE the cutscene so the intro cinematic can't advance while loading
   if(_cineActive){ updateCinematic(rawDt); renderScene(scene,camera); return; }   // intro/preview flythrough owns the camera; freeze the sim
+  if(_interActive){ pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }   // campaign transition card owns the screen; hold the won level frozen behind it
   if(!gameOn) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }
   if((shopOpen || choosingUpgrade || (paused && NET.mode==='off')) && !(duelDead && pvpMode())) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }  // freeze world while shopping / picking an upgrade / paused (solo) — but never while waiting to respawn
 
@@ -13267,6 +13280,36 @@ let campaignEditIdx=-1;   // campaign slot currently loaded in the editor for re
 function _campaignLoad(i){ const lv=campaign.levels[i]; if(!lv) return; loadLevelFromNet(lv); startGame(); }
 function startCampaign(){ if(!campaign.levels.length){ if(typeof flashToast==='function') flashToast('No campaign yet \u2014 build one in the editor under Files > Campaign'); return; } campaignActive=true; campaignIdx=0; _campaignComplete=false; _campaignLoad(0); }
 function _captureLoadout(){ const a={}; for(const k of owned){ const w=WEAPONS[k]; if(w) a[k]={ mag:w.mag, reserve:w.reserve }; } return { owned:[...owned], wep:curWep, hp:player.hp, ammo:a }; }
+function _interEsc(x){ return String(x==null?'':x).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function _clearInterstitial(){ _interActive=false; if(_interTimer){ clearTimeout(_interTimer); _interTimer=null; } if(_interKeyGo){ document.removeEventListener('keydown', _interKeyGo, true); _interKeyGo=null; } const c=document.getElementById('campaignCard'); if(c) c.style.display='none'; }
+// Campaign level-to-level transition card. Freezes the sim behind a blurred overlay showing the
+// cleared level + the next level's name/objective, with a Continue button, press-any-key, and a
+// short auto-advance countdown. onContinue loads the next level (see gameWon's campaign branch).
+function showCampaignInterstitial(fromName, clearedNum, toIdx, total, onContinue){
+  _interActive=true; firing=false; ads=false; if(typeof safeExitPointerLock==='function') safeExitPointerLock();
+  const nextLv=campaign.levels[toIdx]; const nextName=(nextLv && nextLv.name!=null)?nextLv.name:('Level '+(toIdx+1));
+  const obj=(nextLv && nextLv.game && nextLv.game.objective) || 'eliminate';
+  let card=document.getElementById('campaignCard');
+  if(!card){ card=document.createElement('div'); card.id='campaignCard'; document.body.appendChild(card); }
+  card.style.cssText='position:fixed;inset:0;z-index:300;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:radial-gradient(circle at 50% 38%, rgba(10,26,24,.86), rgba(4,8,10,.97));backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);color:#eafff7;text-align:center;padding:24px;box-sizing:border-box;';
+  card.innerHTML =
+    '<div style="letter-spacing:3px;font-size:13px;color:#7fe7cf">LEVEL '+clearedNum+' OF '+total+' CLEARED</div>'+
+    '<div style="font-size:30px;font-weight:700;color:#9affe0;text-shadow:0 0 24px rgba(56,245,181,.45)">'+_interEsc(fromName)+'</div>'+
+    '<div style="width:120px;height:1px;background:linear-gradient(90deg,transparent,#38f5b5,transparent);margin:4px 0"></div>'+
+    '<div style="letter-spacing:3px;font-size:13px;color:#8fc0e7">NEXT &middot; LEVEL '+(toIdx+1)+' OF '+total+'</div>'+
+    '<div style="font-size:34px;font-weight:800;color:#fff;text-shadow:0 0 30px rgba(120,180,255,.4)">'+_interEsc(nextName)+'</div>'+
+    '<div style="font-size:13px;color:#9fb6c2;text-transform:uppercase;letter-spacing:2px">Objective &middot; '+_interEsc(obj)+'</div>'+
+    '<button id="interGo" style="margin-top:14px;padding:12px 34px;font-size:16px;font-weight:700;color:#04110d;background:#38f5b5;border:none;border-radius:9px;cursor:pointer;box-shadow:0 0 26px rgba(56,245,181,.45)">Continue \u2192</button>'+
+    '<div style="font-size:12px;color:#6f8a8a">auto-continues in <span id="interCount">6</span>\u2026 &middot; press any key</div>';
+  card.style.display='flex';
+  const go=()=>{ if(!_interActive) return; _clearInterstitial(); try{ onContinue(); }catch(e){ console.warn('interstitial continue failed', e); } };
+  _interKeyGo=(e)=>{ if(!_interActive) return; e.preventDefault(); e.stopPropagation(); go(); };
+  const gb=card.querySelector('#interGo'); if(gb) gb.onclick=go;
+  document.addEventListener('keydown', _interKeyGo, true);
+  let left=6; const cs=card.querySelector('#interCount');
+  const tick=()=>{ if(!_interActive) return; left--; if(cs) cs.textContent=left; if(left<=0){ go(); } else { _interTimer=setTimeout(tick,1000); } };
+  _interTimer=setTimeout(tick,1000);
+}
 function _restoreLoadout(c){ if(!c) return; owned.length=0; for(const k of c.owned) owned.push(k); for(const k in c.ammo){ if(WEAPONS[k]){ WEAPONS[k].mag=c.ammo[k].mag; WEAPONS[k].reserve=c.ammo[k].reserve; } } curWep=(c.wep && owned.includes(c.wep))?c.wep:owned[0]; player.hp=Math.max(1, c.hp||player.hp); if(typeof switchWeapon==='function') switchWeapon(curWep); if(typeof updateHUD==='function') updateHUD(); }
 function _snapshotPlayerCharCfg(name){ const c=playerModelCfg; return _sanitizeCharCfg({ name:name||'Character', url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, thumb:c.thumb, clips:Object.assign({},c.clips||{}) }); }
 function _loadCharIntoEditor(i){ const c=charRoster[i]; if(!c) return; pushUndoSnapshot(); Object.assign(playerModelCfg, { url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, clips:Object.assign({},c.clips||{}) }); editorActive='player'; if(typeof ensurePlayerPreview==='function') ensurePlayerPreview(true); if(typeof previewAvatar!=='undefined' && previewAvatar && typeof buildAvatarVisual==='function') buildAvatarVisual(previewAvatar); if(typeof renderEditorFields==='function') renderEditorFields(); if(typeof flashToast==='function') flashToast('Loaded "'+(c.name||'Character')+'" onto the Player tab'); }
@@ -15776,8 +15819,14 @@ function gameWon(){
   if(campaignActive && campaign.levels.length){
     if(campaignIdx < campaign.levels.length-1){
       const carry=_captureLoadout();
-      campaignIdx++; _campaignLoad(campaignIdx); _restoreLoadout(carry);
-      if(typeof flashToast==='function') flashToast('LEVEL '+(campaignIdx+1)+' / '+campaign.levels.length);
+      const total=campaign.levels.length;
+      const fromName=(campaign.levels[campaignIdx] && campaign.levels[campaignIdx].name!=null)?campaign.levels[campaignIdx].name:('Level '+(campaignIdx+1));
+      const clearedNum=campaignIdx+1;
+      campaignIdx++; const toIdx=campaignIdx;
+      stopMusic();
+      if(typeof extractZone!=='undefined' && extractZone) extractZone.visible=false;
+      gameOn=false;   // stop objective/enemy ticks while the transition card is up; _campaignLoad->startGame turns it back on
+      showCampaignInterstitial(fromName, clearedNum, toIdx, total, ()=>{ _campaignLoad(toIdx); _restoreLoadout(carry); });
       return;
     }
     campaignActive=false; _campaignComplete=true;
@@ -16016,7 +16065,7 @@ function bindMenu(){
   const fs=document.getElementById('fsBtn');
   if(fs){ if(!fsSupported()){ fs.style.display='none'; } else { fs.style.display=''; fs.onclick=toggleFullscreen; syncFsBtn(); } }   // desktop only
   const ib=document.getElementById('instrBtn'); if(ib) ib.onclick=()=>openModal('instrModal');
-  const mo=document.getElementById('mpOpenBtn'); if(mo) mo.onclick=()=>openModal('mpModal');
+  const mo=document.getElementById('mpOpenBtn'); if(mo) mo.onclick=()=>{ const di=document.getElementById('mpBotDiff'); if(di && BOT_DIFF[NET.botDiff]) di.value=NET.botDiff; openModal('mpModal'); };
   { const fb=document.getElementById('mpFFA'); if(fb) fb.onclick=startFFA; }
   { const tb=document.getElementById('mpTDM'); if(tb) tb.onclick=startTDM; }
   { const cb=document.getElementById('mpCP'); if(cb) cb.onclick=startCP; }
@@ -16061,7 +16110,7 @@ function resumeGame(){
   if(!isTouch) tryPointerLock();
 }
 function exitToMenu(){
-  paused = false; campaignActive=false; _campaignComplete=false;
+  paused = false; campaignActive=false; _campaignComplete=false; _clearInterstitial();
   const pm=document.getElementById('pauseMenu'); if(pm) pm.classList.add('hidden');
   if(NET.mode && NET.mode!=='off'){ location.reload(); return; }   // cleanest teardown of a live session
   stopMusic();
