@@ -6263,7 +6263,7 @@ function playEnemyClip(root, gltf, clipName){
 // --- 4-state animation set (idle / walk / run / attack) ---------------------------------------------
 // All four actions play at weight 0 except the active one; setEnemyAnimState crossfades between them as
 // the enemy moves or attacks. Clips are auto-resolved by name, with per-state overrides in `clips`.
-const _STATE_RE = { idle:/idle|stand|breath/i, walk:/walk/i, run:/run|sprint|jog/i, attack:/attack|melee|punch|kick|bite|swipe|slash|shoot|fire|cast/i };
+const _STATE_RE = { idle:/idle|stand|breath/i, walk:/walk/i, run:/run|sprint|jog/i, attack:/attack|melee|punch|kick|bite|swipe|slash|shoot|fire|cast/i, jump:/jump|leap|hop|fall|air/i, die:/die|death|dead|killed|defeat/i };
 function _resolveStateClip(gltf, clips, state){
   const want = clips && clips[state];
   if(want){ const c = gltf.animations.find(a=>(a.name||'')===want); if(c) return c; }   // explicit override
@@ -6273,9 +6273,11 @@ function playEnemyStates(root, gltf, clips){
   if(!gltf || !gltf.animations || !gltf.animations.length) return null;
   const mixer = new THREE.AnimationMixer(root);
   const actions = {};
-  for(const st of ['idle','walk','run','attack']){
+  for(const st of ['idle','walk','run','attack','jump','die']){
     const clip = _resolveStateClip(gltf, clips, st);
-    if(clip){ const a = mixer.clipAction(clip); a.loop = THREE.LoopRepeat; a.enabled = true; a.setEffectiveWeight(0); a.play(); actions[st] = a; }
+    if(clip){ const a = mixer.clipAction(clip);
+      if(st==='die'){ a.loop = THREE.LoopOnce; a.clampWhenFinished = true; } else { a.loop = THREE.LoopRepeat; }
+      a.enabled = true; a.setEffectiveWeight(0); a.play(); actions[st] = a; }
   }
   if(!Object.keys(actions).length){ const a = mixer.clipAction(gltf.animations[0]); a.loop = THREE.LoopRepeat; a.play(); actions.idle = a; }   // no recognizable clip -> loop the first
   const startKey = actions.idle ? 'idle' : Object.keys(actions)[0];
@@ -6289,6 +6291,8 @@ function _stateActionKey(acts, state){
   if(state==='run')  return acts.walk ? 'walk' : (acts.idle ? 'idle' : Object.keys(acts)[0]);
   if(state==='walk') return acts.run  ? 'run'  : (acts.idle ? 'idle' : Object.keys(acts)[0]);
   if(state==='attack') return acts.run ? 'run' : (acts.walk ? 'walk' : (acts.idle ? 'idle' : Object.keys(acts)[0]));
+  if(state==='jump') return acts.idle ? 'idle' : (acts.run ? 'run' : Object.keys(acts)[0]);
+  if(state==='die')  return acts.idle ? 'idle' : Object.keys(acts)[0];
   return acts.idle ? 'idle' : Object.keys(acts)[0];
 }
 function setEnemyAnimState(body, state){
@@ -8804,7 +8808,7 @@ function rebuildAvatars(){ for(const id in NET.players){ const rp=NET.players[id
 // ---- Third-person chase camera (toggle in the pause menu) ----
 let tpMode = (()=>{ try{ return localStorage.getItem('breach_tp')==='1'; }catch(e){ return false; } })();
 const TP_DIST = 4.2, TP_HEIGHT = 0.55, TP_MIN = 1.1;   // chase distance back / lift / closest pull-in past walls
-let _ownAvatar=null, _ownAvatarKey='', _tpCaster=null;
+let _ownAvatar=null, _ownAvatarKey='', _tpCaster=null, _ownPrevX=0, _ownPrevZ=0;
 const _tpBack=new THREE.Vector3(), _tpEye=new THREE.Vector3();
 function ensureOwnAvatar(){
   const cfg=myCharCfg(); const key=(cfg.url||'')+'|'+(cfg.tint==null?'x':cfg.tint)+'|'+(cfg.scale||1)+'|'+(cfg.face||0);
@@ -8813,10 +8817,22 @@ function ensureOwnAvatar(){
   buildAvatarVisual(_ownAvatar, cfg); _ownAvatarKey=key; return _ownAvatar;
 }
 function updateOwnAvatar(){
-  if(!(tpMode && gameOn && !editorOpen && !duelDead)){ if(_ownAvatar) _ownAvatar.visible=false; return; }
+  if(!(tpMode && gameOn && !editorOpen)){ if(_ownAvatar) _ownAvatar.visible=false; return; }
   const a=ensureOwnAvatar(); a.visible=true;
   a.position.set(player.pos.x, player.pos.y-EYE, player.pos.z);   // group origin is at the feet; player.pos is the eye
   a.rotation.y = player.yaw;
+  // drive the animation from my own state: die > attack > jump > run/walk/idle (mirrors how peers animate me)
+  if(a.userData.hasModel && a.userData.visual && a.userData.visual.userData.stateActions){
+    const dead = duelDead || (player.hp!=null && player.hp<=0);
+    const md = Math.hypot(player.pos.x-_ownPrevX, player.pos.z-_ownPrevZ);   // per-frame travel (same metric peers use for me)
+    let st;
+    if(dead) st='die';
+    else if(performance.now()-lastShot < 250) st='attack';
+    else if(!player.onGround) st='jump';
+    else st = md>0.10 ? 'run' : (md>0.02 ? 'walk' : 'idle');
+    setEnemyAnimState(a, st);
+  }
+  _ownPrevX=player.pos.x; _ownPrevZ=player.pos.z;
 }
 function tpCameraPushback(){
   // keep the look direction (yaw/pitch already applied), pull the camera straight back, lift a touch, pull in past walls
@@ -10049,7 +10065,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 291 · 2026-06-08';
+const BUILD_VERSION = 'build 292 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
