@@ -6984,6 +6984,11 @@ let nextDynId = 1;
 let physWorld = null;
 // --- experimental: Rapier kinematic-character-controller movement (toggle; classic stays the default) ---
 let playerPhysMode = (()=>{ try{ return localStorage.getItem('breach_player_phys')==='1'; }catch(e){ return false; } })();
+// Impact / hit particle FX (tunable in the editor under Scene > Impact FX; serialized with the level)
+const DEFAULT_FX = { color:0xffd9a0, size:1, count:1, life:1, spread:0.55, gravity:1, glow:true, flash:true };
+let fxCfg = Object.assign({}, DEFAULT_FX);
+function _fxClamp(v,lo,hi,d){ v=+v; if(!isFinite(v)) return d; return Math.max(lo,Math.min(hi,v)); }
+function _sanitizeFx(o){ o=o||{}; return { color:(o.color!=null?(o.color|0):DEFAULT_FX.color), size:_fxClamp(o.size,0.2,4,1), count:_fxClamp(o.count,0.25,4,1), life:_fxClamp(o.life,0.2,3,1), spread:_fxClamp(o.spread,0,1,0.55), gravity:_fxClamp(o.gravity,0,3,1), glow:o.glow!==false, flash:o.flash!==false }; }
 let playerBody=null, playerCollider=null, playerCtrl=null, _kccBroken=false;
 const PLAYER_CAP_R = 0.45;   // capsule radius for KCC world collision (narrower than player.radius so archways fit)
 let physAccum = 0;
@@ -8715,6 +8720,7 @@ function loadLevelFromNet(level){
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; gameCfg.noRespawn = !!level.game.noRespawn; }
   extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null; if(typeof refreshExtractMarker==='function') refreshExtractMarker();   // restore the per-level extraction spot (campaign / co-op load path)
   audioZones = Array.isArray(level.audioZones) ? level.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : []; if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
+  fxCfg = _sanitizeFx(level.fx); if(typeof renderImpactFxPanel==='function') renderImpactFxPanel();
   charRoster = Array.isArray(level.roster) ? level.roster.map(_sanitizeCharCfg) : []; if(typeof renderCharRosterPanel==='function') renderCharRosterPanel();
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; refreshPlayerSpawnMarker(); }
@@ -9984,14 +9990,26 @@ function tracer(from, to){
 }
 
 // hit particles
+const _sparkGeo = new THREE.IcosahedronGeometry(1, 0);      // faceted debris bit, scaled per spark
+const _sparkFlashGeo = new THREE.SphereGeometry(1, 8, 8);   // soft additive impact flash
 const sparks = [];
 function spark(pos, color){
-  for(let i=0;i<6;i++){
-    const p = new THREE.Mesh(new THREE.SphereGeometry(.08,4,4),
-      new THREE.MeshBasicMaterial({color}));
-    p.position.copy(pos);
-    const v = new THREE.Vector3((Math.random()-.5),(Math.random()-.5),(Math.random()-.5)).multiplyScalar(8);
-    scene.add(p); sparks.push({mesh:p, vel:v, life:0.4});
+  const fx=fxCfg, col=(color==null?fx.color:color);
+  const n=Math.max(2, Math.round(7*fx.count)), base=0.075*fx.size, life=0.42*fx.life, sp=fx.spread;
+  for(let i=0;i<n;i++){
+    const mat=new THREE.MeshBasicMaterial({ color:col, transparent:true, opacity:1 });
+    if(fx.glow){ mat.blending=THREE.AdditiveBlending; mat.depthWrite=false; }
+    const m=new THREE.Mesh(_sparkGeo, mat);
+    const s0=base*(0.6+Math.random()*0.9); m.scale.setScalar(s0); m.position.copy(pos);
+    const v=new THREE.Vector3((Math.random()-.5)*2*sp, Math.random()*0.7+0.12, (Math.random()-.5)*2*sp);
+    if(v.lengthSq()<1e-5) v.set(0,1,0);
+    v.normalize().multiplyScalar(5+Math.random()*7*(0.5+sp));
+    scene.add(m); sparks.push({ mesh:m, vel:v, life, max:life, s0, shrink:true });
+  }
+  if(fx.flash){
+    const fmat=new THREE.MeshBasicMaterial({ color:col, transparent:true, opacity:0.85, blending:THREE.AdditiveBlending, depthWrite:false });
+    const f=new THREE.Mesh(_sparkFlashGeo, fmat); const fs0=0.16*fx.size; f.scale.setScalar(fs0); f.position.copy(pos);
+    scene.add(f); sparks.push({ mesh:f, vel:new THREE.Vector3(), life:0.11, max:0.11, s0:fs0, grow:2.6, grav:0 });
   }
 }
 // A clear "elimination" pop where a player died: a red/orange particle burst + an expanding ground ring,
@@ -10065,7 +10083,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 292 · 2026-06-08';
+const BUILD_VERSION = 'build 293 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11266,7 +11284,7 @@ function shoot(){
           else if(pid!=null && pid>=BOT_ID_BASE && clientMode){ if(NET.conn) try{ NET.conn.send({t:'botHit', id:pid, d:dmg, from:NET.myId}); }catch(e){} }
           else sendToPlayer(pid, {t:'pvpHit', d:dmg, from:NET.myId});
           spark(hit.point, isHead?0xffd166:0xff6b6b); if(p===0){ showHitmarker(isHead); SFX.hit(); if(isHead) SFX.hit(); }
-        } else { spark(hit.point, 0x9fd8ff); }
+        } else { spark(hit.point, fxCfg.color); }
       } else if(clientMode){
         // find the enemy id by walking up to the networked enemy mesh, then report it to the host
         let node = hit.object, id = null;
@@ -11274,7 +11292,7 @@ function shoot(){
         if(id!=null){
           if(NET.conn) try{ NET.conn.send({t:'hit', e:id, d:w.dmg*dmgMul*hsMul}); }catch(e){}
           spark(hit.point, isHead?0xffd166:0xff6b6b); if(p===0){ showHitmarker(isHead); SFX.hit(); if(isHead) SFX.hit(); }
-        } else { spark(hit.point, 0x9fd8ff); }
+        } else { spark(hit.point, fxCfg.color); }
       } else {
         // find enemy by walking up from the hit object (handles child meshes)
         let node = hit.object, en = null;
@@ -11288,7 +11306,7 @@ function shoot(){
           if(p===0){ showHitmarker(en.hp<=0); SFX.hit(); }
           if(en.hp<=0) killEnemy(en);
         } else {
-          spark(hit.point, 0x9fd8ff);
+          spark(hit.point, fxCfg.color);
         }
       }
     }
@@ -11476,7 +11494,7 @@ function emitBoltTrail(p){
   scene.add(m); boltTrails.push({ mesh:m, life:0.16, max:0.16, s, fade:0.5 });
 }
 function boltImpact(p, color){
-  spark(p, color||0x6fe0ff);
+  spark(p, color||fxCfg.color);
   const m = new THREE.Mesh(_boltGlowGeo, _boltFlashMat.clone());
   m.position.copy(p); m.scale.setScalar(0.6);
   scene.add(m); boltTrails.push({ mesh:m, life:0.18, max:0.18, s:2.4, fade:0.9 });
@@ -12210,11 +12228,13 @@ function loop(){
   }
   // sparks
   for(let i=sparks.length-1;i>=0;i--){
-    const s=sparks[i]; s.life-=dt; s.vel.y-=20*dt;
+    const s=sparks[i]; s.life-=dt; s.vel.y -= 20*(s.grav!=null?s.grav:fxCfg.gravity)*dt;
     s.mesh.position.addScaledVector(s.vel, dt);
-    s.mesh.material.opacity = Math.max(0,s.life/0.4);
-    s.mesh.material.transparent=true;
-    if(s.life<=0){ scene.remove(s.mesh); sparks.splice(i,1); }
+    const t=Math.min(1, Math.max(0, s.life/(s.max||0.4)));
+    s.mesh.material.opacity = t; s.mesh.material.transparent=true;
+    if(s.shrink && s.s0!=null) s.mesh.scale.setScalar(s.s0*(0.25+0.75*t));
+    else if(s.grow && s.s0!=null) s.mesh.scale.setScalar(s.s0*(1+s.grow*(1-t)));
+    if(s.life<=0){ scene.remove(s.mesh); if(s.mesh.material&&s.mesh.material.dispose) s.mesh.material.dispose(); sparks.splice(i,1); }
   }
   // death rings (expanding + fading)
   for(let i=deathRings.length-1;i>=0;i--){
@@ -12718,7 +12738,7 @@ const PRIM_ICON = {
 };
 const MODE_SECTIONS = {
   build:   ['gizmo','object','material','transform','characters'],
-  scene:   ['world','audiozones'],
+  scene:   ['world','audiozones','impactfx'],
   enemies: ['enemies'],
   rules:   ['game','loot'],
   kit:     ['object','transform'],   // 'object' carries the weapon model import + per-weapon shoot sound; music/SFX live in Scene
@@ -12996,6 +13016,7 @@ function serializeLevel(){
     pickupsOn: pickupsOn,
     pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind })),
     audioZones: audioZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, url:z.url||'', vol:+z.vol, loop:!!z.loop })),
+    fx: Object.assign({}, fxCfg),
     roster: charRoster.map(c=>({ name:c.name, url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, clips:Object.assign({},c.clips||{}) })),
     pickupModels: Object.keys(pickupModels).reduce((a,k)=>{ const m=pickupModels[k]; if(m&&m.url){ a[k]={ url:m.url, scale:m.scale||1 }; } return a; }, {}),
     game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave, noRespawn: !!gameCfg.noRespawn },
@@ -13073,6 +13094,22 @@ function renderCharRosterPanel(){
     const del=document.createElement('button'); del.textContent='✕'; del.style.cssText='padding:1px 7px;font-size:11px;'; del.onclick=()=>{ pushUndoSnapshot(); charRoster.splice(i,1); renderCharRosterPanel(); };
     row.appendChild(nm); row.appendChild(loadB); row.appendChild(upB); row.appendChild(del); host.appendChild(row);
   });
+}
+function renderImpactFxPanel(){
+  const host=document.getElementById('edImpactFx'); if(!host) return; host.innerHTML='';
+  const wrap=document.createElement('div');
+  const row=(label,node)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;align-items:center;gap:8px;margin:4px 0;font-size:12px;'; const s=document.createElement('span'); s.textContent=label; s.style.minWidth='64px'; r.appendChild(s); r.appendChild(node); wrap.appendChild(r); };
+  const ci=document.createElement('input'); ci.type='color'; ci.value='#'+(fxCfg.color>>>0).toString(16).padStart(6,'0').slice(-6); ci.oninput=()=>{ fxCfg.color=parseInt(ci.value.slice(1),16); }; row('Color', ci);
+  const slider=(key,lo,hi,step)=>{ const box=document.createElement('div'); box.style.cssText='display:flex;flex:1;gap:6px;align-items:center'; const i=document.createElement('input'); i.type='range'; i.min=lo; i.max=hi; i.step=step; i.value=fxCfg[key]; i.style.flex='1'; const v=document.createElement('span'); v.style.cssText='min-width:32px;text-align:right;opacity:.8'; v.textContent=(+fxCfg[key]).toFixed(2); i.oninput=()=>{ fxCfg[key]=+i.value; v.textContent=(+i.value).toFixed(2); }; box.appendChild(i); box.appendChild(v); row(key.charAt(0).toUpperCase()+key.slice(1), box); };
+  slider('size',0.2,4,0.05); slider('count',0.25,4,0.05); slider('life',0.2,3,0.05); slider('spread',0,1,0.02); slider('gravity',0,3,0.05);
+  const toggle=(key,label)=>{ const c=document.createElement('input'); c.type='checkbox'; c.checked=!!fxCfg[key]; c.onchange=()=>{ fxCfg[key]=c.checked; }; row(label,c); };
+  toggle('glow','Glow'); toggle('flash','Flash');
+  const br=document.createElement('div'); br.className='row2'; br.style.marginTop='6px';
+  const test=document.createElement('button'); test.textContent='Test burst'; test.title='Fire a sample burst a few meters ahead'; test.onclick=()=>{ const d=new THREE.Vector3(); camera.getWorldDirection(d); const pt=new THREE.Vector3().copy(player.pos).addScaledVector(d, 3); spark(pt, fxCfg.color); };
+  const rst=document.createElement('button'); rst.textContent='Reset'; rst.onclick=()=>{ fxCfg=Object.assign({}, DEFAULT_FX); renderImpactFxPanel(); };
+  br.appendChild(test); br.appendChild(rst); wrap.appendChild(br);
+  const note=document.createElement('div'); note.className='hint'; note.style.marginTop='6px'; note.textContent='Surface / object impacts use this color; hits on enemies stay gold/red so damage still reads.'; wrap.appendChild(note);
+  host.appendChild(wrap);
 }
 function renderAudioZonesPanel(){
   const host = editorEl && editorEl.querySelector('#edAudioZones'); if(!host) return;
@@ -13178,6 +13215,7 @@ function restoreLevel(level){
   refreshPlayerSpawnMarker();
   extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null;
   audioZones = Array.isArray(level.audioZones) ? level.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : []; if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
+  fxCfg = _sanitizeFx(level.fx); if(typeof renderImpactFxPanel==='function') renderImpactFxPanel();
   charRoster = Array.isArray(level.roster) ? level.roster.map(_sanitizeCharCfg) : []; if(typeof renderCharRosterPanel==='function') renderCharRosterPanel();
   if(level.grenade){ const G=level.grenade; if(G.model!=null) GRENADE.model=G.model||''; if(G.scale!=null) GRENADE.scale=G.scale; if(G.radius!=null) GRENADE.radius=G.radius; if(G.damage!=null) GRENADE.damage=G.damage; if(G.fuse!=null) GRENADE.fuse=G.fuse; if(G.throwForce!=null) GRENADE.throwForce=G.throwForce; loadGrenadeModel(); if(editorTargets.grenade.sync) editorTargets.grenade.sync(); }
   // gun / aim / station
@@ -13515,6 +13553,7 @@ function buildEditorPanel(){
     + sec('Game / waves', 'game', '<div id="edGame"></div>')
     + sec('Loot', 'loot', '<div id="edLoot"></div>')
     + sec('Audio zones', 'audiozones', '<div id="edAudioZones"></div>')
+    + sec('Impact FX', 'impactfx', '<div id="edImpactFx"></div>')
     + sec('Characters', 'characters', '<div id="edCharRoster"></div>')
     + sec('Level file', 'levelfile',
         '<div class="row2"><button id="edSave">💾 Save</button><button id="edClear">Clear save</button></div>'
@@ -13536,6 +13575,7 @@ function buildEditorPanel(){
   if(typeof renderCampaignPanel==='function') renderCampaignPanel();
   if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
   if(typeof renderCharRosterPanel==='function') renderCharRosterPanel();
+  if(typeof renderImpactFxPanel==='function') renderImpactFxPanel();
   // restore saved width + wire drag-to-resize (drag the left edge; wider = more room for the crowded panels)
   try{ const w = parseInt(localStorage.getItem('breach_editor_width')||'',10); if(w>=260 && w<=window.innerWidth*0.92) p.style.width = w+'px'; }catch(e){}
   (function(){
