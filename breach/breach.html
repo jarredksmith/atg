@@ -9000,7 +9000,7 @@ function serializeWorld(){
   const PU = powerups.length ? powerups.map(p=>({ id:p.id, p:[p.x,p.z], k:p.kind, r:p.ready?1:0 })) : undefined;
   // objective state (so clients see the survival timer / extraction beacon + hold, not just "WAVE n")
   const O = { o:objectiveActive(), s:+surviveLeft.toFixed(1), h:+extractHoldT.toFixed(2),
-              ex:[+extractPos.x.toFixed(2), +extractPos.z.toFixed(2)], er:gameCfg.extractRadius||3.5, eh:gameCfg.extractHold||5, wn:gameCfg.winWaves||0, dd:_destroyTotal-_destroyRemain, dn:_destroyTotal };
+              ex:[+extractPos.x.toFixed(2), +extractPos.z.toFixed(2)], er:gameCfg.extractRadius||3.5, eh:gameCfg.extractHold||5, wn:gameCfg.winWaves||0, dd:_destroyTotal-_destroyRemain, dn:_destroyTotal, es:[+escortPos.x.toFixed(2), +escortPos.z.toFixed(2)], ep:_escortPct, en:_escortNear?1:0 };
   return { t:'world', P, E, C, D, K, PU, O, wv:wave };
 }
 function dynamicById(id){ for(const o of dynamicProps){ if(o.userData.phys && o.userData.phys.id===id) return o; } return null; }
@@ -9067,6 +9067,7 @@ function netFixSelection(){
 let _clientBeaconOn = false;
 function applyObjectiveSnapshot(O, wv){
   const wn=document.getElementById('waveNum');
+  if(escortMarker && (!O || O.o!=='escort')) escortMarker.visible=false;
   if(!O){ if(wn) wn.textContent='WAVE '+(wv||0); if(extractZone) extractZone.visible=false; _clientBeaconOn=false; return; }
   if(O.o==='extraction'){
     buildExtractZone();
@@ -9081,6 +9082,14 @@ function applyObjectiveSnapshot(O, wv){
     if(O.ex){ extractPos.set(O.ex[0],0,O.ex[1]); extractZone.position.set(O.ex[0], _maxTerrainOver(O.ex[0],O.ex[1], R), O.ex[1]); }
     extractZone.visible=true; _clientBeaconOn=true;
     if(wn){ const inZ=(()=>{ const dx=player.pos.x-extractPos.x, dz=player.pos.z-extractPos.z; return dx*dx+dz*dz<=R*R; })(); wn.textContent = inZ ? ('DEFEND '+fmtClock(O.s||0)) : ('HOLD THE ZONE \u2014 '+fmtClock(O.s||0)); }
+  } else if(O.o==='escort'){
+    buildExtractZone();
+    const R=O.er||3.5; extractZone.scale.set(R,1,R);
+    if(O.ex){ extractPos.set(O.ex[0],0,O.ex[1]); extractZone.position.set(O.ex[0], _maxTerrainOver(O.ex[0],O.ex[1],R), O.ex[1]); }
+    extractZone.visible=true; _clientBeaconOn=true;
+    _ensureEscortMarker(); escortMarker.visible=true;
+    if(O.es){ escortMarker.position.set(O.es[0], terrainHeightAt(O.es[0],O.es[1]), O.es[1]); }
+    if(wn) wn.textContent = O.en ? ('ESCORT '+(O.ep||0)+'%') : ('ESCORT '+(O.ep||0)+'% \u2014 STAY CLOSE');
   } else if(O.o==='destroy'){
     if(extractZone) extractZone.visible=false; _clientBeaconOn=false;
     if(wn) wn.textContent = (O.dn>0) ? ('DESTROY '+(O.dd||0)+' / '+O.dn) : 'NO TARGETS SET';
@@ -10171,7 +10180,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 309 · 2026-06-08';
+const BUILD_VERSION = 'build 310 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11469,6 +11478,7 @@ function drawMinimap(){
   // extraction zone (pulsing green)
   if((objectiveActive()==='extraction'||objectiveActive()==='defend') && extractZone && extractZone.visible) blip(extractPos.x, extractPos.z, '#38f5b5', 4.2);
   if(objectiveActive()==='destroy'){ for(const m of _destroyMarkers){ const o=m.userData.prop; if(o && !o.userData._shattered && o.parent) blip(o.position.x, o.position.z, '#ff5b6b', 3.6); } }
+  if(objectiveActive()==='escort'){ if(extractZone && extractZone.visible) blip(extractPos.x, extractPos.z, '#38f5b5', 4.2); if(escortMarker && escortMarker.visible) blip(escortPos.x, escortPos.z, '#2fd0e0', 4.4); }
 
   ctx.restore();
 
@@ -11485,6 +11495,7 @@ let score = 0, wave = 1, toSpawn = 0;
 let surviveLeft = 0;   // seconds left in a Survival-objective run (also the Defend hold countdown)
 let _defendInZone = false;   // Defend: is a player currently holding the zone
 let _destroyTotal=0, _destroyRemain=0; const _destroyMarkers=[];   // Destroy: objective-target tracking + floating beacons
+const escortPos = new THREE.Vector3(); let escortStartDist=1, escortMarker=null, _escortNear=false, _escortPct=0;   // Escort: the moving payload
 let runKills = 0;   // kills this run (for the run summary + best)
 let extractHoldT = 0; let extractZone = null; const extractPos = new THREE.Vector3();   // Extraction objective
 let extractSpot = null;   // manual {x,z} placement from the editor; null = auto (opposite the player spawn)
@@ -11708,11 +11719,28 @@ function _setupDestroyTargets(){
   } }
   _destroyTotal=_destroyMarkers.length; _destroyRemain=_destroyTotal;
 }
+function _ensureEscortMarker(){
+  if(escortMarker) return escortMarker;
+  const g=new THREE.Group();
+  const box=new THREE.Mesh(new THREE.BoxGeometry(0.9,0.9,0.9), new THREE.MeshStandardMaterial({ color:0x1f6f7a, emissive:0x2fd0e0, emissiveIntensity:0.5, roughness:0.5 }));
+  box.position.y=0.5; box.raycast=()=>{}; g.add(box);
+  const ring=new THREE.Mesh(new THREE.RingGeometry(0.7,0.95,28), new THREE.MeshBasicMaterial({ color:0x38f5b5, transparent:true, opacity:0.8, side:THREE.DoubleSide, depthWrite:false }));
+  ring.rotation.x=-Math.PI/2; ring.position.y=0.03; ring.raycast=()=>{}; g.add(ring);
+  g.userData.box=box; g.userData.ring=ring; scene.add(g); escortMarker=g; return g;
+}
+function _setupEscort(){
+  _ensureEscortMarker(); escortMarker.visible=true;
+  escortPos.set(playerSpawn.x, 0, playerSpawn.z);
+  const d=currentExtractXZ(); escortStartDist=Math.max(1, Math.hypot(d.x-playerSpawn.x, d.z-playerSpawn.z)); _escortPct=0;
+  placeExtraction();   // the delivery beacon (destination)
+}
+function _clearEscort(){ if(escortMarker) escortMarker.visible=false; _escortNear=false; }
 function startObjective(){
   surviveLeft = gameCfg.surviveSecs || 0; extractHoldT = 0;
-  if(objectiveActive()==='extraction' || objectiveActive()==='defend'){ placeExtraction(); }
+  if(objectiveActive()==='extraction' || objectiveActive()==='defend' || objectiveActive()==='escort'){ placeExtraction(); }
   else if(extractZone){ extractZone.visible = false; }
   if(objectiveActive()==='destroy') _setupDestroyTargets(); else _clearDestroyMarkers();
+  if(objectiveActive()==='escort') _setupEscort(); else _clearEscort();
 }
 function objectiveHUD(){
   const wn=$('waveNum'); if(!wn) return;
@@ -11720,6 +11748,7 @@ function objectiveHUD(){
   else if(objectiveActive()==='extraction'){ const H=gameCfg.extractHold||5; wn.textContent = (extractHoldT>0.05) ? ('EXTRACTING '+extractHoldT.toFixed(1)+' / '+H) : 'REACH EXTRACTION'; }
   else if(objectiveActive()==='defend'){ wn.textContent = _defendInZone ? ('DEFEND '+fmtClock(surviveLeft)) : ('HOLD THE ZONE \u2014 '+fmtClock(surviveLeft)); }
   else if(objectiveActive()==='destroy'){ wn.textContent = (_destroyTotal>0) ? ('DESTROY '+(_destroyTotal-_destroyRemain)+' / '+_destroyTotal) : 'NO TARGETS SET'; }
+  else if(objectiveActive()==='escort'){ wn.textContent = _escortNear ? ('ESCORT '+_escortPct+'%') : ('ESCORT '+_escortPct+'% \u2014 STAY CLOSE'); }
   else { wn.textContent = (gameCfg.winWaves>0) ? ('WAVE '+wave+' / '+gameCfg.winWaves) : ('WAVE '+wave); }
 }
 function objectiveTick(dt){   // host/solo per-frame; may trigger the win
@@ -11770,6 +11799,19 @@ function objectiveTick(dt){   // host/solo per-frame; may trigger the win
     _destroyRemain = remain;
     objectiveHUD();
     if(_destroyTotal>0 && remain<=0){ if(typeof gameWon==='function') gameWon(); }
+  } else if(objectiveActive()==='escort'){
+    const dest=currentExtractXZ(), R=gameCfg.extractRadius||3.5;
+    let near=false; const dx=player.pos.x-escortPos.x, dz=player.pos.z-escortPos.z; if(dx*dx+dz*dz<=R*R) near=true;
+    if(!near){ for(const id in NET.players){ const rp=NET.players[id]; if(!rp) continue;   // a co-op teammate can escort too
+      const px=rp.posEye.x-escortPos.x, pz=rp.posEye.z-escortPos.z; if(px*px+pz*pz<=R*R){ near=true; break; } } }
+    _escortNear=near;
+    const remain=Math.hypot(dest.x-escortPos.x, dest.z-escortPos.z);
+    if(near && remain>0.05){ const step=Math.min(remain, 2.2*dt); escortPos.x+=(dest.x-escortPos.x)/remain*step; escortPos.z+=(dest.z-escortPos.z)/remain*step; }   // only advances while escorted
+    _escortPct = Math.max(0, Math.min(100, Math.round((1 - remain/escortStartDist)*100)));
+    if(escortMarker){ escortMarker.position.set(escortPos.x, terrainHeightAt(escortPos.x,escortPos.z), escortPos.z);
+      const pulse=0.6+0.4*Math.sin(performance.now()*0.004); if(escortMarker.userData.ring) escortMarker.userData.ring.material.opacity=0.4+0.4*pulse; }
+    objectiveHUD();
+    if(remain<=1.2){ if(typeof gameWon==='function') gameWon(); }
   }
 }
 function startWave(){
@@ -14118,7 +14160,7 @@ function renderEditorFields(){
     hint(gHost, '<b>Objective</b>', '2px 0 4px');
     const obRow=document.createElement('div'); obRow.className='row2';
     const obBtn=(key,txt)=>{ const b=document.createElement('button'); b.textContent=txt; if(objectiveActive()===key){ b.style.background='rgba(56,245,181,0.30)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); gameCfg.objective=key; renderEditorFields(); }; return b; };
-    obRow.appendChild(obBtn('eliminate','🎯 Eliminate')); obRow.appendChild(obBtn('survival','⏱ Survival')); obRow.appendChild(obBtn('extraction','📦 Extraction')); obRow.appendChild(obBtn('defend','🛡 Defend')); obRow.appendChild(obBtn('destroy','💥 Destroy'));
+    obRow.appendChild(obBtn('eliminate','🎯 Eliminate')); obRow.appendChild(obBtn('survival','⏱ Survival')); obRow.appendChild(obBtn('extraction','📦 Extraction')); obRow.appendChild(obBtn('defend','🛡 Defend')); obRow.appendChild(obBtn('destroy','💥 Destroy')); obRow.appendChild(obBtn('escort','🚚 Escort'));
     gHost.appendChild(obRow);
     hint(gHost, '', '3px 0 6px').textContent = (objectiveActive()==='survival')
       ? 'Survival: hostiles spawn endlessly — outlast the countdown to win.'
@@ -14128,6 +14170,8 @@ function renderEditorFields(){
       ? 'Defend: hold the zone (auto-placed across the arena) while hostiles spawn endlessly. The clock only counts down while a player stands in it.'
       : (objectiveActive()==='destroy')
       ? 'Destroy: blow up every prop flagged \u201cObjective target\u201d (mark them on the prop\u2019s settings). They glow with a red beacon; destroy them all to win.'
+      : (objectiveActive()==='escort')
+      ? 'Escort: a payload travels from your spawn to the delivery beacon. It only moves while a player stays within the radius; deliver it to win.'
       : 'Eliminate: clear waves of hostiles (optionally a fixed number to win).';
     if(objectiveActive()==='survival'){
       const svLab=document.createElement('label'); svLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;';
@@ -14148,6 +14192,11 @@ function renderEditorFields(){
       drow('Hold seconds','10','999','5', ()=>gameCfg.surviveSecs, v=>gameCfg.surviveSecs=Math.max(10,Math.min(999,v||60)));
       drow('Zone radius','1.5','12','0.5', ()=>gameCfg.extractRadius, v=>gameCfg.extractRadius=Math.max(1.5,Math.min(12,v||3.5)));
       hint(gHost, '', '2px 0 0').textContent = 'Zone drops across the arena from your spawn. Hold it a total of '+fmtClock(gameCfg.surviveSecs)+' (clock pauses when nobody is inside).';
+    }
+    if(objectiveActive()==='escort'){
+      const erow=(label,min,max,step,get,set)=>{ const l=document.createElement('label'); l.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='118px'; const ip=document.createElement('input'); ip.type='number'; ip.min=min; ip.max=max; ip.step=step; ip.value=get(); ip.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;'; ip.onchange=()=>{ set(parseFloat(ip.value)); renderEditorFields(); }; l.appendChild(sp); l.appendChild(ip); gHost.appendChild(l); };
+      erow('Escort radius','1.5','12','0.5', ()=>gameCfg.extractRadius, v=>gameCfg.extractRadius=Math.max(1.5,Math.min(12,v||3.5)));
+      hint(gHost, '', '2px 0 0').textContent = 'Payload starts at your spawn and rolls to the beacon. Stay within '+(gameCfg.extractRadius||3.5)+'m to keep it moving.';
     }
     // ===== Pickups: weapons / ammo / health / buffs placed on the map =====
     hint(gHost, '<b>Pickups</b> \u2014 items players grab on the map', '12px 0 4px');
@@ -15739,7 +15788,7 @@ function gameWon(){
   const ov=$('overlay'); ov.classList.remove('hidden');
   ov.innerHTML = `
     <h1 style="color:#38f5b5;text-shadow:0 0 30px rgba(56,245,181,.5)">${_campaignComplete?'CAMPAIGN COMPLETE':'MISSION COMPLETE'}</h1>
-    <div class="sub">${ gameCfg.objective==='survival' ? ('SURVIVED '+fmtClock(gameCfg.surviveSecs)) : gameCfg.objective==='extraction' ? 'EXTRACTED' : gameCfg.objective==='defend' ? ('ZONE HELD '+fmtClock(gameCfg.surviveSecs)) : gameCfg.objective==='destroy' ? 'ALL TARGETS DESTROYED' : (gameCfg.winWaves+' WAVE'+(gameCfg.winWaves===1?'':'S')+' CLEARED') }</div>
+    <div class="sub">${ gameCfg.objective==='survival' ? ('SURVIVED '+fmtClock(gameCfg.surviveSecs)) : gameCfg.objective==='extraction' ? 'EXTRACTED' : gameCfg.objective==='defend' ? ('ZONE HELD '+fmtClock(gameCfg.surviveSecs)) : gameCfg.objective==='destroy' ? 'ALL TARGETS DESTROYED' : gameCfg.objective==='escort' ? 'PAYLOAD DELIVERED' : (gameCfg.winWaves+' WAVE'+(gameCfg.winWaves===1?'':'S')+' CLEARED') }</div>
     ${runSummaryHTML()}
     ${challengeResultHTML()}
     <button id="startBtn">Redeploy</button>
