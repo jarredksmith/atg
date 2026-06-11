@@ -7964,10 +7964,21 @@ function buildEnemyVisual(body){
 let previewEnemy = null, previewCollider = null;
 const PREVIEW_POS = new THREE.Vector3(0, 1.4, 6);   // a fixed, easy-to-find spot in front of the arena center
 let previewAvatar = null;   // a stand-in avatar shown while editing the Player tab (no remote players exist solo)
+function _ensurePreviewOriginMarker(){
+  if(!previewAvatar || previewAvatar.userData.originMarker) return;
+  const mk=new THREE.Group(); mk.renderOrder=999;
+  const ring=new THREE.Mesh(new THREE.RingGeometry(0.30,0.42,36), new THREE.MeshBasicMaterial({ color:0x38f5b5, transparent:true, opacity:0.9, side:THREE.DoubleSide, depthWrite:false }));
+  ring.rotation.x=-Math.PI/2; ring.position.y=0.02; ring.raycast=()=>{}; mk.add(ring);   // the player origin on the ground
+  const post=new THREE.Mesh(new THREE.CylinderGeometry(0.012,0.012,1.7,6), new THREE.MeshBasicMaterial({ color:0x38f5b5, transparent:true, opacity:0.45, depthWrite:false }));
+  post.position.y=0.85; post.raycast=()=>{}; mk.add(post);   // the vertical column so you can judge height
+  const dot=new THREE.Mesh(new THREE.SphereGeometry(0.05,10,10), new THREE.MeshBasicMaterial({ color:0xffd166 })); dot.raycast=()=>{}; mk.add(dot);   // the exact (0,0,0) pivot
+  previewAvatar.add(mk); previewAvatar.userData.originMarker=mk;
+}
 function ensurePlayerPreview(on){
   if(on){
     if(!previewAvatar){ previewAvatar=new THREE.Group(); previewAvatar.position.set(0,0,6); scene.add(previewAvatar); }
     buildAvatarVisual(previewAvatar);
+    _ensurePreviewOriginMarker();
   } else if(previewAvatar){
     if(previewAvatar.userData.mixer){ const mi=mixers.indexOf(previewAvatar.userData.mixer); if(mi>=0) mixers.splice(mi,1); }
     scene.remove(previewAvatar); previewAvatar=null;
@@ -8823,7 +8834,7 @@ const TP_DIST = 4.2, TP_HEIGHT = 0.55, TP_MIN = 1.1;   // chase distance back / 
 let _ownAvatar=null, _ownAvatarKey='', _tpCaster=null, _ownPrevX=0, _ownPrevZ=0, _ownSpeed=0;
 const _tpBack=new THREE.Vector3(), _tpEye=new THREE.Vector3();
 function ensureOwnAvatar(){
-  const cfg=myCharCfg(); const key=(cfg.url||'')+'|'+(cfg.tint==null?'x':cfg.tint)+'|'+(cfg.scale||1)+'|'+(cfg.face||0);
+  const cfg=myCharCfg(); const key=[cfg.url||'', cfg.tint==null?'x':cfg.tint, cfg.scale||1, cfg.face||0, cfg.rx||0, cfg.rz||0, cfg.xoff||0, cfg.yoff||0, cfg.zoff||0].join('|');
   if(_ownAvatar && _ownAvatarKey===key) return _ownAvatar;
   if(!_ownAvatar){ _ownAvatar=new THREE.Group(); _ownAvatar.userData.noHit=true; scene.add(_ownAvatar); }   // noHit: never let the player's own body intercept their shots/picks
   buildAvatarVisual(_ownAvatar, cfg); _ownAvatarKey=key;
@@ -10139,7 +10150,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 301 · 2026-06-08';
+const BUILD_VERSION = 'build 302 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
