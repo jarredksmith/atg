@@ -6987,12 +6987,12 @@ let physWorld = null;
 let playerPhysMode = (()=>{ try{ return localStorage.getItem('breach_player_phys')==='1'; }catch(e){ return false; } })();
 // Impact / hit particle FX (tunable in the editor under Scene > Impact FX; serialized with the level)
 const DEFAULT_FX = { color:0xffd9a0, size:1, count:1, life:1, spread:0.55, gravity:1, glow:true, flash:true };
-let fxCfg = Object.assign({}, DEFAULT_FX);
+let fxCfg = _sanitizeFx(savedLevel && savedLevel.fx);   // load saved impact FX on boot (boot path reads savedLevel.* directly)
 function _fxClamp(v,lo,hi,d){ v=+v; if(!isFinite(v)) return d; return Math.max(lo,Math.min(hi,v)); }
 function _sanitizeFx(o){ o=o||{}; return { color:(o.color!=null?(o.color|0):DEFAULT_FX.color), size:_fxClamp(o.size,0.2,4,1), count:_fxClamp(o.count,0.25,4,1), life:_fxClamp(o.life,0.2,3,1), spread:_fxClamp(o.spread,0,1,0.55), gravity:_fxClamp(o.gravity,0,3,1), glow:o.glow!==false, flash:o.flash!==false }; }
 // Bullet streak / tracer (tunable in the editor under Scene > Bullet streak; serialized with the level)
 const DEFAULT_TRACER = { color:0xfff1c0, width:1, life:1, opacity:0.95, glow:true, on:true };
-let tracerCfg = Object.assign({}, DEFAULT_TRACER);
+let tracerCfg = _sanitizeTracer(savedLevel && savedLevel.tracer);   // load saved bullet streak on boot
 function _sanitizeTracer(o){ o=o||{}; return { color:(o.color!=null?(o.color|0):DEFAULT_TRACER.color), width:_fxClamp(o.width,0.2,6,1), life:_fxClamp(o.life,0.2,5,1), opacity:_fxClamp(o.opacity,0.1,1,0.95), glow:o.glow!==false, on:o.on!==false }; }
 let playerBody=null, playerCollider=null, playerCtrl=null, _kccBroken=false;
 const PLAYER_CAP_R = 0.45;   // capsule radius for KCC world collision (narrower than player.radius so archways fit)
@@ -10091,7 +10091,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 296 · 2026-06-08';
+const BUILD_VERSION = 'build 297 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13115,7 +13115,7 @@ function renderTracerFxPanel(){
   slider('width',0.2,6,0.05); slider('life',0.2,5,0.05); slider('opacity',0.1,1,0.02);
   const tg=document.createElement('input'); tg.type='checkbox'; tg.checked=!!tracerCfg.glow; tg.onchange=()=>{ tracerCfg.glow=tg.checked; }; row('Glow', tg);
   const br=document.createElement('div'); br.className='row2'; br.style.marginTop='6px';
-  const test=document.createElement('button'); test.textContent='Test streak'; test.title='Fire a sample streak straight ahead'; test.onclick=()=>{ const d=new THREE.Vector3(); camera.getWorldDirection(d); const a=new THREE.Vector3().copy(player.pos).addScaledVector(d,0.6); const b=a.clone().addScaledVector(d,40); tracer(a,b); };
+  const test=document.createElement('button'); test.textContent='Test streak'; test.title='Fire a sample streak straight ahead'; test.onclick=()=>{ const d=new THREE.Vector3(); camera.getWorldDirection(d); const a=camera.position.clone().addScaledVector(d,1.0); const b=a.clone().addScaledVector(d,40); tracer(a,b); };
   const rst=document.createElement('button'); rst.textContent='Reset'; rst.onclick=()=>{ tracerCfg=Object.assign({}, DEFAULT_TRACER); renderTracerFxPanel(); };
   br.appendChild(test); br.appendChild(rst); wrap.appendChild(br);
   host.appendChild(wrap);
@@ -13130,7 +13130,7 @@ function renderImpactFxPanel(){
   const toggle=(key,label)=>{ const c=document.createElement('input'); c.type='checkbox'; c.checked=!!fxCfg[key]; c.onchange=()=>{ fxCfg[key]=c.checked; }; row(label,c); };
   toggle('glow','Glow'); toggle('flash','Flash');
   const br=document.createElement('div'); br.className='row2'; br.style.marginTop='6px';
-  const test=document.createElement('button'); test.textContent='Test burst'; test.title='Fire a sample burst a few meters ahead'; test.onclick=()=>{ const d=new THREE.Vector3(); camera.getWorldDirection(d); const pt=new THREE.Vector3().copy(player.pos).addScaledVector(d, 3); spark(pt, fxCfg.color); };
+  const test=document.createElement('button'); test.textContent='Test burst'; test.title='Fire a sample burst a few meters ahead'; test.onclick=()=>{ const d=new THREE.Vector3(); camera.getWorldDirection(d); const pt=camera.position.clone().addScaledVector(d, 3); spark(pt, fxCfg.color); };
   const rst=document.createElement('button'); rst.textContent='Reset'; rst.onclick=()=>{ fxCfg=Object.assign({}, DEFAULT_FX); renderImpactFxPanel(); };
   br.appendChild(test); br.appendChild(rst); wrap.appendChild(br);
   const note=document.createElement('div'); note.className='hint'; note.style.marginTop='6px'; note.textContent='Surface / object impacts use this color; hits on enemies stay gold/red so damage still reads.'; wrap.appendChild(note);
