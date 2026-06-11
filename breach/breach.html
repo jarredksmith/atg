@@ -10201,7 +10201,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 317 · 2026-06-11';
+const BUILD_VERSION = 'build 318 · 2026-06-11';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12041,10 +12041,10 @@ function updatePerfHud(){
 // Reuses pointAlongPath. The camera rides cineCfg.path over cineCfg.dur seconds, framing either the player
 // start ('spawn') or its travel direction ('path'), letterboxed with the HUD hidden. Any input skips it.
 // Disabled / no path => deploy behaves exactly as before. Editor 'Preview' reuses the same engine.
-let cineCfg = { on:false, path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn' };
+let cineCfg = { on:false, path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn', audio:'' };
 function _applyCine(lc){
-  if(lc){ cineCfg.on=!!lc.on; cineCfg.path=Array.isArray(lc.path)?lc.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lensFrom=+lc.lensFrom||+lc.lens||35; cineCfg.lensTo=+lc.lensTo||+lc.lens||cineCfg.lensFrom; cineCfg.focusOn=!!lc.focusOn; cineCfg.focusFrom=+lc.focusFrom||8; cineCfg.focusTo=+lc.focusTo||cineCfg.focusFrom; cineCfg.dur=+lc.dur||6; cineCfg.look=(lc.look==='path')?'path':'spawn'; }
-  else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; }
+  if(lc){ cineCfg.on=!!lc.on; cineCfg.path=Array.isArray(lc.path)?lc.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lensFrom=+lc.lensFrom||+lc.lens||35; cineCfg.lensTo=+lc.lensTo||+lc.lens||cineCfg.lensFrom; cineCfg.focusOn=!!lc.focusOn; cineCfg.focusFrom=+lc.focusFrom||8; cineCfg.focusTo=+lc.focusTo||cineCfg.focusFrom; cineCfg.dur=+lc.dur||6; cineCfg.look=(lc.look==='path')?'path':'spawn'; cineCfg.audio=(typeof lc.audio==='string')?lc.audio:''; }
+  else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; cineCfg.audio=''; }
 }
 _applyCine(savedLevel && savedLevel.cine);   // restore a saved cinematic on page reload (boot path doesn't go through restoreLevel)
 let _cineActive=false, _cineT=0, _cineData=null, _cineReturn=null, _cineEditorPreview=false, _cinePreviewGroup=null;
@@ -12101,6 +12101,26 @@ function _cineShowBars(show){
 }
 function lensToFov(mm){ const f=Math.max(8, +mm||35), sensorH=24; return 2*Math.atan((sensorH/2)/f)*180/Math.PI; }   // vertical FOV, full-frame sensor
 function cineHasData(){ return !!(cineCfg && cineCfg.path && cineCfg.path.length>=1); }
+// A one-shot cutscene track: decoded like custom music, but routed straight to the master bus so it's
+// independent of the world music/SFX volumes (master volume + mute still apply). Starts with the shot,
+// stops when the shot ends or is skipped. Async-loaded; a token guards against a stale play if the shot
+// ends before the file decodes.
+let _cineAudioSrc=null, _cineAudioGain=null, _cineAudioTok=0;
+function _stopCineAudio(){ _cineAudioTok++; if(_cineAudioSrc){ try{ _cineAudioSrc.stop(); }catch(e){} _cineAudioSrc=null; } if(_cineAudioGain){ try{ _cineAudioGain.disconnect(); }catch(e){} _cineAudioGain=null; } }
+function _startCineAudio(){
+  _stopCineAudio();
+  const url=cineCfg.audio; if(!url) return;
+  if(typeof initAudio==='function') initAudio();
+  if(!actx || !masterBus) return;
+  const tok=++_cineAudioTok;
+  loadSound(url, (st)=>{
+    if(st==='loading') return;
+    if(tok!==_cineAudioTok || !_cineActive) return;   // replaced, stopped, or the shot ended before it loaded
+    const buf=_soundBuffers[url];
+    if(!(buf && buf.duration!==undefined)) return;     // failed to decode (CORS / unsupported format)
+    try{ const g=actx.createGain(); g.gain.value=1; g.connect(masterBus); const src=actx.createBufferSource(); src.buffer=buf; src.connect(g); src.start(); _cineAudioSrc=src; _cineAudioGain=g; }catch(e){}
+  });
+}
 function startCinematic(data, editorPreview){
   if(!data || !data.path || !data.path.length) return false;
   _cineData={ path:data.path.map(q=>q.slice()), lensFrom:+data.lensFrom||35, lensTo:+data.lensTo||(+data.lensFrom||35), focusOn:!!data.focusOn, focusFrom:+data.focusFrom||8, focusTo:+data.focusTo||(+data.focusFrom||8), dur:Math.max(0.2,+data.dur||6), look:(data.look==='path'?'path':'spawn') };
@@ -12112,12 +12132,14 @@ function startCinematic(data, editorPreview){
   if(typeof selBox!=='undefined' && selBox) selBox.visible=false;
   document.body.classList.add('cine'); _cineShowBars(true);
   _showCineAvatar();
+  _startCineAudio();
   return true;
 }
 function endCinematic(){
   if(!_cineActive) return;
   _cineActive=false; _cineShowBars(false); document.body.classList.remove('cine');
   _hideCineAvatar();
+  _stopCineAudio();
   if(_cineReturn){ camera.fov=_cineReturn.fov; camera.updateProjectionMatrix(); dofEnabled=_cineReturn.dofEn; dofFocus=_cineReturn.dofF; if(_cineEditorPreview){ camera.position.set(_cineReturn.x,_cineReturn.y,_cineReturn.z); camera.quaternion.copy(_cineReturn.q); } }
   _cineReturn=null; _cineData=null; _cineEditorPreview=false;
   if(typeof clearMovementInput==='function') clearMovementInput();
@@ -13243,7 +13265,7 @@ function serializeLevel(){
     extract: extractSpot ? { x: +extractSpot.x.toFixed(3), z: +extractSpot.z.toFixed(3) } : null,
     grenade: { model: GRENADE.model, scale: GRENADE.scale, radius: GRENADE.radius, damage: GRENADE.damage, fuse: GRENADE.fuse, throwForce: GRENADE.throwForce },
     audio:   { musicUrl: (audioSettings.musicUrl||''), sounds: _sanitizeSounds(audioSettings.sounds) },   // music track + custom SFX travel with the level (volumes/mute stay per-device)
-    cine:    { on: cineCfg.on, path: cineCfg.path.map(q=>q.slice()), lensFrom: cineCfg.lensFrom, lensTo: cineCfg.lensTo, focusOn: cineCfg.focusOn, focusFrom: cineCfg.focusFrom, focusTo: cineCfg.focusTo, dur: cineCfg.dur, look: cineCfg.look },
+    cine:    { on: cineCfg.on, path: cineCfg.path.map(q=>q.slice()), lensFrom: cineCfg.lensFrom, lensTo: cineCfg.lensTo, focusOn: cineCfg.focusOn, focusFrom: cineCfg.focusFrom, focusTo: cineCfg.focusTo, dur: cineCfg.dur, look: cineCfg.look, audio: cineCfg.audio||'' },
   };
 }
 function saveLevel(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(serializeLevel())); return true; } catch(e){ return false; } }
@@ -14103,6 +14125,12 @@ function renderEditorFields(){
       }
       crow('Duration', cineCfg.dur, 1, 20, 0.5, 's', v=>{ cineCfg.dur=v; });
       { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent='Framing'; sp.style.minWidth='56px'; const sel=document.createElement('select'); sel.style.cssText='flex:1;font-size:11px;'; [['spawn','Aim at player start'],['path','Look along path']].forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(cineCfg.look===o[0]) op.selected=true; sel.appendChild(op); }); sel.onchange=()=>{ cineCfg.look=sel.value; }; r.appendChild(sp); r.appendChild(sel); b.appendChild(r); }
+      { const r=document.createElement('label'); r.style.cssText='display:flex;flex-direction:column;gap:3px;font-size:11px;color:#9fe6cf;margin:6px 0 2px;';
+        const sp=document.createElement('span'); sp.innerHTML='<b>Cutscene audio</b> (plays at the start, separate from world audio)';
+        const inp=document.createElement('input'); inp.type='text'; inp.value=cineCfg.audio||''; inp.placeholder='https://…/intro.mp3 or .ogg/.wav'; inp.style.cssText='width:100%;box-sizing:border-box;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:5px 7px;font-size:11px;';
+        inp.onchange=()=>{ pushUndoSnapshot(); cineCfg.audio=inp.value.trim(); };
+        r.appendChild(sp); r.appendChild(inp); b.appendChild(r); }
+      hint(b,'A one-shot track (voiceover, music sting) that fires when the cutscene begins and stops when it ends or is skipped. The file must allow cross-origin loading (CORS), same as custom music.','0 0 4px');
       { const prev=document.createElement('button'); prev.textContent='▶ Preview'; prev.style.cssText='width:100%;padding:6px 8px;font-size:12px;cursor:pointer;margin-top:4px;'; prev.disabled=!cineCfg.path.length; prev.onclick=()=>{ startCinematic({ path:cineCfg.path, lensFrom:cineCfg.lensFrom, lensTo:cineCfg.lensTo, focusOn:cineCfg.focusOn, focusFrom:cineCfg.focusFrom, focusTo:cineCfg.focusTo, dur:cineCfg.dur, look:cineCfg.look }, true); }; b.appendChild(prev); }
       if(typeof refreshCinePreview==='function') refreshCinePreview(); }
     { const b=subSec('Walls','walls',true);
@@ -16137,7 +16165,7 @@ function resumeGame(){
   if(!isTouch) tryPointerLock();
 }
 function exitToMenu(){
-  paused = false; campaignActive=false; _campaignComplete=false; _clearInterstitial();
+  paused = false; campaignActive=false; _campaignComplete=false; _clearInterstitial(); if(typeof _stopCineAudio==='function') _stopCineAudio();
   const pm=document.getElementById('pauseMenu'); if(pm) pm.classList.add('hidden');
   if(NET.mode && NET.mode!=='off'){ location.reload(); return; }   // cleanest teardown of a live session
   stopMusic();
