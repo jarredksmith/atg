@@ -8309,7 +8309,7 @@ function updateAudioZones(){
     rt.inside = inside;
   }
 }
-const WEAPON_PICKUP_KINDS = { rifle:1, smg:1, shotgun:1, launcher:1 };
+const WEAPON_PICKUP_KINDS = { rifle:1, smg:1, shotgun:1, sniper:1, launcher:1 };
 function buildPowerupMesh(kind){
   const k = POWERUP_KINDS[kind] || POWERUP_KINDS.health;
   const g = new THREE.Group();
@@ -10265,7 +10265,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 321 · 2026-06-11';
+const BUILD_VERSION = 'build 322 · 2026-06-11';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14377,7 +14377,7 @@ function renderEditorFields(){
       const poSp=document.createElement('span'); poSp.textContent='Spawn pickups'; poLab.appendChild(poCb); poLab.appendChild(poSp); gHost.appendChild(poLab); }
     if(!pickupsOn){ hint(gHost,'','2px 0 6px').textContent='Pickups are off \u2014 no health/buff diamonds spawn (placed spots below are kept for when you turn this back on).'; }
     { const krow=document.createElement('div'); krow.className='row2'; krow.style.flexWrap='wrap';
-      const KINDS=[['health','+Health'],['ammo','+Ammo'],['rifle','Rifle'],['smg','SMG'],['shotgun','Shotgun'],['launcher','Rocket'],['grenade','Grenade'],['damage','2x Dmg'],['speed','Speed'],['shield','Shield']];
+      const KINDS=[['health','+Health'],['ammo','+Ammo'],['rifle','Rifle'],['smg','SMG'],['shotgun','Shotgun'],['sniper','Sniper'],['launcher','Rocket'],['grenade','Grenade'],['damage','2x Dmg'],['speed','Speed'],['shield','Shield']];
       const ksel=document.createElement('select'); ksel.style.cssText='flex:1;min-width:90px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
       KINDS.forEach(k=>{ const o=document.createElement('option'); o.value=k[0]; o.textContent=k[1]; if(k[0]===newPickupKind) o.selected=true; ksel.appendChild(o); });
       ksel.onchange=()=>{ newPickupKind=ksel.value; renderEditorFields(); };
