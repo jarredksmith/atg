@@ -10083,7 +10083,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 293 · 2026-06-08';
+const BUILD_VERSION = 'build 294 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11996,6 +11996,7 @@ function loop(){
   for(const en of enemies){ const v=en.mesh.userData.visual, s=v&&v.userData.seat; if(s){ v.position.copy(s.p); v.quaternion.copy(s.q); v.scale.copy(s.s); } }
   for(const id in NET.players){ const m=NET.players[id].mesh, v=m&&m.userData.visual, s=v&&v.userData.seat; if(s){ v.position.copy(s.p); v.quaternion.copy(s.q); v.scale.copy(s.s); } }
   if(previewAvatar){ const v=previewAvatar.userData.visual, s=v&&v.userData.seat; if(s){ v.position.copy(s.p); v.quaternion.copy(s.q); v.scale.copy(s.s); } }
+  if(_ownAvatar){ const v=_ownAvatar.userData.visual, s=v&&v.userData.seat; if(s){ v.position.copy(s.p); v.quaternion.copy(s.q); v.scale.copy(s.s); } }   // third-person body: hold its seated offset (xoff/yoff/zoff) against animation root-motion
   if(typeof previewEnemy!=='undefined' && previewEnemy){ const v=previewEnemy.userData.visual, s=v&&v.userData.seat; if(s){ v.position.copy(s.p); v.quaternion.copy(s.q); v.scale.copy(s.s); }
     if(previewCollider && previewCollider.userData.cyl){ const r=previewEnemy.userData.footprint||0.9; previewCollider.userData.cyl.scale.set(r,1,r); } }
 
