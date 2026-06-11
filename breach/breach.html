@@ -583,6 +583,7 @@
   <div class="sub">// TACTICAL INCURSION PROTOCOL</div>
   <button id="startBtn">Deploy</button>
   <div class="menuBtns">
+    <button id="campaignBtn" class="secBtn">🎖 Play campaign</button>
     <button id="mpOpenBtn" class="secBtn">🌐 Multiplayer</button>
     <button id="editBtn" class="secBtn">🛠 Build / edit level</button>
     <button id="instrBtn" class="secBtn">❔ Instructions</button>
@@ -10090,7 +10091,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 295 · 2026-06-08';
+const BUILD_VERSION = 'build 296 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13080,7 +13081,7 @@ function _importCampaignFile(file){
 let campaignActive=false, campaignIdx=0, _campaignComplete=false;
 let campaignEditIdx=-1;   // campaign slot currently loaded in the editor for re-editing (-1 = none)
 function _campaignLoad(i){ const lv=campaign.levels[i]; if(!lv) return; loadLevelFromNet(lv); startGame(); }
-function startCampaign(){ if(!campaign.levels.length){ if(typeof flashToast==='function') flashToast('Add a level to the campaign first'); return; } campaignActive=true; campaignIdx=0; _campaignComplete=false; _campaignLoad(0); }
+function startCampaign(){ if(!campaign.levels.length){ if(typeof flashToast==='function') flashToast('No campaign yet \u2014 build one in the editor under Files > Campaign'); return; } campaignActive=true; campaignIdx=0; _campaignComplete=false; _campaignLoad(0); }
 function _captureLoadout(){ const a={}; for(const k of owned){ const w=WEAPONS[k]; if(w) a[k]={ mag:w.mag, reserve:w.reserve }; } return { owned:[...owned], wep:curWep, hp:player.hp, ammo:a }; }
 function _restoreLoadout(c){ if(!c) return; owned.length=0; for(const k of c.owned) owned.push(k); for(const k in c.ammo){ if(WEAPONS[k]){ WEAPONS[k].mag=c.ammo[k].mag; WEAPONS[k].reserve=c.ammo[k].reserve; } } curWep=(c.wep && owned.includes(c.wep))?c.wep:owned[0]; player.hp=Math.max(1, c.hp||player.hp); if(typeof switchWeapon==='function') switchWeapon(curWep); if(typeof updateHUD==='function') updateHUD(); }
 function _snapshotPlayerCharCfg(name){ const c=playerModelCfg; return _sanitizeCharCfg({ name:name||'Character', url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, clips:Object.assign({},c.clips||{}) }); }
@@ -15550,7 +15551,7 @@ function challengeResultHTML(){
 }
 // wire the Redeploy + "Challenge a friend" buttons shared by both end screens
 function bindEndScreen(){
-  const sb=document.getElementById('startBtn'); if(sb) sb.onclick=startGame;
+  const sb=document.getElementById('startBtn'); if(sb){ if(campaignActive){ sb.textContent='Retry level'; sb.onclick=()=>_campaignLoad(campaignIdx); } else sb.onclick=startGame; }
   const hb=document.getElementById('homeBtn'); if(hb) hb.onclick=exitToMenu;
   const cb=document.getElementById('chalBtn'), co=document.getElementById('chalOut');
   if(cb) cb.onclick=async ()=>{
@@ -15800,7 +15801,8 @@ function bindMenu(){
   { const sb=document.getElementById('lobbyStart'); if(sb) sb.onclick=startMatch; const lv=document.getElementById('lobbyLeave'); if(lv) lv.onclick=()=>{ unannounceRoom(); location.reload(); }; }
   { const rf=document.getElementById('mpRefresh'); if(rf) rf.onclick=refreshGamesList; refreshGamesList(); setInterval(()=>{ const m=document.getElementById('mpModal'); if(m && !m.classList.contains('hidden') && lobbyEnabled()) refreshGamesList(); }, 4000); window.addEventListener('beforeunload', ()=>{ try{ unannounceRoom(); }catch(e){} }); }
   if(MENU_HTML===null){ const ov0=document.getElementById('overlay'); if(ov0) MENU_HTML = ov0.innerHTML; }   // capture the full start menu once, before any death/win screen overwrites it
-  const sb=document.getElementById('startBtn'); if(sb) sb.onclick=startGame;
+  const sb=document.getElementById('startBtn'); if(sb) sb.onclick=()=>{ campaignActive=false; _campaignComplete=false; startGame(); };
+  const cpb=document.getElementById('campaignBtn'); if(cpb) cpb.onclick=()=>{ if(typeof startCampaign==='function') startCampaign(); };
   const eb=document.getElementById('editBtn'); if(eb) eb.onclick=enterEditor;
   const h=document.getElementById('mpHost'); if(h) h.onclick=startHost;
   const d=document.getElementById('mpDuel'); if(d) d.onclick=startDuel;
@@ -15853,7 +15855,7 @@ function resumeGame(){
   if(!isTouch) tryPointerLock();
 }
 function exitToMenu(){
-  paused = false;
+  paused = false; campaignActive=false; _campaignComplete=false;
   const pm=document.getElementById('pauseMenu'); if(pm) pm.classList.add('hidden');
   if(NET.mode && NET.mode!=='off'){ location.reload(); return; }   // cleanest teardown of a live session
   stopMusic();
