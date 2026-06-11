@@ -5749,6 +5749,7 @@ const SFX = {
   shoot(){ if(playSample((curSounds().shoot||{})[curWep])) return;
     if(curWep==='shotgun'){ tone({freq:150, type:'square', dur:0.15, vol:0.17, slideTo:55}); noise({dur:0.17, vol:0.30, filterFreq:1400, type:'lowpass'}); }
     else if(curWep==='smg'){ tone({freq:380, type:'square', dur:0.05, vol:0.10, slideTo:150}); noise({dur:0.05, vol:0.15, filterFreq:3000, type:'highpass'}); }
+    else if(curWep==='sniper'){ tone({freq:95, type:'square', dur:0.22, vol:0.22, slideTo:38}); noise({dur:0.26, vol:0.34, filterFreq:1000, type:'lowpass'}); }
     else { tone({freq:320, type:'square', dur:0.08, vol:0.12, slideTo:120}); noise({dur:0.07, vol:0.18, filterFreq:2200, type:'highpass'}); } },
   enemyShot(){ tone({freq:300, type:'square', dur:0.08, vol:0.09, slideTo:105}); noise({dur:0.07, vol:0.12, filterFreq:1700, type:'highpass'}); },
   shootAt(pos){ if(!actx||!sfxBus) return; let g=1; try{ const dx=pos.x-player.pos.x, dy=pos.y-player.pos.y, dz=pos.z-player.pos.z; g=Math.max(0, 1-Math.sqrt(dx*dx+dy*dy+dz*dz)/45); g*=g; }catch(e){} if(g<=0.02) return; const t=actx.currentTime; const gain=actx.createGain(); gain.gain.value=g; gain.connect(sfxBus);
@@ -7171,7 +7172,7 @@ const ENEMY_TYPES = {
   grunt:  { name:'Grunt',  hp:30, speedMin:6,   speedMax:9,  scale:1.0, tint:0xff2d55, dmg:9 },
   runner: { name:'Runner', hp:16, speedMin:11,  speedMax:13, scale:0.8, tint:0xffd166, dmg:6 },
   brute:  { name:'Brute',  hp:90, speedMin:3.5, speedMax:5,  scale:1.5, tint:0x9b6cff, dmg:18 },
-  gunner: { name:'Gunner', hp:24, speedMin:4,   speedMax:6,  scale:1.0, tint:0x4dd2ff, dmg:7, ranged:true, standoff:11, fireCd:1.5, projSpeed:24 },
+  gunner: { name:'Gunner', hp:24, speedMin:4,   speedMax:6,  scale:1.0, tint:0x4dd2ff, dmg:4, ranged:true, standoff:11, fireCd:1.6, projSpeed:38, burst:4, burstGap:0.09 },
   boss:   { name:'BOSS',   hp:900,speedMin:2.8, speedMax:4.2,scale:2.6, tint:0xff7b00, dmg:28, ranged:true, standoff:14, fireCd:1.1, projSpeed:26 },
 };
 const ENEMY_TYPE_KEYS = ['grunt','runner','brute','gunner','boss'];
@@ -7575,6 +7576,8 @@ addEventListener('keydown', e=>{
   if(e.code==='Digit1' && owned[0]) switchWeapon(owned[0]);
   if(e.code==='Digit2' && owned[1]) switchWeapon(owned[1]);
   if(e.code==='Digit3' && owned[2]) switchWeapon(owned[2]);
+  if(e.code==='Digit4' && owned[3]) switchWeapon(owned[3]);
+  if(e.code==='Digit5' && owned[4]) switchWeapon(owned[4]);
 });
 addEventListener('keyup', e=>{ keys[e.code]=false; if(e.code==='Tab' && radialOpen) closeRadial(true); });
 // Clear held movement input. A wave-end / death transition can swallow the keyup (or hide the touch stick
@@ -7635,7 +7638,7 @@ document.addEventListener('mousemove', e=>{
   // clamp per-event deltas so a spurious browser/driver spike can't whip the view to a new direction
   const mx = Math.max(-MAX_LOOK_DELTA, Math.min(MAX_LOOK_DELTA, e.movementX));
   const my = Math.max(-MAX_LOOK_DELTA, Math.min(MAX_LOOK_DELTA, e.movementY));
-  const sens = ads ? ADS_SENS : HIP_SENS;
+  const sens = ads ? ((typeof WEAPONS!=='undefined' && WEAPONS[curWep] && WEAPONS[curWep].scope) ? SCOPE_SENS : ADS_SENS) : HIP_SENS;
   player.yaw   -= mx * sens;
   player.pitch -= my * sens;
   player.pitch = Math.max(-1.5, Math.min(1.5, player.pitch));
@@ -7711,6 +7714,7 @@ function _ensureVmEnv(){
 }
 function renderViewmodel(){
   if(activeCam() !== camera || !gun.visible) return;   // skip the editor's top-down view / when the weapon is hidden
+  if(typeof _scopedNow!=='undefined' && _scopedNow) return;   // looking through the optic: no viewmodel
   const _r=perfOn?_pnow():0;
   _ensureVmEnv();
   vmScene.environment = scene.environment || _vmEnvFallback;   // metallic gun materials need an env map to reflect — without it they render BLACK
@@ -7814,6 +7818,7 @@ const WEAPONS = {
   rifle:   { name:'RIFLE',   mag:30, magSize:30, reserve:90,  reserveMax:270, fireRate:95,  dmg:12, pellets:1, spread:0.0,  auto:true,  reloadMs:1100, color:0xffe08a, refillAmt:60, refillCost:50, model:'', view:null },
   smg:     { name:'SMG',     mag:40, magSize:40, reserve:120, reserveMax:360, fireRate:55,  dmg:8,  pellets:1, spread:0.02, auto:true,  reloadMs:1000, color:0xa8e6ff, refillAmt:80, refillCost:50, model:'', view:null },
   shotgun: { name:'SHOTGUN', mag:6,  magSize:6,  reserve:24,  reserveMax:72,  fireRate:650, dmg:9,  pellets:8, spread:0.08, auto:false, reloadMs:1300, color:0xffb86b, refillAmt:18, refillCost:60, model:'', view:null },
+  sniper:  { name:'SNIPER',  mag:5,  magSize:5,  reserve:20,  reserveMax:60,  fireRate:1400,dmg:95, pellets:1, spread:0.0,  auto:false, reloadMs:1600, color:0xc6ff7a, refillAmt:10, refillCost:70, model:'', view:null, scope:true },
   launcher:{ name:'ROCKET',  mag:1,  magSize:1,  reserve:6,   reserveMax:18,  fireRate:900, dmg:90, pellets:1, spread:0,    auto:false, reloadMs:1700, color:0xff7a3a, refillAmt:4,  refillCost:120, model:'', view:null, projectile:true, blastRadius:7 },
   crowbar: { name:'CROWBAR', mag:0,  magSize:0,  reserve:0,   reserveMax:0,   fireRate:500, dmg:60, pellets:0, spread:0,    auto:true,  reloadMs:0,    color:0x9fd8ff, refillAmt:0,  refillCost:0,   model:'', view:null, melee:true, reach:3.4 },
 };
@@ -7832,7 +7837,7 @@ function refillAllWeapons(){
   for(const k in WEAPONS){ const w=WEAPONS[k]; w.mag=w.magSize; w.reserve=w.reserveMax; }
 }
 // Duel loadout: hand the player all three weapons fully loaded (duels are a gunfight, not an economy).
-function giveDuelLoadout(){ owned=['rifle','smg','shotgun','launcher','crowbar']; curWep='rifle'; refillAllWeapons(); reloading=false; applyWeaponAim('rifle'); applyWeaponMuzzle('rifle'); }
+function giveDuelLoadout(){ owned=['rifle','smg','shotgun','sniper','launcher','crowbar']; curWep='rifle'; refillAllWeapons(); reloading=false; applyWeaponAim('rifle'); applyWeaponMuzzle('rifle'); }
 
 function switchWeapon(key){
   if(!owned.includes(key) || key===curWep || reloading) return;
@@ -8069,7 +8074,7 @@ function spawnEnemy(spawn){
   buildEnemyVisual(mesh);
   scene.add(mesh);
   const e = { id: nextEnemyId++, mesh, hp:ty.hp, maxHp:ty.hp, speed: ty.speedMin + Math.random()*(ty.speedMax-ty.speedMin), dmg:ty.dmg, type:typeKey, vy:0, evx:0, evz:0, grounded:true, launchY:0, lastHit:0, cooldown:0,
-    ranged: !!ty.ranged, standoff: ty.standoff||11, fireCd: ty.fireCd||1.5, projSpeed: ty.projSpeed||24, shootCd: 0.4 + Math.random()*0.8,
+    ranged: !!ty.ranged, standoff: ty.standoff||11, fireCd: ty.fireCd||1.5, projSpeed: ty.projSpeed||24, burst: ty.burst||1, burstGap: ty.burstGap||0.09, shootCd: 0.4 + Math.random()*0.8,
     mode: (spawn && spawn.mode) ? spawn.mode : 'hunt',
     home: spawn ? { x:px, z:pz } : null,
     patrolR: (spawn && spawn.patrolR!=null) ? spawn.patrolR : 6,
@@ -9824,6 +9829,7 @@ const ITEM_POOL = [
   { id:'smg',     name:'SMG',           desc:'Fast-firing automatic',       cost:200, act:()=>giveWeapon('smg'), oneTime:true },
   { id:'shotgun', name:'SHOTGUN',       desc:'High close-range burst',      cost:220, act:()=>giveWeapon('shotgun'), oneTime:true },
   { id:'launcher', name:'ROCKET LAUNCHER', desc:'Explosive splash — huge AoE', cost:320, act:()=>giveWeapon('launcher'), oneTime:true },
+  { id:'sniper',  name:'SNIPER RIFLE',  desc:'Scoped one-shot power at range', cost:400, act:()=>giveWeapon('sniper'), oneTime:true },
   { id:'crowbar', name:'CROWBAR', desc:'Heavy melee — big knockback, no ammo', cost:140, act:()=>giveWeapon('crowbar'), oneTime:true },
   { id:'ammo',    name:'AMMO CRATE',    desc:'Refill current weapon ammo',  cost:50,  act:()=>{ const w=W(); w.reserve=w.reserveMax; updateHUD(); } },
 ];
@@ -10163,6 +10169,20 @@ let adsBlend = 0;         // 0 = hip, 1 = fully aimed (smoothed each frame)
 let editorAimPreview = false;  // editor forces the aimed pose so the Aim tab is visible while tuning
 const BASE_FOV = 78, ADS_FOV = 38.20;   // gentler zoom — the gun moving to center is the main cue
 let adsFovLive = ADS_FOV;            // editor-adjustable copy the loop actually reads
+let _scopedNow=false, _scopeEl=null;   // scope view active this frame / its DOM overlay
+function _setScopeOverlay(on){
+  if(on && !_scopeEl){
+    const el=document.createElement('div'); el.id='scopeOverlay';
+    el.style.cssText='position:fixed;inset:0;z-index:14;pointer-events:none;display:none;';
+    el.innerHTML =
+      '<div style="position:absolute;inset:0;background:radial-gradient(circle at 50% 50%, transparent 0 33vmin, rgba(0,0,0,0.86) 36vmin, #000 40vmin);"></div>'
+      +'<div style="position:absolute;left:0;right:0;top:50%;height:1px;background:rgba(190,255,220,0.55);"></div>'
+      +'<div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:rgba(190,255,220,0.55);"></div>'
+      +'<div style="position:absolute;left:50%;top:50%;width:8px;height:8px;margin:-4px 0 0 -4px;border:1px solid rgba(190,255,220,0.8);border-radius:50%;"></div>';
+    document.body.appendChild(el); _scopeEl=el;
+  }
+  if(_scopeEl) _scopeEl.style.display = on ? 'block' : 'none';
+}
 
 // ---------- Gamepad / controller support ----------
 // Polled every frame (the Gamepad API has no per-axis events). Uses the W3C "standard" mapping:
@@ -10201,7 +10221,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 318 · 2026-06-11';
+const BUILD_VERSION = 'build 320 · 2026-06-11';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10288,6 +10308,7 @@ const ADS_ROT = new THREE.Euler(0.13820, 0.13102, 0.00939);
 // the loop reads; applyWeaponAim() loads the equipped weapon's saved pose into them.
 const AIM_DEFAULT = { x:ADS_AIM.x, y:ADS_AIM.y, z:ADS_AIM.z, rx:ADS_ROT.x*180/Math.PI, ry:ADS_ROT.y*180/Math.PI, rz:ADS_ROT.z*180/Math.PI, fov:ADS_FOV };
 const aimByWep = {};
+aimByWep.sniper = Object.assign({}, AIM_DEFAULT, { fov: 12 });   // the sniper's ADS is a true scope: hard zoom by default
 function getWeaponAim(key){ if(!aimByWep[key]) aimByWep[key]=Object.assign({}, AIM_DEFAULT); return aimByWep[key]; }
 function applyWeaponAim(key){ const a=getWeaponAim(key); ADS_AIM.set(a.x,a.y,a.z); ADS_ROT.set(a.rx*Math.PI/180, a.ry*Math.PI/180, a.rz*Math.PI/180); adsFovLive = a.fov; }
 // apply saved aim pose if present — restore the FULL per-weapon map, not just one pose
@@ -10300,6 +10321,7 @@ if(savedLevel && savedLevel.aim && savedLevel.aim.state){
   ADS_AIM.set(a.x, a.y, a.z); ADS_ROT.set(a.rx*D2R, a.ry*D2R, a.rz*D2R); adsFovLive = a.fov;
 }
 const HIP_SENS = 0.0022, ADS_SENS = 0.0012;  // slower look while aiming for precision
+const SCOPE_SENS = 0.00045;                   // much slower under the scope's hard zoom
 addEventListener('wheel', e=>{ if(heldProp){ heldDist=Math.max(HOLD_MIN, Math.min(HOLD_MAX, heldDist - e.deltaY*0.003)); } }, {passive:true});
 addEventListener('mousedown', e=>{
   if(radialOpen){ if(e.button===0) closeRadial(true); return; }
@@ -11334,8 +11356,8 @@ function shoot(){
   addShake(curWep==='shotgun'?0.16:(curWep==='smg'?0.045:0.08));   // recoil kick
   if(NET.mode!=='off'){ const _fd=new THREE.Vector3(); camera.getWorldDirection(_fd); netFire(player.pos, _fd); }   // let other players see + hear this shot
 
-  recoil = Math.min(recoil + (0.018*w.pellets*0.5 + 0.014) * (adsBlend>0.5?0.5:1), 0.10);
-  player.pitch += (0.010 + Math.random()*0.006) * (adsBlend>0.5?0.5:1);
+  recoil = Math.min(recoil + (0.018*w.pellets*0.5 + 0.014) * (adsBlend>0.5?0.5:1) * (w.scope?2.0:1), 0.10);
+  player.pitch += (0.010 + Math.random()*0.006) * (adsBlend>0.5?0.5:1) * (w.scope?2.4:1);
   muzzle.intensity = 6; flashMat.opacity = 1;
   playFlipbook('muzzle', new THREE.Vector3(0,0,-0.05), 0.5, vmMuzzle);   // muzzle.png on your own gun, just in front of the barrel
 
@@ -11633,10 +11655,11 @@ function segmentBlocked(ax, az, bx, bz, y){
   }
   return false;
 }
-function fireEnemyShot(en, target){
+function fireEnemyShot(en, target, spread){
   flashEnemy(en);
   const from = new THREE.Vector3(en.mesh.position.x, 1.4, en.mesh.position.z);
   const dir = new THREE.Vector3(target.pos.x - from.x, 1.3 - from.y, target.pos.z - from.z).normalize();
+  if(spread){ dir.x+=(Math.random()*2-1)*spread; dir.y+=(Math.random()*2-1)*spread*0.6; dir.z+=(Math.random()*2-1)*spread; dir.normalize(); }
   const mesh = makeEnemyBolt();
   mesh.position.copy(from);
   mesh.quaternion.setFromUnitVectors(_UP, dir.clone().normalize());   // align local +Y to travel
@@ -12227,10 +12250,12 @@ function loop(){
   const adsTarget = (ads || padAds || touchAds || editorAimPreview) ? 1 : 0;
   adsBlend += (adsTarget - adsBlend) * Math.min(1, dt*14);
   if(Math.abs(adsBlend - adsTarget) < 0.002) adsBlend = adsTarget;
+  _scopedNow = !!(ads && WEAPONS[curWep] && WEAPONS[curWep].scope && adsBlend > 0.6 && gameOn && !editorOpen);
+  _setScopeOverlay(_scopedNow);
   const hipFov = (worldCfg && worldCfg.fov) ? worldCfg.fov : BASE_FOV;
   const wantFov = hipFov + (adsFovLive - hipFov) * adsBlend;
   if(Math.abs(camera.fov - wantFov) > 0.01){ camera.fov = wantFov; camera.updateProjectionMatrix(); }
-  crosshairEl.style.opacity = (1 - adsBlend*0.85).toFixed(2);
+  crosshairEl.style.opacity = _scopedNow ? '0' : (1 - adsBlend*0.85).toFixed(2);
 
   // look
   camera.rotation.order='YXZ';
@@ -12630,11 +12655,23 @@ function loop(){
       en.cooldown -= dt;
       if(en.ranged){
         en.shootCd -= dt;
-        if(en._chase && en.shootCd<=0 && !editorOpen && en._dist < en.standoff*1.7
+        // rounds 2..n of an in-flight burst: paced by burstGap, re-aimed at the live target each round so the
+        // stream tracks a moving player like real automatic fire (each round gets a touch of spread)
+        if(en._burstN>0){
+          en._burstT -= dt;
+          if(en._burstT<=0){
+            const tg=en._burstTgt;
+            if(tg && tg.pos && !segmentBlocked(en.mesh.position.x, en.mesh.position.z, tg.pos.x, tg.pos.z, 1.4)){ fireEnemyShot(en, tg, 0.035); }
+            en._burstN--; en._burstT = en.burstGap;
+            if(en._burstN<=0) en._burstTgt=null;
+          }
+        }
+        else if(en._chase && en.shootCd<=0 && !editorOpen && en._dist < en.standoff*1.7
            && Math.abs((near.pos.y - EYE) - en.mesh.position.y) < 2.6   // roughly the same level — no shooting through a floor
            && !segmentBlocked(en.mesh.position.x, en.mesh.position.z, near.pos.x, near.pos.z, 1.4)){
-          fireEnemyShot(en, near);          // clear line of sight + in range -> shoot
-          en.shootCd = en.fireCd; en._attackT = nowMs + 450;   // brief attack-animation window
+          fireEnemyShot(en, near, (en.burst>1)?0.02:0);   // round 1 of the burst (or the whole shot for single-fire types)
+          en._burstN = Math.max(0,(en.burst||1)-1); en._burstT = en.burstGap; en._burstTgt = (en._burstN>0)?near:null;
+          en.shootCd = en.fireCd; en._attackT = nowMs + (en.burst>1 ? 450 + en.burst*en.burstGap*1000 : 450);   // attack anim spans the whole burst
         }
       } else if(en._chase && en._dist < (en._reach || 2.4) && Math.abs((near.pos.y - EYE) - en.mesh.position.y) < 2.6 && en.cooldown<=0 && !editorOpen){   // aware/chasing melee enemy in reach AND at roughly the same height attacks (no hitting a floor above/below)
         en.cooldown = 0.8; en._attackT = nowMs + 550;   // brief attack-animation window
@@ -15770,6 +15807,7 @@ function startGame(){
   WEAPONS.rifle.mag=30; WEAPONS.rifle.reserve=90;
   WEAPONS.smg.mag=40; WEAPONS.smg.reserve=120;
   WEAPONS.shotgun.mag=6; WEAPONS.shotgun.reserve=24;
+  WEAPONS.sniper.mag=5; WEAPONS.sniper.reserve=20;
   reloading=false; score=0; wave=1; credits=0; grenadeCount=0; runKills=0;
   if(typeof startObjective==='function') startObjective();   // reset survival timer for this run
   if(typeof disposePickupMarkers==='function') disposePickupMarkers();   // remove editor previews; the live (grabbable) pads are spawned next
