@@ -584,6 +584,8 @@
   <button id="startBtn">Deploy</button>
   <div class="menuBtns">
     <button id="campaignBtn" class="secBtn">🎖 Play campaign</button>
+    <button id="loadCampBtn" class="secBtn">📂 Load campaign</button>
+    <input type="file" id="menuCampFile" accept=".json,application/json" style="display:none">
     <button id="mpOpenBtn" class="secBtn">🌐 Multiplayer</button>
     <button id="editBtn" class="secBtn">🛠 Build / edit level</button>
     <button id="instrBtn" class="secBtn">❔ Instructions</button>
@@ -10191,7 +10193,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 314 · 2026-06-11';
+const BUILD_VERSION = 'build 315 · 2026-06-11';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13260,7 +13262,7 @@ function _exportCampaign(){
     if(typeof flashToast==='function') flashToast('Exported ' + campaign.levels.length + ' level' + (campaign.levels.length>1?'s':'') + ' - share the .json');
   }catch(e){ if(typeof flashToast==='function') flashToast('Export failed'); }
 }
-function _importCampaignFile(file){
+function _importCampaignFile(file, onDone){
   if(!file) return;
   const reader = new FileReader();
   reader.onload = ()=>{
@@ -13271,7 +13273,9 @@ function _importCampaignFile(file){
     if(!levels || !levels.length){ if(typeof flashToast==='function') flashToast('Import failed: no levels in that file'); return; }
     if(campaign.levels.length && !confirm('Replace your current campaign (' + campaign.levels.length + ' level' + (campaign.levels.length>1?'s':'') + ') with the imported ' + levels.length + '?')) return;
     campaign.levels = levels.map((lv,i)=> Object.assign({}, lv, { name: (lv && lv.name!=null) ? lv.name : ('Level '+(i+1)) }));
-    campaignEditIdx = -1; saveCampaign(); renderCampaignPanel();
+    campaignEditIdx = -1; saveCampaign();
+    if(typeof onDone==='function'){ onDone(); return; }
+    if(typeof renderCampaignPanel==='function') renderCampaignPanel();
     if(typeof flashToast==='function') flashToast('Imported ' + campaign.levels.length + ' level' + (campaign.levels.length>1?'s':'') + ' - hit Play campaign');
   };
   reader.readAsText(file);
@@ -16059,6 +16063,8 @@ function bindMenu(){
   if(MENU_HTML===null){ const ov0=document.getElementById('overlay'); if(ov0) MENU_HTML = ov0.innerHTML; }   // capture the full start menu once, before any death/win screen overwrites it
   const sb=document.getElementById('startBtn'); if(sb) sb.onclick=()=>{ campaignActive=false; _campaignComplete=false; startGame(); };
   const cpb=document.getElementById('campaignBtn'); if(cpb) cpb.onclick=()=>{ if(typeof startCampaign==='function') startCampaign(); };
+  const lcb=document.getElementById('loadCampBtn'), lcf=document.getElementById('menuCampFile');
+  if(lcb && lcf){ lcb.onclick=()=>lcf.click(); lcf.onchange=()=>{ const f=lcf.files && lcf.files[0]; lcf.value=''; if(!f) return; _importCampaignFile(f, ()=>{ if(typeof flashToast==='function') flashToast('Loaded ' + campaign.levels.length + ' level' + (campaign.levels.length>1?'s':'')); if(typeof startCampaign==='function') startCampaign(); }); }; }
   const eb=document.getElementById('editBtn'); if(eb) eb.onclick=enterEditor;
   const h=document.getElementById('mpHost'); if(h) h.onclick=startHost;
   const d=document.getElementById('mpDuel'); if(d) d.onclick=startDuel;
