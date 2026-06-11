@@ -8910,7 +8910,7 @@ function _ensureThumbR(){
 }
 function _renderCharThumb(cfg, swatchEl){
   if(!cfg) return;
-  const apply=(url)=>{ if(swatchEl){ swatchEl.style.backgroundImage='url("'+url+'")'; swatchEl.style.backgroundSize='cover'; swatchEl.style.backgroundColor='#0c2026'; } };
+  const apply=(url)=>{ if(swatchEl){ swatchEl.style.backgroundImage='url("'+url+'")'; swatchEl.style.backgroundSize='cover'; swatchEl.style.backgroundPosition='center'; swatchEl.style.backgroundRepeat='no-repeat'; swatchEl.style.backgroundColor='#0c2026'; } };
   if(cfg.thumb){ apply(cfg.thumb); return; }   // use the source preview image (Poly Pizza / Sketchfab) directly — no CORS, no render needed
   if(!cfg.url) return;
   const k=(cfg.url||'')+'|'+(cfg.scale||1)+'|'+(cfg.face||0);
@@ -10162,7 +10162,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 306 · 2026-06-08';
+const BUILD_VERSION = 'build 307 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
