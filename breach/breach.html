@@ -9000,7 +9000,7 @@ function serializeWorld(){
   const PU = powerups.length ? powerups.map(p=>({ id:p.id, p:[p.x,p.z], k:p.kind, r:p.ready?1:0 })) : undefined;
   // objective state (so clients see the survival timer / extraction beacon + hold, not just "WAVE n")
   const O = { o:objectiveActive(), s:+surviveLeft.toFixed(1), h:+extractHoldT.toFixed(2),
-              ex:[+extractPos.x.toFixed(2), +extractPos.z.toFixed(2)], er:gameCfg.extractRadius||3.5, eh:gameCfg.extractHold||5, wn:gameCfg.winWaves||0 };
+              ex:[+extractPos.x.toFixed(2), +extractPos.z.toFixed(2)], er:gameCfg.extractRadius||3.5, eh:gameCfg.extractHold||5, wn:gameCfg.winWaves||0, dd:_destroyTotal-_destroyRemain, dn:_destroyTotal };
   return { t:'world', P, E, C, D, K, PU, O, wv:wave };
 }
 function dynamicById(id){ for(const o of dynamicProps){ if(o.userData.phys && o.userData.phys.id===id) return o; } return null; }
@@ -9081,6 +9081,9 @@ function applyObjectiveSnapshot(O, wv){
     if(O.ex){ extractPos.set(O.ex[0],0,O.ex[1]); extractZone.position.set(O.ex[0], _maxTerrainOver(O.ex[0],O.ex[1], R), O.ex[1]); }
     extractZone.visible=true; _clientBeaconOn=true;
     if(wn){ const inZ=(()=>{ const dx=player.pos.x-extractPos.x, dz=player.pos.z-extractPos.z; return dx*dx+dz*dz<=R*R; })(); wn.textContent = inZ ? ('DEFEND '+fmtClock(O.s||0)) : ('HOLD THE ZONE \u2014 '+fmtClock(O.s||0)); }
+  } else if(O.o==='destroy'){
+    if(extractZone) extractZone.visible=false; _clientBeaconOn=false;
+    if(wn) wn.textContent = (O.dn>0) ? ('DESTROY '+(O.dd||0)+' / '+O.dn) : 'NO TARGETS SET';
   } else {
     if(extractZone) extractZone.visible=false; _clientBeaconOn=false;
     if(O.o==='survival'){ if(wn) wn.textContent='SURVIVE '+fmtClock(O.s||0); }
@@ -10168,7 +10171,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 308 · 2026-06-08';
+const BUILD_VERSION = 'build 309 · 2026-06-08';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10695,7 +10698,7 @@ function applyPropDynState(obj, p){
   if(p.ng) obj.userData.noGrab=true;
   if(p.mass!=null) obj.userData.mass = p.mass;
   if(p.brk===false){ obj.userData.breakable = false; }
-  else { obj.userData.breakable = true; if(p.hp!=null){ obj.userData.maxHp = p.hp; obj.userData.hp = p.hp; } obj.userData.breakStyle = (p.bst==='puff') ? 'puff' : 'shatter';
+  else { obj.userData.breakable = true; if(p.obj) obj.userData.objective=true; if(p.hp!=null){ obj.userData.maxHp = p.hp; obj.userData.hp = p.hp; } obj.userData.breakStyle = (p.bst==='puff') ? 'puff' : 'shatter';
     if(p.fc!=null) obj.userData.fragCount = p.fc;
     if(p.fz!=null) obj.userData.fragSize = p.fz;
     obj.userData.debrisShape = (p.dsh==='cubes') ? 'cubes' : 'shards';
@@ -11465,6 +11468,7 @@ function drawMinimap(){
   for(const en of enemies) blip(en.mesh.position.x, en.mesh.position.z, '#ff4d5e', 2.6);
   // extraction zone (pulsing green)
   if((objectiveActive()==='extraction'||objectiveActive()==='defend') && extractZone && extractZone.visible) blip(extractPos.x, extractPos.z, '#38f5b5', 4.2);
+  if(objectiveActive()==='destroy'){ for(const m of _destroyMarkers){ const o=m.userData.prop; if(o && !o.userData._shattered && o.parent) blip(o.position.x, o.position.z, '#ff5b6b', 3.6); } }
 
   ctx.restore();
 
@@ -11480,6 +11484,7 @@ function drawMinimap(){
 let score = 0, wave = 1, toSpawn = 0;
 let surviveLeft = 0;   // seconds left in a Survival-objective run (also the Defend hold countdown)
 let _defendInZone = false;   // Defend: is a player currently holding the zone
+let _destroyTotal=0, _destroyRemain=0; const _destroyMarkers=[];   // Destroy: objective-target tracking + floating beacons
 let runKills = 0;   // kills this run (for the run summary + best)
 let extractHoldT = 0; let extractZone = null; const extractPos = new THREE.Vector3();   // Extraction objective
 let extractSpot = null;   // manual {x,z} placement from the editor; null = auto (opposite the player spawn)
@@ -11694,16 +11699,27 @@ function placeExtraction(){
   refreshExtractMarker();
   extractZone.visible = true;
 }
+function _clearDestroyMarkers(){ for(const m of _destroyMarkers){ scene.remove(m); } _destroyMarkers.length=0; _destroyTotal=0; _destroyRemain=0; }
+function _setupDestroyTargets(){
+  _clearDestroyMarkers();
+  for(const o of dynamicProps){ if(o && o.userData && o.userData.objective && !o.userData._shattered){
+    const m=new THREE.Mesh(new THREE.OctahedronGeometry(0.34), new THREE.MeshBasicMaterial({ color:0xff5b6b, transparent:true, opacity:0.92, depthWrite:false }));
+    m.userData.prop=o; m.raycast=()=>{}; scene.add(m); _destroyMarkers.push(m);
+  } }
+  _destroyTotal=_destroyMarkers.length; _destroyRemain=_destroyTotal;
+}
 function startObjective(){
   surviveLeft = gameCfg.surviveSecs || 0; extractHoldT = 0;
   if(objectiveActive()==='extraction' || objectiveActive()==='defend'){ placeExtraction(); }
   else if(extractZone){ extractZone.visible = false; }
+  if(objectiveActive()==='destroy') _setupDestroyTargets(); else _clearDestroyMarkers();
 }
 function objectiveHUD(){
   const wn=$('waveNum'); if(!wn) return;
   if(objectiveActive()==='survival'){ wn.textContent = 'SURVIVE ' + fmtClock(surviveLeft); }
   else if(objectiveActive()==='extraction'){ const H=gameCfg.extractHold||5; wn.textContent = (extractHoldT>0.05) ? ('EXTRACTING '+extractHoldT.toFixed(1)+' / '+H) : 'REACH EXTRACTION'; }
   else if(objectiveActive()==='defend'){ wn.textContent = _defendInZone ? ('DEFEND '+fmtClock(surviveLeft)) : ('HOLD THE ZONE \u2014 '+fmtClock(surviveLeft)); }
+  else if(objectiveActive()==='destroy'){ wn.textContent = (_destroyTotal>0) ? ('DESTROY '+(_destroyTotal-_destroyRemain)+' / '+_destroyTotal) : 'NO TARGETS SET'; }
   else { wn.textContent = (gameCfg.winWaves>0) ? ('WAVE '+wave+' / '+gameCfg.winWaves) : ('WAVE '+wave); }
 }
 function objectiveTick(dt){   // host/solo per-frame; may trigger the win
@@ -11743,6 +11759,17 @@ function objectiveTick(dt){   // host/solo per-frame; may trigger the win
     if(inZone) surviveLeft -= dt;                                             // the clock only runs while the zone is held
     objectiveHUD();
     if(surviveLeft<=0){ surviveLeft=0; if(typeof gameWon==='function') gameWon(); }
+  } else if(objectiveActive()==='destroy'){
+    let remain=0;
+    for(let i=_destroyMarkers.length-1;i>=0;i--){ const m=_destroyMarkers[i], o=m.userData.prop;
+      if(!o || o.userData._shattered || !o.parent){ scene.remove(m); _destroyMarkers.splice(i,1); continue; }
+      remain++;
+      const b=new THREE.Box3().setFromObject(o); const top=isFinite(b.max.y)?b.max.y:(o.position.y+0.5);
+      m.position.set(o.position.x, top + 0.55 + 0.12*Math.sin(performance.now()*0.004), o.position.z); m.rotation.y += dt*1.6;
+    }
+    _destroyRemain = remain;
+    objectiveHUD();
+    if(_destroyTotal>0 && remain<=0){ if(typeof gameWon==='function') gameWon(); }
   }
 }
 function startWave(){
@@ -13098,7 +13125,7 @@ function propEntry(o){
   if(o.userData.phys){ e.dyn=true; if(o.userData.mass!=null) e.mass=o.userData.mass;
     if(o.userData.noGrab) e.ng=true;
     if(o.userData.breakable===false) e.brk=false;   // breakable defaults true; only store when off
-    else { if(o.userData.maxHp!=null) e.hp=o.userData.maxHp; if(o.userData.breakStyle==='puff') e.bst='puff';
+    else { if(o.userData.maxHp!=null) e.hp=o.userData.maxHp; if(o.userData.breakStyle==='puff') e.bst='puff'; if(o.userData.objective) e.obj=1;
       if(o.userData.fragCount!=null) e.fc=o.userData.fragCount;
       if(o.userData.fragSize!=null && Math.abs(o.userData.fragSize-DEBRIS_SIZE_FRAC)>1e-6) e.fz=o.userData.fragSize;
       if(o.userData.debrisShape==='cubes') e.dsh='cubes';   // shards is the default; only store cubes
@@ -14091,7 +14118,7 @@ function renderEditorFields(){
     hint(gHost, '<b>Objective</b>', '2px 0 4px');
     const obRow=document.createElement('div'); obRow.className='row2';
     const obBtn=(key,txt)=>{ const b=document.createElement('button'); b.textContent=txt; if(objectiveActive()===key){ b.style.background='rgba(56,245,181,0.30)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); gameCfg.objective=key; renderEditorFields(); }; return b; };
-    obRow.appendChild(obBtn('eliminate','🎯 Eliminate')); obRow.appendChild(obBtn('survival','⏱ Survival')); obRow.appendChild(obBtn('extraction','📦 Extraction')); obRow.appendChild(obBtn('defend','🛡 Defend'));
+    obRow.appendChild(obBtn('eliminate','🎯 Eliminate')); obRow.appendChild(obBtn('survival','⏱ Survival')); obRow.appendChild(obBtn('extraction','📦 Extraction')); obRow.appendChild(obBtn('defend','🛡 Defend')); obRow.appendChild(obBtn('destroy','💥 Destroy'));
     gHost.appendChild(obRow);
     hint(gHost, '', '3px 0 6px').textContent = (objectiveActive()==='survival')
       ? 'Survival: hostiles spawn endlessly — outlast the countdown to win.'
@@ -14099,6 +14126,8 @@ function renderEditorFields(){
       ? 'Extraction: reach the beacon (auto-placed across the arena) and hold it while hostiles spawn endlessly.'
       : (objectiveActive()==='defend')
       ? 'Defend: hold the zone (auto-placed across the arena) while hostiles spawn endlessly. The clock only counts down while a player stands in it.'
+      : (objectiveActive()==='destroy')
+      ? 'Destroy: blow up every prop flagged \u201cObjective target\u201d (mark them on the prop\u2019s settings). They glow with a red beacon; destroy them all to win.'
       : 'Eliminate: clear waves of hostiles (optionally a fixed number to win).';
     if(objectiveActive()==='survival'){
       const svLab=document.createElement('label'); svLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;';
@@ -14543,6 +14572,11 @@ function renderEditorFields(){
           const brksp=document.createElement('span'); brksp.innerHTML='<b>Breakable</b> — shatters when shot';
           brk.appendChild(brkcb); brk.appendChild(brksp); animHost.appendChild(brk);
           if(sel.userData.breakable!==false){
+            const objl=document.createElement('label'); objl.style.cssText='display:flex;align-items:center;gap:7px;color:#ff9bb0;font-size:12px;margin-top:8px;cursor:pointer;';
+            const objcb=document.createElement('input'); objcb.type='checkbox'; objcb.checked=!!sel.userData.objective; objcb.style.accentColor='#ff5b6b';
+            objcb.onchange=()=>{ pushUndoSnapshot(); sel.userData.objective=objcb.checked; };
+            const objsp=document.createElement('span'); objsp.innerHTML='<b>\ud83c\udfaf Objective target</b> \u2014 must be destroyed to win a Destroy mission';
+            objl.appendChild(objcb); objl.appendChild(objsp); animHost.appendChild(objl);
             // ---- Explosive: detonate (blast fx + grenade-style AoE) when destroyed (propane / gas cans) ----
             const ex=document.createElement('label'); ex.style.cssText='display:flex;align-items:center;gap:7px;color:#ffb38a;font-size:12px;margin-top:8px;cursor:pointer;';
             const excb=document.createElement('input'); excb.type='checkbox'; excb.checked=!!sel.userData.explosive; excb.style.accentColor='#ff6b3a';
@@ -15705,7 +15739,7 @@ function gameWon(){
   const ov=$('overlay'); ov.classList.remove('hidden');
   ov.innerHTML = `
     <h1 style="color:#38f5b5;text-shadow:0 0 30px rgba(56,245,181,.5)">${_campaignComplete?'CAMPAIGN COMPLETE':'MISSION COMPLETE'}</h1>
-    <div class="sub">${ gameCfg.objective==='survival' ? ('SURVIVED '+fmtClock(gameCfg.surviveSecs)) : gameCfg.objective==='extraction' ? 'EXTRACTED' : (gameCfg.winWaves+' WAVE'+(gameCfg.winWaves===1?'':'S')+' CLEARED') }</div>
+    <div class="sub">${ gameCfg.objective==='survival' ? ('SURVIVED '+fmtClock(gameCfg.surviveSecs)) : gameCfg.objective==='extraction' ? 'EXTRACTED' : gameCfg.objective==='defend' ? ('ZONE HELD '+fmtClock(gameCfg.surviveSecs)) : gameCfg.objective==='destroy' ? 'ALL TARGETS DESTROYED' : (gameCfg.winWaves+' WAVE'+(gameCfg.winWaves===1?'':'S')+' CLEARED') }</div>
     ${runSummaryHTML()}
     ${challengeResultHTML()}
     <button id="startBtn">Redeploy</button>
