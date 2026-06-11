@@ -10191,7 +10191,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 313 · 2026-06-11';
+const BUILD_VERSION = 'build 314 · 2026-06-11';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12047,6 +12047,7 @@ function _showCineAvatar(){
   try{
     if(!_cineAvatar){ _cineAvatar=new THREE.Group(); scene.add(_cineAvatar); }
     buildAvatarVisual(_cineAvatar, (typeof myCharCfg==='function') ? myCharCfg() : playerModelCfg);
+    if(_cineAvatar.userData.charRing) _cineAvatar.userData.charRing.visible=false;   // the cutscene frames the character itself; the feet identity ring would just float on the ground
     const gy = (typeof terrainHeightAt==='function') ? terrainHeightAt(playerSpawn.x, playerSpawn.z) : 0;
     _cineAvatar.position.set(playerSpawn.x, gy, playerSpawn.z);
     _cineAvatar.rotation.set(0, (typeof player!=='undefined' ? player.yaw : 0), 0);   // face the spawn heading
