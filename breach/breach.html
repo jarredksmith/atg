@@ -6395,6 +6395,25 @@ function xaCapture(){ _xaEach((o,a)=>{ a.bpx=undefined; a.ph=0; a.dir=1; a.dest=
 function xaSnapToBase(){ _xaEach((o,a)=>{ a.ph=0; a.dir=1; a.dest=0; if(a.bpx!==undefined){ o.position.set(a.bpx,a.bpy,a.bpz); o.rotation.set(a.brx,a.bry,a.brz); o.updateMatrixWorld(true); if(colliders.indexOf(o)>=0||o.userData.box) refreshPropCollider(o); } }); }   // editor: show point A
 function xaToggle(o){ const a=o&&o.userData&&o.userData.xa; if(!a||!a.on) return; if(a.mode==='once' && a.dest){ return; }   // Once locks open
   a.dest = a.dest?0:1; if(SFX&&SFX.swap) SFX.swap(); }
+// Locked props: an interactable with a lockId needs the matching key on E. Unlocking is permanent for
+// this deploy and mirrors to every player, so a keyless teammate can use the door afterwards.
+function tryUnlockProp(o){
+  const lk = o.userData.lockId;
+  if(!lk || o.userData.unlocked) return true;
+  if(playerKeys[lk]){
+    o.userData.unlocked = true;
+    if(o.userData.lockConsume){ delete playerKeys[lk]; renderKeyChips(); }
+    flashToast(lk.toUpperCase()+' KEY USED'); if(SFX.buy) SFX.buy();
+    const i = propModels.indexOf(o); if(i>=0) broadcastUnlock(i);
+    return true;
+  }
+  flashToast('LOCKED \u2014 NEEDS '+lk.toUpperCase()+' KEY'); if(SFX.deny) SFX.deny();
+  return false;
+}
+function broadcastUnlock(i){
+  if(NET.mode==='host'){ for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'unlock', i}); }catch(e){} } }
+  else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send({t:'unlock', i}); }catch(e){} }
+}
 function broadcastXAnim(i){ const o=propModels[i]; const dest=(o&&o.userData.xa)?(o.userData.xa.dest?1:0):0;
   if(NET.mode==='host'){ for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'xa', i, dest}); }catch(e){} } }
   else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send({t:'xa', i, dest}); }catch(e){} } }
@@ -7081,7 +7100,7 @@ function removeProp(idx){
 function loadHostedProps(){
   const list = (savedLevel && Array.isArray(savedLevel.props)) ? savedLevel.props : SCENE_PROPS;
   propModels.length = list.length;   // reserve slots so async GLB loads can't clobber later push-spawned props
-  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p); if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));   // slot=i preserves order
+  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));   // slot=i preserves order
 }
 loadHostedProps();
 
@@ -8252,7 +8271,25 @@ const POWERUP_KINDS = {
   sniper: { c:0xc6ff7a, label:'SNIPER RIFLE' },
   launcher:{ c:0xff7a3a, label:'ROCKET LAUNCHER' },
   grenade:{ c:0x9be15a, label:'+GRENADE' },
+  // keys: per-run inventory items for locked props. One-shot pads (no respawn), never auto-laid-out.
+  key_red:  { c:0xff5a5a, label:'RED KEY',  key:'red' },
+  key_blue: { c:0x4aa3ff, label:'BLUE KEY', key:'blue' },
+  key_gold: { c:0xffd166, label:'GOLD KEY', key:'gold' },
+  key_green:{ c:0x9be15a, label:'GREEN KEY', key:'green' },
 };
+let playerKeys = {};   // per-run key ring: color -> true. Reset every deploy; PvP respawns keep it.
+function renderKeyChips(){
+  let host = document.getElementById('keyChips');
+  if(!host){ const hud=document.getElementById('hud'); if(!hud) return;
+    host=document.createElement('div'); host.id='keyChips';
+    host.style.cssText='position:absolute;bottom:86px;left:18px;display:flex;gap:6px;z-index:40;pointer-events:none;';
+    hud.appendChild(host); }
+  host.innerHTML='';
+  for(const k in playerKeys){ const pk=POWERUP_KINDS['key_'+k]; const c='#'+((pk?pk.c:0xffffff)).toString(16).padStart(6,'0');
+    const ch=document.createElement('div'); ch.textContent=k.toUpperCase();
+    ch.style.cssText='font:700 9px/1 ui-monospace,monospace;letter-spacing:1px;color:#06110d;background:'+c+';border-radius:4px;padding:4px 6px;box-shadow:0 0 8px '+c+'66;';
+    host.appendChild(ch); }
+}
 const POWERUP_COOLDOWN = 15;   // seconds before a used pad returns
 let powerups = [];
 let _puId = 1;
@@ -8374,6 +8411,7 @@ function applyPowerupLocal(kind){
   else if(kind==='shield') applyShield();
   else if(kind==='ammo'){ for(const key of owned){ const w=WEAPONS[key]; if(w) w.reserve=w.reserveMax; } updateHUD(); if(SFX.pickup) SFX.pickup(); }
   else if(kind==='grenade'){ grenadeCount += 1; updateHUD(); if(SFX.pickup) SFX.pickup(); }
+  else if(POWERUP_KINDS[kind] && POWERUP_KINDS[kind].key){ playerKeys[POWERUP_KINDS[kind].key]=true; renderKeyChips(); if(SFX.pickup) SFX.pickup(); }
   else if(WEAPONS[kind]){ giveWeapon(kind); updateHUD(); if(SFX.pickup) SFX.pickup(); }
   const k = POWERUP_KINDS[kind]; if(k) flashToast(k.label);
 }
@@ -8389,7 +8427,7 @@ function updatePowerups(dt){
     if(p.mesh){ p.mesh.visible=true; _animatePickup(p.mesh, dt); }
     let near=null, nd=1e9;
     for(const pl of players){ const d=Math.hypot(pl.pos.x-p.x, pl.pos.z-p.z); if(d<nd){ nd=d; near=pl; } }
-    if(near && nd < 2.0){ grantPowerup(near, p.kind); p.ready=false; p.cd=POWERUP_COOLDOWN; if(p.mesh) p.mesh.visible=false; }
+    if(near && nd < 2.0){ grantPowerup(near, p.kind); p.ready=false; p.cd=(POWERUP_KINDS[p.kind]&&POWERUP_KINDS[p.kind].key)?1e9:POWERUP_COOLDOWN; if(p.mesh) p.mesh.visible=false; }   // keys are one-shot
   }
 }
 
@@ -8802,7 +8840,7 @@ function loadLevelFromNet(level){
   // rebuild from the host's data
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }catch(e){ console.warn('net prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('net prop '+i+' failed', e); } });
+    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }catch(e){ console.warn('net prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('net prop '+i+' failed', e); } });
   }
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
@@ -9289,6 +9327,7 @@ function handleClientMsg(conn, msg){
   else if(msg.t==='buyChest'){ const ci=chests.findIndex(c=>c.id===msg.id); if(ci>=0){ scene.remove(chests[ci].mesh); chests.splice(ci,1); } }   // a client bought a crate -> remove it for everyone
   else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'anim', i:msg.i}); }catch(e){} } } }   // play + relay to other clients
   else if(msg.t==='xa'){ const o=propModels[msg.i]; if(o&&o.userData.xa) o.userData.xa.dest=msg.dest?1:0; for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'xa', i:msg.i, dest:msg.dest}); }catch(e){} } } }   // mechanism toggle + relay
+      else if(msg.t==='unlock'){ const o=propModels[msg.i]; if(o) o.userData.unlocked=true; for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'unlock', i:msg.i}); }catch(e){} } } }   // a client used a key + relay
   else if(msg.t==='pAdd'){ if(netApplyAddProp(msg.d)) relayProp({t:'pAdd', d:msg.d}, id); }       // a client added a prop -> mirror + relay
   else if(msg.t==='pDel'){ if(netApplyDelProp(msg.nid)) relayProp({t:'pDel', nid:msg.nid}, id); } // a client deleted a prop
   else if(msg.t==='pMov'){ if(netApplyMovProp(msg.nid, msg.x)) relayProp({t:'pMov', nid:msg.nid, x:msg.x}, id); } // a client moved a prop
@@ -9330,6 +9369,7 @@ function handleHostMsg(msg){
   else if(msg.t==='duelOver'){ showDuelResult(msg.w, msg.wt); }
   else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o); }   // a trigger animation fired somewhere
   else if(msg.t==='xa'){ const o=propModels[msg.i]; if(o&&o.userData.xa) o.userData.xa.dest=msg.dest?1:0; }   // a mechanism toggled somewhere
+      else if(msg.t==='unlock'){ const o=propModels[msg.i]; if(o) o.userData.unlocked=true; }   // someone used a key on this prop
   else if(msg.t==='pAdd'){ netApplyAddProp(msg.d); }    // host/other player added a prop
   else if(msg.t==='pDel'){ netApplyDelProp(msg.nid); }  // a prop was deleted
   else if(msg.t==='pMov'){ netApplyMovProp(msg.nid, msg.x); }   // a prop was moved/rotated/scaled
@@ -10035,7 +10075,9 @@ function checkProximity(){
       const w=W();
       prompt.innerHTML = `AMMO STATION — <b>E</b> Buy ${w.refillAmt} ${w.name} rounds &nbsp;·&nbsp; ◆${w.refillCost}`;
     } else if(nearTarget.type==='anim' || nearTarget.type==='xanim'){
-      prompt.innerHTML = `<b>E</b> Activate`;
+      const lo=nearTarget.obj, lk=lo&&lo.userData.lockId;
+      if(lk && !lo.userData.unlocked) prompt.innerHTML = playerKeys[lk] ? `<b>E</b> Unlock \u2014 ${lk.toUpperCase()} key` : `LOCKED \u2014 needs ${lk.toUpperCase()} key`;
+      else prompt.innerHTML = `<b>E</b> Activate`;
     } else {
       prompt.innerHTML = `SUPPLY CACHE — <b>E</b> Open`;
     }
@@ -10059,10 +10101,13 @@ function interact(){
     SFX.buy(); updateHUD();
   } else if(nearTarget.type==='anim'){
     const o = nearTarget.obj;
+    if(!tryUnlockProp(o)) return;   // locked and no key -> deny
     playPropAnimationOnce(o);
     const i = propModels.indexOf(o); if(i>=0) broadcastAnim(i);   // mirror it on every other player
   } else if(nearTarget.type==='xanim'){
-    const o = nearTarget.obj; xaToggle(o);
+    const o = nearTarget.obj;
+    if(!tryUnlockProp(o)) return;   // locked and no key -> deny
+    xaToggle(o);
     const i = propModels.indexOf(o); if(i>=0) broadcastXAnim(i);   // open/close it for everyone
   } else {
     openShop(nearTarget.chest);
@@ -10275,7 +10320,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 330 · 2026-06-12';
+const BUILD_VERSION = 'build 331 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13343,6 +13388,7 @@ function propEntry(o){
     }
   }
   const m=propMaterialDesc(o); if(m) e.mat=m;
+  if(o.userData.lockId){ e.lk=o.userData.lockId; if(o.userData.lockConsume) e.lkc=1; }
   if(o.userData.attribution) e.att=o.userData.attribution;
   if(o.userData.nid) e.nid=o.userData.nid;
   return e;
@@ -13605,7 +13651,7 @@ function restoreLevel(level){
   propModels.length = 0;
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }catch(e){ console.warn('prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('prop '+i+' failed to load', e); } });
+    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }catch(e){ console.warn('prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('prop '+i+' failed to load', e); } });
   }
   // lights
   for(let i=lightModels.length-1;i>=0;i--) removeLight(i);
@@ -14415,7 +14461,7 @@ function renderEditorFields(){
       const poSp=document.createElement('span'); poSp.textContent='Spawn pickups'; poLab.appendChild(poCb); poLab.appendChild(poSp); gHost.appendChild(poLab); }
     if(!pickupsOn){ hint(gHost,'','2px 0 6px').textContent='Pickups are off \u2014 no health/buff diamonds spawn (placed spots below are kept for when you turn this back on).'; }
     { const krow=document.createElement('div'); krow.className='row2'; krow.style.flexWrap='wrap';
-      const KINDS=[['health','+Health'],['ammo','+Ammo'],['rifle','Rifle'],['smg','SMG'],['shotgun','Shotgun'],['sniper','Sniper'],['launcher','Rocket'],['grenade','Grenade'],['damage','2x Dmg'],['speed','Speed'],['shield','Shield']];
+      const KINDS=[['health','+Health'],['ammo','+Ammo'],['rifle','Rifle'],['smg','SMG'],['shotgun','Shotgun'],['sniper','Sniper'],['launcher','Rocket'],['grenade','Grenade'],['damage','2x Dmg'],['speed','Speed'],['shield','Shield'],['key_red','Red Key'],['key_blue','Blue Key'],['key_gold','Gold Key'],['key_green','Green Key']];
       const ksel=document.createElement('select'); ksel.style.cssText='flex:1;min-width:90px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
       KINDS.forEach(k=>{ const o=document.createElement('option'); o.value=k[0]; o.textContent=k[1]; if(k[0]===newPickupKind) o.selected=true; ksel.appendChild(o); });
       ksel.onchange=()=>{ newPickupKind=ksel.value; renderEditorFields(); };
@@ -14749,6 +14795,23 @@ function renderEditorFields(){
         pair('Selected prop (has animation):', sel.userData.animMode||'loop',
           ()=>{ setPropAnimMode(sel,'loop'); renderEditorFields(); },
           ()=>{ setPropAnimMode(sel,'trigger'); renderEditorFields(); });
+      }
+      // ---- Lock: this prop's E-activation (triggered animation or mechanism) needs a key ----
+      if(sel){
+        const lr=document.createElement('div'); lr.style.cssText='display:flex;gap:6px;align-items:center;margin:8px 0 2px;font-size:11px;color:#9fe6cf;';
+        const lsp=document.createElement('span'); lsp.innerHTML='<b>Lock</b>'; lsp.style.minWidth='56px';
+        const lsel=document.createElement('select'); lsel.style.cssText='flex:1;font-size:11px;';
+        [['','None'],['red','Red key'],['blue','Blue key'],['gold','Gold key'],['green','Green key']].forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if((sel.userData.lockId||'')===o[0]) op.selected=true; lsel.appendChild(op); });
+        lsel.onchange=()=>{ pushUndoSnapshot(); if(lsel.value) sel.userData.lockId=lsel.value; else { delete sel.userData.lockId; delete sel.userData.lockConsume; } delete sel.userData.unlocked; renderEditorFields(); };
+        lr.appendChild(lsp); lr.appendChild(lsel); host.appendChild(lr);
+        if(sel.userData.lockId){
+          const cr=document.createElement('label'); cr.style.cssText='display:flex;gap:6px;align-items:center;margin:2px 0 2px;font-size:11px;color:#9fe6cf;';
+          const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!!sel.userData.lockConsume;
+          cb.onchange=()=>{ pushUndoSnapshot(); sel.userData.lockConsume=cb.checked; if(!cb.checked) delete sel.userData.lockConsume; };
+          const csp=document.createElement('span'); csp.textContent='Consume key on unlock';
+          cr.appendChild(cb); cr.appendChild(csp); host.appendChild(cr);
+          hint(host, 'Pressing E needs the '+sel.userData.lockId+' key (place a key pickup pad). Unlocks once per deploy, for everyone.', '0 0 4px');
+        }
       }
       // ---- Mechanism: move/rotate this object into a platform, door, elevator, etc. ----
       if(sel){
@@ -15908,7 +15971,7 @@ function startGame(){
   WEAPONS.smg.mag=40; WEAPONS.smg.reserve=120;
   WEAPONS.shotgun.mag=6; WEAPONS.shotgun.reserve=24;
   WEAPONS.sniper.mag=5; WEAPONS.sniper.reserve=20;
-  reloading=false; score=0; wave=1; credits=0; grenadeCount=0; runKills=0;
+  reloading=false; score=0; wave=1; credits=0; grenadeCount=0; runKills=0; playerKeys={}; if(typeof renderKeyChips==='function') renderKeyChips();
   if(typeof startObjective==='function') startObjective();   // reset survival timer for this run
   if(typeof disposePickupMarkers==='function') disposePickupMarkers();   // remove editor previews; the live (grabbable) pads are spawned next
   if(typeof disposeAudioZoneMarkers==='function') disposeAudioZoneMarkers(); if(typeof stopAudioZones==='function') stopAudioZones();   // hide zone rings + reset zone playback for a fresh run
