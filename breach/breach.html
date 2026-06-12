@@ -10376,7 +10376,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 354 · 2026-06-12';
+const BUILD_VERSION = 'build 355 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12388,6 +12388,21 @@ function updateCinematic(dt){
     if(_cineShots && _cineShotIdx < _cineShots.length-1){ _cineShotIdx++; _cineData=_cineShots[_cineShotIdx]; _cineT=0; }   // hard cut: next frame snaps to the new shot's first point/lens
     else endCinematic();
   }
+}
+// The instant 'is anything pending?' check at deploy misses loads whose chains begin a few frames later
+// (prop GLBs resolved in callbacks, proxied fetches, pickup/enemy model kicks). Poll the same counters the
+// loading screen uses; start the intro only after they've been quiet for a beat. Same 15s ceiling as the loader.
+function _startIntroWhenSettled(){
+  const t0=performance.now(); let zeroAt=0;
+  const tick=()=>{
+    if(editorOpen || !gameOn || _cineActive) return;   // editor entry / run end / something else already playing: stand down
+    const now=performance.now();
+    if(!_levelAssetsPending()){ if(!zeroAt) zeroAt=now; if(now-zeroAt>=300){ maybeStartIntroCine(); return; } }
+    else zeroAt=0;
+    if(now-t0>=15000){ maybeStartIntroCine(); return; }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
 }
 function maybeStartIntroCine(){ if(typeof editorOpen!=='undefined' && editorOpen) return;   // entering/being in the editor is authoring, not a deploy
   if(cineCfg.on && cineHasData()) startCinematic({ shots: cineAllShots() }, false); }
@@ -16347,7 +16362,7 @@ function startGame(){
   if(typeof buildPhysWorld==='function') buildPhysWorld();   // build a FRESH physics world for this level every match — never inherit a stale one from a previous session (fixes the client free-fly when no assets were pending, so the loader/reveal never rebuilt it)
   if(typeof maybeStartIntroCine==='function'){   // optional authored intro flythrough (no-op if disabled / no path)
     if(_levelLoaderActive) _cineIntroPending = true;   // defer: starting now would play the cutscene AUDIO behind the loading screen (the loop freezes the shot but the track is already running) and frame a half-loaded scene
-    else maybeStartIntroCine();
+    else _startIntroWhenSettled();   // no loader is up, but loads can still START a few frames from now (async model chains, prewarms) — wait for the counters to go quiet
   }
   tryPointerLock();
 }
