@@ -10323,7 +10323,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 335 · 2026-06-12';
+const BUILD_VERSION = 'build 338 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13117,7 +13117,7 @@ let editorActive = 'gun';
 // sees a handful of relevant controls instead of the whole panel at once. Each target/section lives in
 // exactly one mode. (Purely a visibility layer — every panel's editing logic is unchanged.)
 const EDITOR_MODES = ['build','scene','enemies','rules','kit','files'];
-const MODE_LABEL = { build:'Build', scene:'Scene', enemies:'Enemies', rules:'Rules', kit:'Weapons', files:'Save' };
+const MODE_LABEL = { build:'Build', scene:'World', enemies:'Enemies', rules:'Gameplay', kit:'Weapons', files:'Save' };   // user-facing names; internal mode keys unchanged so saved prefs/tests keep working
 const MODE_COLOR = { build:'#38f5b5', scene:'#5db4ff', enemies:'#ff6b8a', rules:'#ffd166', kit:'#ff9b5b', files:'#b69cff' };   // per-mode accent so the buttons read as distinct sections
 function _hexRgba(hex,a){ const nn=parseInt(hex.replace('#',''),16); return 'rgba('+((nn>>16)&255)+','+((nn>>8)&255)+','+(nn&255)+','+a+')'; }
 const SHOW_MODEL_LIBRARY = false;   // hardcoded model-library chips hidden for now (to be rebuilt); flip true to restore
@@ -14126,8 +14126,27 @@ function buildEditorPanel(){
   setEditorMode(editorMode);   // apply mode visibility + render (replaces the bare initial render)
 }
 
+// Collapsible sub-group inside an editor section. Header line with caret; body holds the rows.
+// Open/closed is remembered per id in localStorage (default collapsed — these are the heavy groups).
+let _edFolds = {}; try{ _edFolds = JSON.parse(localStorage.getItem('breach_editor_folds')||'{}')||{}; }catch(e){}
+function edFold(host, id, titleHtml, openDefault){
+  const open = (_edFolds[id]!=null) ? !_edFolds[id] : !!openDefault;   // stored value = collapsed
+  const head=document.createElement('div'); head.className='hint';
+  head.style.cssText='margin:10px 0 3px;cursor:pointer;user-select:none;';
+  head.innerHTML='<span style="display:inline-block;width:12px;">'+(open?'\u25be':'\u25b8')+'</span>'+titleHtml;
+  const body=document.createElement('div'); body.style.display = open ? '' : 'none';
+  head.onclick=()=>{ const vis = body.style.display!=='none';
+    body.style.display = vis ? 'none' : ''; head.firstChild.textContent = vis ? '\u25b8' : '\u25be';
+    _edFolds[id]=vis; try{ localStorage.setItem('breach_editor_folds', JSON.stringify(_edFolds)); }catch(e){} };
+  host.appendChild(head); host.appendChild(body);
+  return body;
+}
 function renderEditorFields(){
   if(!editorEl) return;
+  // The wholesale rebuild below resets the panel's scroll position on every change; restore it once
+  // this pass (whichever return path it takes) has finished, before the next paint.
+  const _edScroll = editorEl.scrollTop;
+  queueMicrotask(()=>{ try{ if(editorEl) editorEl.scrollTop = _edScroll; }catch(e){} });
   if(spawnRouteEdit && (editorActive!=='spawns' || editorTargets.spawns.obj()!==spawnRouteEdit || spawnRouteEdit.userData.mark.mode!=='patrol')) spawnRouteEdit=null;   // route placement only while its patrol spawn stays selected
   editorEl.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.key===editorActive));
   const tgt = editorTargets[editorActive];
@@ -14833,49 +14852,48 @@ function renderEditorFields(){
       if(sel){
         if(!sel.userData.xa) sel.userData.xa = { on:false, mode:'loop', trig:'auto', mx:0,my:0,mz:0, rx:0,ry:0,rz:0, dur:2 };
         const xa=sel.userData.xa;
-        const xhead=document.createElement('div'); xhead.className='hint'; xhead.style.margin='10px 0 3px'; xhead.innerHTML='<b>Mechanism</b> \u2014 move / rotate this object (platforms, doors, elevators)';
-        animHost.appendChild(xhead);
+        const xBody = edFold(animHost, 'mech', '<b>Mechanism</b> \u2014 move / rotate this object (platforms, doors, elevators)');
         const xon=document.createElement('label'); xon.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;cursor:pointer;';
         const xcb=document.createElement('input'); xcb.type='checkbox'; xcb.checked=!!xa.on; xcb.style.accentColor='#7ad7ff';
         xcb.onchange=()=>{ pushUndoSnapshot(); xa.on=xcb.checked; renderEditorFields(); };
         const xsp=document.createElement('span'); xsp.innerHTML='<b>Animated mechanism</b>';
-        xon.appendChild(xcb); xon.appendChild(xsp); animHost.appendChild(xon);
+        xon.appendChild(xcb); xon.appendChild(xsp); xBody.appendChild(xon);
         if(xa.on){
-          const num=(label,key,min,max,step)=>{ const l=document.createElement('label'); l.style.cssText='display:flex;align-items:center;gap:7px;color:#bfe6ff;font-size:12px;margin-top:5px;'; const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='90px'; const ni=document.createElement('input'); ni.type='number'; ni.min=min; ni.max=max; ni.step=step; ni.value=xa[key]||0; ni.style.cssText='width:74px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;'; ni.addEventListener('focus',()=>pushUndoSnapshot()); ni.onchange=()=>{ xa[key]=parseFloat(ni.value)||0; }; l.appendChild(sp); l.appendChild(ni); animHost.appendChild(l); };
+          const num=(label,key,min,max,step)=>{ const l=document.createElement('label'); l.style.cssText='display:flex;align-items:center;gap:7px;color:#bfe6ff;font-size:12px;margin-top:5px;'; const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='90px'; const ni=document.createElement('input'); ni.type='number'; ni.min=min; ni.max=max; ni.step=step; ni.value=xa[key]||0; ni.style.cssText='width:74px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;'; ni.addEventListener('focus',()=>pushUndoSnapshot()); ni.onchange=()=>{ xa[key]=parseFloat(ni.value)||0; }; l.appendChild(sp); l.appendChild(ni); xBody.appendChild(l); };
           num('Move X (m)','mx',-200,200,0.1); num('Move Y (m)','my',-200,200,0.1); num('Move Z (m)','mz',-200,200,0.1);
           num('Rotate X (\u00b0)','rx',-3600,3600,5); num('Rotate Y (\u00b0)','ry',-3600,3600,5); num('Rotate Z (\u00b0)','rz',-3600,3600,5);
           num('Duration (s)','dur',0.1,60,0.1);
-          const seg=(label,key,opts)=>{ const h=document.createElement('div'); h.className='hint'; h.style.margin='6px 0 2px'; h.textContent=label; animHost.appendChild(h); const row=document.createElement('div'); row.className='row2'; opts.forEach(o=>{ const b=document.createElement('button'); b.textContent=o[1]; if((xa[key]||opts[0][0])===o[0]){ b.style.background='rgba(122,215,255,0.28)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); xa[key]=o[0]; renderEditorFields(); }; row.appendChild(b); }); animHost.appendChild(row); };
+          const seg=(label,key,opts)=>{ const h=document.createElement('div'); h.className='hint'; h.style.margin='6px 0 2px'; h.textContent=label; xBody.appendChild(h); const row=document.createElement('div'); row.className='row2'; opts.forEach(o=>{ const b=document.createElement('button'); b.textContent=o[1]; if((xa[key]||opts[0][0])===o[0]){ b.style.background='rgba(122,215,255,0.28)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); xa[key]=o[0]; renderEditorFields(); }; row.appendChild(b); }); xBody.appendChild(row); };
           seg('Playback','mode',[['loop','\u27f3 Loop'],['pingpong','\u21c4 Ping-pong'],['once','\u2192 Once']]);
           seg('Trigger','trig',[['auto','Auto'],['interact','E Activate']]);
           // ---- Waypoint path: prop travels through a series of points (ping-pong by default) ----
-          { const ph2=document.createElement('div'); ph2.className='hint'; ph2.style.margin='8px 0 2px'; ph2.innerHTML='<b>Waypoint path</b> \u2014 travels through points (overrides Move offset)'; animHost.appendChild(ph2);
+          { const wpBody = edFold(animHost, 'waypath', '<b>Waypoint path</b> \u2014 travels through points (overrides Move offset)');
             xa.path = xa.path || [];
             const addB=document.createElement('button'); addB.textContent='+ Add waypoint (current spot)'; addB.style.cssText='width:100%;padding:5px;font-size:12px;margin:2px 0;';
             addB.onclick=()=>{ pushUndoSnapshot(); xa.path.push([+sel.position.x.toFixed(3), +sel.position.y.toFixed(3), +sel.position.z.toFixed(3)]); if(xa.path.length===1 && xa.mode==='loop') xa.mode='pingpong'; renderEditorFields(); };
-            animHost.appendChild(addB);
+            wpBody.appendChild(addB);
             xa.path.forEach((wp,i)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;align-items:center;gap:6px;color:#bfe6ff;font-size:11px;margin:1px 0;';
               const lab=document.createElement('span'); lab.textContent=(i+1)+'. '+wp.map(v=>(+v).toFixed(1)).join(', '); lab.style.flex='1';
               const go=document.createElement('button'); go.textContent='Move here'; go.style.cssText='padding:1px 6px;font-size:10px;'; go.onclick=()=>{ pushUndoSnapshot(); sel.position.set(wp[0],wp[1],wp[2]); sel.updateMatrixWorld(true); if(colliders.indexOf(sel)>=0||sel.userData.box) refreshPropCollider(sel); if(typeof syncPropStateFromObj==='function') syncPropStateFromObj(); renderEditorFields(); };
               const del=document.createElement('button'); del.textContent='\u2715'; del.style.cssText='padding:1px 7px;font-size:10px;'; del.onclick=()=>{ pushUndoSnapshot(); xa.path.splice(i,1); renderEditorFields(); };
-              r.appendChild(lab); r.appendChild(go); r.appendChild(del); animHost.appendChild(r); });
-            if(xa.path.length){ const clr=document.createElement('button'); clr.textContent='Clear path'; clr.style.cssText='padding:3px 10px;font-size:11px;margin:3px 0;'; clr.onclick=()=>{ pushUndoSnapshot(); xa.path.length=0; renderEditorFields(); }; animHost.appendChild(clr);
-              const pn=document.createElement('div'); pn.className='hint'; pn.style.marginTop='2px'; pn.textContent='Move the prop and Add a waypoint to trace the route (2+ points). Playback above sets repeat (Ping-pong reverses at the ends, Loop joins end\u2192start); Duration is one-way travel time. Deploy to test.'; animHost.appendChild(pn); }
+              r.appendChild(lab); r.appendChild(go); r.appendChild(del); wpBody.appendChild(r); });
+            if(xa.path.length){ const clr=document.createElement('button'); clr.textContent='Clear path'; clr.style.cssText='padding:3px 10px;font-size:11px;margin:3px 0;'; clr.onclick=()=>{ pushUndoSnapshot(); xa.path.length=0; renderEditorFields(); }; wpBody.appendChild(clr);
+              const pn=document.createElement('div'); pn.className='hint'; pn.style.marginTop='2px'; pn.textContent='Move the prop and Add a waypoint to trace the route (2+ points). Playback above sets repeat (Ping-pong reverses at the ends, Loop joins end\u2192start); Duration is one-way travel time. Deploy to test.'; wpBody.appendChild(pn); }
           }
           const xn=document.createElement('div'); xn.className='hint'; xn.style.marginTop='4px'; xn.textContent='Travels from its current spot by the offset above. Players ride moving platforms and are blocked by closed doors. Deploy to test; E-activate toggles open/close (Once locks open).';
-          animHost.appendChild(xn);
+          xBody.appendChild(xn);   // mechanism-level note — lives outside the waypoint block's scope
         }
       }
       refreshPathPreview();   // keep the waypoint markers in sync with the selection / edits
       // physics toggle (selected prop)
       if(sel){
         const phead=document.createElement('div'); phead.className='hint'; phead.style.margin='8px 0 3px'; phead.innerHTML='<b>Physics</b> — dynamic objects fall, tumble, stack & react to shots';
-        animHost.appendChild(phead);
+        const pdBody = edFold(animHost, 'physdest', '<b>Physics & destruction</b> \u2014 dynamic, grabbable, breakable, explosive, debris');
         const plab=document.createElement('label'); plab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;cursor:pointer;';
         const pcb=document.createElement('input'); pcb.type='checkbox'; pcb.checked=!!sel.userData.phys; pcb.style.accentColor='#38f5b5';
         pcb.onchange=()=>{ pushUndoSnapshot(); setPropDynamic(sel, pcb.checked); renderEditorFields(); };
         const pspan=document.createElement('span'); pspan.textContent='Dynamic (reacts to physics)';
-        plab.appendChild(pcb); plab.appendChild(pspan); animHost.appendChild(plab);
+        plab.appendChild(pcb); plab.appendChild(pspan); pdBody.appendChild(plab);
         if(sel.userData.phys){
           // Weight (mass): higher = harder to knock around
           if(sel.userData.mass==null) sel.userData.mass = defaultMassFor(sel);
@@ -14886,19 +14904,19 @@ function renderEditorFields(){
           const applyW=(v)=>{ const m=Math.max(0.05,Math.min(200, parseFloat(v)||1)); wrange.value=Math.min(50,Math.max(0.2,m)); wnum.value=m; setPropMass(sel, m); };
           wrange.oninput=()=>applyW(wrange.value); wnum.onchange=()=>applyW(wnum.value);
           wrange.addEventListener('mousedown', ()=>pushUndoSnapshot()); wnum.addEventListener('focus', ()=>pushUndoSnapshot());
-          wlab.appendChild(wspan); wlab.appendChild(wrange); wlab.appendChild(wnum); animHost.appendChild(wlab);
+          wlab.appendChild(wspan); wlab.appendChild(wrange); wlab.appendChild(wnum); pdBody.appendChild(wlab);
           const note=document.createElement('div'); note.className='hint'; note.style.marginTop='3px';
           note.textContent = PHYS_OK
             ? 'Falls, tumbles, stacks on the floor / ramps / crate tops; heavier = harder to knock. Resets to here on Deploy.'
             : 'Physics engine not loaded — host this file over http(s) to enable (file:// blocks it). Marked dynamic; will simulate once hosted.';
-          animHost.appendChild(note);
+          pdBody.appendChild(note);
 
           // Grabbable: can the gravity gun pick this prop up, carry and throw it?
           const grb=document.createElement('label'); grb.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin-top:8px;cursor:pointer;';
           const grbcb=document.createElement('input'); grbcb.type='checkbox'; grbcb.checked=(sel.userData.noGrab!==true); grbcb.style.accentColor='#38f5b5';
           grbcb.onchange=()=>{ pushUndoSnapshot(); sel.userData.noGrab = !grbcb.checked; };
           const grbsp=document.createElement('span'); grbsp.innerHTML='<b>Grabbable</b> \u2014 can be picked up &amp; thrown';
-          grb.appendChild(grbcb); grb.appendChild(grbsp); animHost.appendChild(grb);
+          grb.appendChild(grbcb); grb.appendChild(grbsp); pdBody.appendChild(grb);
 
           // Destructible: take damage from shots and shatter into debris at 0 HP
           if(sel.userData.breakable==null) sel.userData.breakable = true;
@@ -14907,19 +14925,19 @@ function renderEditorFields(){
           const brkcb=document.createElement('input'); brkcb.type='checkbox'; brkcb.checked=(sel.userData.breakable!==false); brkcb.style.accentColor='#ff8a5b';
           brkcb.onchange=()=>{ pushUndoSnapshot(); sel.userData.breakable=brkcb.checked; renderEditorFields(); };
           const brksp=document.createElement('span'); brksp.innerHTML='<b>Breakable</b> — shatters when shot';
-          brk.appendChild(brkcb); brk.appendChild(brksp); animHost.appendChild(brk);
+          brk.appendChild(brkcb); brk.appendChild(brksp); pdBody.appendChild(brk);
           if(sel.userData.breakable!==false){
             const objl=document.createElement('label'); objl.style.cssText='display:flex;align-items:center;gap:7px;color:#ff9bb0;font-size:12px;margin-top:8px;cursor:pointer;';
             const objcb=document.createElement('input'); objcb.type='checkbox'; objcb.checked=!!sel.userData.objective; objcb.style.accentColor='#ff5b6b';
             objcb.onchange=()=>{ pushUndoSnapshot(); sel.userData.objective=objcb.checked; };
             const objsp=document.createElement('span'); objsp.innerHTML='<b>\ud83c\udfaf Objective target</b> \u2014 must be destroyed to win a Destroy mission';
-            objl.appendChild(objcb); objl.appendChild(objsp); animHost.appendChild(objl);
+            objl.appendChild(objcb); objl.appendChild(objsp); pdBody.appendChild(objl);
             // ---- Explosive: detonate (blast fx + grenade-style AoE) when destroyed (propane / gas cans) ----
             const ex=document.createElement('label'); ex.style.cssText='display:flex;align-items:center;gap:7px;color:#ffb38a;font-size:12px;margin-top:8px;cursor:pointer;';
             const excb=document.createElement('input'); excb.type='checkbox'; excb.checked=!!sel.userData.explosive; excb.style.accentColor='#ff6b3a';
             excb.onchange=()=>{ pushUndoSnapshot(); sel.userData.explosive=excb.checked; if(excb.checked){ if(sel.userData.blastRadius==null) sel.userData.blastRadius=7; if(sel.userData.blastDmg==null) sel.userData.blastDmg=70; if(sel.userData.impactVel==null) sel.userData.impactVel=10; } renderEditorFields(); };
             const exsp=document.createElement('span'); exsp.innerHTML='<b>\ud83d\udca5 Explosive</b> \u2014 detonates when destroyed or on hard impact';
-            ex.appendChild(excb); ex.appendChild(exsp); animHost.appendChild(ex);
+            ex.appendChild(excb); ex.appendChild(exsp); pdBody.appendChild(ex);
             if(sel.userData.explosive){
               const mkSlider=(label,min,max,step,val,fmt,set)=>{
                 const l=document.createElement('label'); l.style.cssText='display:flex;align-items:center;gap:7px;color:#ffb38a;font-size:12px;margin-top:6px;';
@@ -14927,13 +14945,13 @@ function renderEditorFields(){
                 const r=document.createElement('input'); r.type='range'; r.min=min; r.max=max; r.step=step; r.value=val; r.style.cssText='flex:1;accent-color:#ff6b3a;';
                 const v=document.createElement('span'); v.textContent=fmt(val); v.style.cssText='min-width:42px;text-align:right;color:#cfeee2;font-size:12px;';
                 r.addEventListener('mousedown',()=>pushUndoSnapshot()); r.oninput=()=>{ const m=parseFloat(r.value); v.textContent=fmt(m); set(m); };
-                l.appendChild(sp); l.appendChild(r); l.appendChild(v); animHost.appendChild(l);
+                l.appendChild(sp); l.appendChild(r); l.appendChild(v); pdBody.appendChild(l);
               };
               mkSlider('Radius',2,20,0.5,(sel.userData.blastRadius!=null?sel.userData.blastRadius:7),(m)=>m+'m',(m)=>sel.userData.blastRadius=m);
               mkSlider('Damage',10,200,5,(sel.userData.blastDmg!=null?sel.userData.blastDmg:70),(m)=>String(Math.round(m)),(m)=>sel.userData.blastDmg=m);
               mkSlider('Impact',0,30,1,(sel.userData.impactVel!=null?sel.userData.impactVel:10),(m)=>m>0?(m+' m/s'):'off',(m)=>sel.userData.impactVel=m);
               const exn=document.createElement('div'); exn.className='hint'; exn.style.marginTop='3px'; exn.textContent='Shoot it, or slam it into something above the Impact speed, to blow it (Impact 0 = shoot-only): flipbook blast + falloff damage to everyone in range (you too). Chain-reacts nearby explosives.';
-              animHost.appendChild(exn);
+              pdBody.appendChild(exn);
             }
             const hlab=document.createElement('label'); hlab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin-top:6px;';
             const hsp=document.createElement('span'); hsp.textContent='Health'; hsp.style.minWidth='44px';
@@ -14942,7 +14960,7 @@ function renderEditorFields(){
             const applyH=(v)=>{ const m=Math.max(1,Math.min(2000,parseInt(v,10)||30)); hr.value=Math.min(300,Math.max(5,m)); hn.value=m; sel.userData.maxHp=m; sel.userData.hp=m; };
             hr.oninput=()=>applyH(hr.value); hn.onchange=()=>applyH(hn.value);
             hr.addEventListener('mousedown', ()=>pushUndoSnapshot()); hn.addEventListener('focus', ()=>pushUndoSnapshot());
-            hlab.appendChild(hsp); hlab.appendChild(hr); hlab.appendChild(hn); animHost.appendChild(hlab);
+            hlab.appendChild(hsp); hlab.appendChild(hr); hlab.appendChild(hn); pdBody.appendChild(hlab);
             // break style: shatter into debris, or a light puff + despawn
             if(sel.userData.breakStyle==null) sel.userData.breakStyle = 'shatter';
             const stRow=document.createElement('div'); stRow.className='row2'; stRow.style.margin='6px 0 0';
@@ -14952,9 +14970,9 @@ function renderEditorFields(){
             if(sel.userData.breakStyle==='puff') hiB(puB); else hiB(shB);
             shB.onclick=()=>{ pushUndoSnapshot(); sel.userData.breakStyle='shatter'; renderEditorFields(); };
             puB.onclick=()=>{ pushUndoSnapshot(); sel.userData.breakStyle='puff'; renderEditorFields(); };
-            stRow.appendChild(shB); stRow.appendChild(puB); animHost.appendChild(stRow);
+            stRow.appendChild(shB); stRow.appendChild(puB); pdBody.appendChild(stRow);
             const bnote=document.createElement('div'); bnote.className='hint'; bnote.style.marginTop='3px'; bnote.textContent='Shatter = physics debris. Puff = quick burst + vanish (cheaper). Higher HP = more shots to break. Health refills on Deploy.';
-            animHost.appendChild(bnote);
+            pdBody.appendChild(bnote);
             // ---- Debris controls (count / size / shape) — only meaningful for the shatter style ----
             if(sel.userData.breakStyle!=='puff'){
               sel.updateMatrixWorld(true);
@@ -14968,7 +14986,7 @@ function renderEditorFields(){
               const applyPc=(v)=>{ const m=Math.max(3,Math.min(90,parseInt(v,10)||_auto)); pcR.value=Math.min(40,m); pcN.value=m; sel.userData.fragCount=m; };
               pcR.oninput=()=>applyPc(pcR.value); pcN.onchange=()=>applyPc(pcN.value);
               pcR.addEventListener('mousedown',()=>pushUndoSnapshot()); pcN.addEventListener('focus',()=>pushUndoSnapshot());
-              pcLab.appendChild(pcSp); pcLab.appendChild(pcR); pcLab.appendChild(pcN); animHost.appendChild(pcLab);
+              pcLab.appendChild(pcSp); pcLab.appendChild(pcR); pcLab.appendChild(pcN); pdBody.appendChild(pcLab);
               // Piece size (% of the prop's largest dimension)
               const szLab=document.createElement('label'); szLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin-top:6px;';
               const szSp=document.createElement('span'); szSp.textContent='Size'; szSp.style.minWidth='44px';
@@ -14976,7 +14994,7 @@ function renderEditorFields(){
               const szV=document.createElement('span'); szV.textContent=szR.value+'%'; szV.style.cssText='min-width:38px;text-align:right;color:#cfeee2;font-size:12px;';
               const applySz=(v)=>{ const m=Math.max(6,Math.min(30,parseInt(v,10)||16)); szR.value=m; szV.textContent=m+'%'; sel.userData.fragSize=m/100; };
               szR.addEventListener('mousedown',()=>pushUndoSnapshot()); szR.oninput=()=>applySz(szR.value);
-              szLab.appendChild(szSp); szLab.appendChild(szR); szLab.appendChild(szV); animHost.appendChild(szLab);
+              szLab.appendChild(szSp); szLab.appendChild(szR); szLab.appendChild(szV); pdBody.appendChild(szLab);
               // Shape: jagged shards (default) or clean cubes
               if(sel.userData.debrisShape==null) sel.userData.debrisShape='shards';
               const shRow=document.createElement('div'); shRow.className='row2'; shRow.style.margin='6px 0 0';
@@ -14986,9 +15004,9 @@ function renderEditorFields(){
               if(sel.userData.debrisShape==='cubes') hi2(cbB); else hi2(sdB);
               sdB.onclick=()=>{ pushUndoSnapshot(); sel.userData.debrisShape='shards'; renderEditorFields(); };
               cbB.onclick=()=>{ pushUndoSnapshot(); sel.userData.debrisShape='cubes'; renderEditorFields(); };
-              shRow.appendChild(sdB); shRow.appendChild(cbB); animHost.appendChild(shRow);
+              shRow.appendChild(sdB); shRow.appendChild(cbB); pdBody.appendChild(shRow);
               const snote=document.createElement('div'); snote.className='hint'; snote.style.marginTop='3px'; snote.textContent='Pieces = fragment count. Size = each piece as a % of the prop (capped so debris never looks bigger than the prop). Shards = jagged; Cubes = clean blocks.';
-              animHost.appendChild(snote);
+              pdBody.appendChild(snote);
             }
           }
         }
