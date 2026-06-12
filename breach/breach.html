@@ -10320,7 +10320,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 332 · 2026-06-12';
+const BUILD_VERSION = 'build 333 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14810,7 +14810,10 @@ function renderEditorFields(){
           cb.onchange=()=>{ pushUndoSnapshot(); sel.userData.lockConsume=cb.checked; if(!cb.checked) delete sel.userData.lockConsume; };
           const csp=document.createElement('span'); csp.textContent='Consume key on unlock';
           cr.appendChild(cb); cr.appendChild(csp); animHost.appendChild(cr);
-          hint(animHost, 'Pressing E needs the '+sel.userData.lockId+' key (place a key pickup pad). Unlocks once per deploy, for everyone.', '0 0 4px');
+          // inline hint: the `hint` helper is const-scoped to the world-settings block, not visible here
+          const lh=document.createElement('div'); lh.className='hint'; lh.style.margin='0 0 4px';
+          lh.textContent='Pressing E needs the '+sel.userData.lockId+' key (place a key pickup pad). Unlocks once per deploy, for everyone.';
+          animHost.appendChild(lh);
         }
       }
       // ---- Mechanism: move/rotate this object into a platform, door, elevator, etc. ----
