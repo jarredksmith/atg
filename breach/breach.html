@@ -10320,7 +10320,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 331 · 2026-06-12';
+const BUILD_VERSION = 'build 332 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14803,14 +14803,14 @@ function renderEditorFields(){
         const lsel=document.createElement('select'); lsel.style.cssText='flex:1;font-size:11px;';
         [['','None'],['red','Red key'],['blue','Blue key'],['gold','Gold key'],['green','Green key']].forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if((sel.userData.lockId||'')===o[0]) op.selected=true; lsel.appendChild(op); });
         lsel.onchange=()=>{ pushUndoSnapshot(); if(lsel.value) sel.userData.lockId=lsel.value; else { delete sel.userData.lockId; delete sel.userData.lockConsume; } delete sel.userData.unlocked; renderEditorFields(); };
-        lr.appendChild(lsp); lr.appendChild(lsel); host.appendChild(lr);
+        lr.appendChild(lsp); lr.appendChild(lsel); animHost.appendChild(lr);
         if(sel.userData.lockId){
           const cr=document.createElement('label'); cr.style.cssText='display:flex;gap:6px;align-items:center;margin:2px 0 2px;font-size:11px;color:#9fe6cf;';
           const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!!sel.userData.lockConsume;
           cb.onchange=()=>{ pushUndoSnapshot(); sel.userData.lockConsume=cb.checked; if(!cb.checked) delete sel.userData.lockConsume; };
           const csp=document.createElement('span'); csp.textContent='Consume key on unlock';
-          cr.appendChild(cb); cr.appendChild(csp); host.appendChild(cr);
-          hint(host, 'Pressing E needs the '+sel.userData.lockId+' key (place a key pickup pad). Unlocks once per deploy, for everyone.', '0 0 4px');
+          cr.appendChild(cb); cr.appendChild(csp); animHost.appendChild(cr);
+          hint(animHost, 'Pressing E needs the '+sel.userData.lockId+' key (place a key pickup pad). Unlocks once per deploy, for everyone.', '0 0 4px');
         }
       }
       // ---- Mechanism: move/rotate this object into a platform, door, elevator, etc. ----
