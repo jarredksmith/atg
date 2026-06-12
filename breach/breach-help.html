@@ -71,7 +71,7 @@
 <div class="wrap">
 <nav>
   <p class="brand">BREACH</p>
-  <p class="build">FIELD MANUAL &middot; BUILD 345</p>
+  <p class="build">FIELD MANUAL &middot; BUILD 348</p>
   <div class="grp">PLAY</div>
   <a href="#quickstart">Quick start</a>
   <a href="#controls">Controls</a>
@@ -189,7 +189,7 @@
   <p>Any prop can become a <b>mechanism</b> — a door, platform, or elevator. Open the Mechanism bar on a selected prop and give it a move offset and/or rotation, a duration, a mode, and a trigger:</p>
   <ul>
     <li><b>Mode</b> — Loop (back and forth forever), or <b>Once</b> (travels and locks at the destination; a fired Once stops offering its <kbd>E</kbd> prompt).</li>
-    <li><b>Trigger</b> — Auto (always running) or <b>E&nbsp;Activate</b> (a player toggles it).</li>
+    <li><b>Trigger</b> — Auto (always running), <b>E&nbsp;Activate</b> (a player toggles it), or <b>Signals&nbsp;only</b> (never autoplays, shows no prompt, and can&rsquo;t be E&rsquo;d — it moves exclusively when a signal drives it; tag it so signals can find it).</li>
     <li><b>Waypoint path</b> — instead of a single offset, trace a route: move yourself, add waypoints, and the prop ping-pongs through them. Players ride moving platforms.</li>
   </ul>
   <p>Mechanism state is mirrored to every player in multiplayer — one person opens the door, everyone sees it open.</p>
@@ -223,7 +223,7 @@
     <li><b>Needs N</b> — set on the <i>target</i>: it absorbs signals until N have arrived, then reacts. This is the &ldquo;all of them&rdquo; gate.</li>
   </ul>
   <h3>Worked example — the three generators</h3>
-  <div class="step"><div class="n">1</div><div>Build a vault door as a Once mechanism. Tag it <code>vault</code>. Set <b>Needs 3</b>.</div></div>
+  <div class="step"><div class="n">1</div><div>Build a vault door as a Once mechanism with trigger <b>Signals only</b> (so players can&rsquo;t just walk up and E it). Tag it <code>vault</code>. Set <b>Needs 3</b>.</div></div>
   <div class="step"><div class="n">2</div><div>Place three breakable generator props. Give each one signal: <b>On destroyed → Open → vault</b>.</div></div>
   <div class="step"><div class="n">3</div><div>Optional finish: an exit prop inside with <b>On E → Win level</b>.</div></div>
   <p>Mix sources freely — two destroyed crates plus a lever pull sum toward the same Needs counter. Counters reset every deploy.</p>
@@ -278,7 +278,7 @@
   </table>
 </div></details>
 
-<footer>BREACH FIELD MANUAL &middot; MATCHES BUILD 345 &middot; SECTIONS COLLAPSE LIKE THE EDITOR — THAT&rsquo;S ON PURPOSE</footer>
+<footer>BREACH FIELD MANUAL &middot; MATCHES BUILD 348 &middot; SECTIONS COLLAPSE LIKE THE EDITOR — THAT&rsquo;S ON PURPOSE</footer>
 </main>
 </div>
 </body>
