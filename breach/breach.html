@@ -6403,11 +6403,11 @@ function tryUnlockProp(o){
   if(playerKeys[lk]){
     o.userData.unlocked = true;
     if(o.userData.lockConsume){ delete playerKeys[lk]; renderKeyChips(); }
-    flashToast(lk.toUpperCase()+' KEY USED'); if(SFX.buy) SFX.buy();
+    flashToast(keyDisplayName(lk).toUpperCase()+' USED'); if(SFX.buy) SFX.buy();
     const i = propModels.indexOf(o); if(i>=0) broadcastUnlock(i);
     return true;
   }
-  flashToast('LOCKED \u2014 NEEDS '+lk.toUpperCase()+' KEY'); if(SFX.deny) SFX.deny();
+  flashToast('LOCKED \u2014 NEEDS '+keyDisplayName(lk).toUpperCase()); if(SFX.deny) SFX.deny();
   return false;
 }
 function broadcastUnlock(i){
@@ -8286,7 +8286,7 @@ function renderKeyChips(){
     hud.appendChild(host); }
   host.innerHTML='';
   for(const k in playerKeys){ const pk=POWERUP_KINDS['key_'+k]; const c='#'+((pk?pk.c:0xffffff)).toString(16).padStart(6,'0');
-    const ch=document.createElement('div'); ch.textContent=k.toUpperCase();
+    const ch=document.createElement('div'); ch.textContent=keyDisplayName(k).toUpperCase(); ch.style.maxWidth='130px'; ch.style.overflow='hidden'; ch.style.textOverflow='ellipsis'; ch.style.whiteSpace='nowrap';
     ch.style.cssText='font:700 9px/1 ui-monospace,monospace;letter-spacing:1px;color:#06110d;background:'+c+';border-radius:4px;padding:4px 6px;box-shadow:0 0 8px '+c+'66;';
     host.appendChild(ch); }
 }
@@ -8302,6 +8302,8 @@ let audioZoneMarkers = []; const _zoneRT = [];   // editor ring markers + per-zo
 let newPickupKind = 'health';
 let pickupsOn = !(savedLevel && savedLevel.pickupsOn === false);   // off => no pickups at all (not even the default fallback set)
 let pickupModels = (savedLevel && savedLevel.pickupModels && typeof savedLevel.pickupModels==='object') ? JSON.parse(JSON.stringify(savedLevel.pickupModels)) : {};   // kind -> {url, scale}: custom model in place of the floating icon
+let keyNames = (savedLevel && savedLevel.keyNames && typeof savedLevel.keyNames==='object') ? JSON.parse(JSON.stringify(savedLevel.keyNames)) : {};   // color -> custom display name ('Engine Room Keycard'); ring/lock ids stay colors
+function keyDisplayName(color){ const n=keyNames[color]; return (n && String(n).trim()) ? String(n).trim() : color.toUpperCase()+' KEY'; }
 let pickupMarkers = [];
 function refreshPickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m); } pickupMarkers.length=0;
   if(typeof pickupsOn!=='undefined' && !pickupsOn) return;   // pickups disabled: no editor markers
@@ -8413,7 +8415,7 @@ function applyPowerupLocal(kind){
   else if(kind==='grenade'){ grenadeCount += 1; updateHUD(); if(SFX.pickup) SFX.pickup(); }
   else if(POWERUP_KINDS[kind] && POWERUP_KINDS[kind].key){ playerKeys[POWERUP_KINDS[kind].key]=true; renderKeyChips(); if(SFX.pickup) SFX.pickup(); }
   else if(WEAPONS[kind]){ giveWeapon(kind); updateHUD(); if(SFX.pickup) SFX.pickup(); }
-  const k = POWERUP_KINDS[kind]; if(k) flashToast(k.label);
+  const k = POWERUP_KINDS[kind]; if(k) flashToast(k.key ? keyDisplayName(k.key).toUpperCase() : k.label);
 }
 function grantPowerup(playerEntry, kind){
   if(playerEntry.id===NET.myId) applyPowerupLocal(kind);
@@ -8846,7 +8848,7 @@ function loadLevelFromNet(level){
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns) buildSpawnMarker(sp); } setSpawnMarkersVisible(editorOpen);
   pickupsOn = (level.pickupsOn !== false);
-  pickupSpots = Array.isArray(level.pickups) ? level.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : []; pickupModels = (level.pickupModels && typeof level.pickupModels==='object') ? JSON.parse(JSON.stringify(level.pickupModels)) : {}; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
+  pickupSpots = Array.isArray(level.pickups) ? level.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : []; pickupModels = (level.pickupModels && typeof level.pickupModels==='object') ? JSON.parse(JSON.stringify(level.pickupModels)) : {}; keyNames = (level.keyNames && typeof level.keyNames==='object') ? JSON.parse(JSON.stringify(level.keyNames)) : {}; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); _skyHdriUrl = null; applyWorldCfg(); }   // adopt the host's sky / ground / fog (reset the sky guard so each level's sky re-applies cleanly, even mid-campaign)
   if(level.audio && NET.mode!=='client'){ try{ audioSettings.musicUrl=(typeof level.audio.musicUrl==='string')?level.audio.musicUrl:''; audioSettings.sounds=_sanitizeSounds(level.audio.sounds); if(typeof saveAudioSettings==='function') saveAudioSettings(); if(typeof preloadCustomSounds==='function') preloadCustomSounds(); if(_musicOn){ stopMusic(); startMusic(); } }catch(e){ console.warn('level audio apply failed', e); } }
   _applyCine(level.cine);
@@ -10076,7 +10078,7 @@ function checkProximity(){
       prompt.innerHTML = `AMMO STATION — <b>E</b> Buy ${w.refillAmt} ${w.name} rounds &nbsp;·&nbsp; ◆${w.refillCost}`;
     } else if(nearTarget.type==='anim' || nearTarget.type==='xanim'){
       const lo=nearTarget.obj, lk=lo&&lo.userData.lockId;
-      if(lk && !lo.userData.unlocked) prompt.innerHTML = playerKeys[lk] ? `<b>E</b> Unlock \u2014 ${lk.toUpperCase()} key` : `LOCKED \u2014 needs ${lk.toUpperCase()} key`;
+      if(lk && !lo.userData.unlocked) prompt.innerHTML = playerKeys[lk] ? `<b>E</b> Unlock \u2014 ${keyDisplayName(lk)}` : `LOCKED \u2014 needs ${keyDisplayName(lk)}`;
       else prompt.innerHTML = `<b>E</b> Activate`;
     } else {
       prompt.innerHTML = `SUPPLY CACHE — <b>E</b> Open`;
@@ -10320,7 +10322,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 333 · 2026-06-12';
+const BUILD_VERSION = 'build 334 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13136,15 +13138,15 @@ const PRIM_ICON = {
 const MODE_SECTIONS = {
   build:   ['gizmo','object','material','transform','characters'],
   scene:   ['world','audiozones'],
-  enemies: ['enemies'],
+  enemies: ['enemies','gizmo','object','transform'],   // spawn points live here now; their picker/fields/gizmo sections come along
   rules:   ['game','loot'],
   kit:     ['object','transform','impactfx','tracerfx'],   // 'object' carries the weapon model import + per-weapon shoot sound; impact/streak FX; music/SFX live in Scene
   files:   ['levelfile','campaign'],
 };
 const MODE_TARGETS = {
-  build:   ['props','lights','spawns','station','player','pstart','extract'],
+  build:   ['props','lights','station','player','pstart','extract'],
   scene:   [],
-  enemies: [],
+  enemies: ['spawns'],
   rules:   [],
   kit:     ['gun','aim','grenade'],
   files:   [],
@@ -13422,6 +13424,7 @@ function serializeLevel(){
     tracer: Object.assign({}, tracerCfg),
     roster: charRoster.map(c=>({ name:c.name, url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, thumb:c.thumb||'', clips:Object.assign({},c.clips||{}) })),
     pickupModels: Object.keys(pickupModels).reduce((a,k)=>{ const m=pickupModels[k]; if(m&&m.url){ a[k]={ url:m.url, scale:m.scale||1 }; } return a; }, {}),
+    keyNames: Object.keys(keyNames).reduce((a,k)=>{ const n=(keyNames[k]||'').trim(); if(n) a[k]=n; return a; }, {}),
     game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave, noRespawn: !!gameCfg.noRespawn },
     dmgNum:  { on: dmgNumCfg.on !== false, size: dmgNumCfg.size, hit: dmgNumCfg.hitColor, kill: dmgNumCfg.killColor },
     pstart:  { x: playerSpawn.x, z: playerSpawn.z, yaw: playerSpawn.yaw },
@@ -14467,6 +14470,15 @@ function renderEditorFields(){
       ksel.onchange=()=>{ newPickupKind=ksel.value; renderEditorFields(); };
       const addB=document.createElement('button'); addB.textContent='+ Place ahead'; addB.onclick=()=>addPickupSpot(newPickupKind);
       krow.appendChild(ksel); krow.appendChild(addB); gHost.appendChild(krow); }
+    if(POWERUP_KINDS[newPickupKind] && POWERUP_KINDS[newPickupKind].key){   // keys: optional display name ('Engine Room Keycard') used in toasts, prompts, chips, lock dropdown
+      const kc = POWERUP_KINDS[newPickupKind].key;
+      const nrow=document.createElement('div'); nrow.style.cssText='display:flex;gap:6px;margin-top:6px;align-items:center;';
+      const nsp=document.createElement('span'); nsp.className='hint'; nsp.style.margin='0'; nsp.textContent='Key name';
+      const ninp=document.createElement('input'); ninp.type='text'; ninp.placeholder=kc.toUpperCase()+' KEY'; ninp.value=keyNames[kc]||'';
+      ninp.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+      ninp.onchange=()=>{ pushUndoSnapshot(); const v=ninp.value.trim(); if(v) keyNames[kc]=v; else delete keyNames[kc]; };
+      nrow.appendChild(nsp); nrow.appendChild(ninp); gHost.appendChild(nrow);
+    }
     { const pm = pickupModels[newPickupKind] || (pickupModels[newPickupKind]={ url:'', scale:1 });
       const mrow=document.createElement('div'); mrow.style.cssText='display:flex;gap:6px;margin-top:6px;align-items:center;';
       const url=document.createElement('input'); url.type='text'; url.placeholder=newPickupKind+' model .glb URL (optional)'; url.value=pm.url||''; url.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
@@ -14801,7 +14813,7 @@ function renderEditorFields(){
         const lr=document.createElement('div'); lr.style.cssText='display:flex;gap:6px;align-items:center;margin:8px 0 2px;font-size:11px;color:#9fe6cf;';
         const lsp=document.createElement('span'); lsp.innerHTML='<b>Lock</b>'; lsp.style.minWidth='56px';
         const lsel=document.createElement('select'); lsel.style.cssText='flex:1;font-size:11px;';
-        [['','None'],['red','Red key'],['blue','Blue key'],['gold','Gold key'],['green','Green key']].forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if((sel.userData.lockId||'')===o[0]) op.selected=true; lsel.appendChild(op); });
+        [['','None'],['red',keyDisplayName('red')],['blue',keyDisplayName('blue')],['gold',keyDisplayName('gold')],['green',keyDisplayName('green')]].forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if((sel.userData.lockId||'')===o[0]) op.selected=true; lsel.appendChild(op); });
         lsel.onchange=()=>{ pushUndoSnapshot(); if(lsel.value) sel.userData.lockId=lsel.value; else { delete sel.userData.lockId; delete sel.userData.lockConsume; } delete sel.userData.unlocked; renderEditorFields(); };
         lr.appendChild(lsp); lr.appendChild(lsel); animHost.appendChild(lr);
         if(sel.userData.lockId){
