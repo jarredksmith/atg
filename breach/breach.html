@@ -6410,6 +6410,26 @@ function tryUnlockProp(o){
   flashToast('LOCKED \u2014 NEEDS '+keyDisplayName(lk).toUpperCase()); if(SFX.deny) SFX.deny();
   return false;
 }
+// Signals: a prop can carry rules like {when:'destroyed'|'interacted', do:'toggle'|'open'|'close'|'anim'|'unlock', target:'tagName'}.
+// Firing applies the action to every prop whose userData.tag matches. Each action uses the existing
+// per-action net broadcast, so peers converge without a new message type; to avoid double-fires,
+// 'destroyed' signals only run on the authoritative side (solo/host) — clients see the broadcast results.
+function fireSignals(o, when){
+  const sigs = o && o.userData && o.userData.signals; if(!sigs || !sigs.length) return;
+  for(const s of sigs){
+    if(s.when !== when || !s.target) continue;
+    for(let i=0;i<propModels.length;i++){
+      const t = propModels[i]; if(!t || t.userData.tag !== s.target) continue;
+      try{
+        if(s.do==='toggle'){ if(t.userData.xa && t.userData.xa.on){ xaToggle(t); broadcastXAnim(i); } }
+        else if(s.do==='open'){ if(t.userData.xa && t.userData.xa.on && !t.userData.xa.dest){ t.userData.xa.dest=1; broadcastXAnim(i); } }
+        else if(s.do==='close'){ if(t.userData.xa && t.userData.xa.on && t.userData.xa.dest){ t.userData.xa.dest=0; broadcastXAnim(i); } }
+        else if(s.do==='anim'){ playPropAnimationOnce(t); broadcastAnim(i); }
+        else if(s.do==='unlock'){ if(t.userData.lockId && !t.userData.unlocked){ t.userData.unlocked=true; broadcastUnlock(i); } }
+      }catch(e){}
+    }
+  }
+}
 function broadcastUnlock(i){
   if(NET.mode==='host'){ for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'unlock', i}); }catch(e){} } }
   else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send({t:'unlock', i}); }catch(e){} }
@@ -7100,7 +7120,7 @@ function removeProp(idx){
 function loadHostedProps(){
   const list = (savedLevel && Array.isArray(savedLevel.props)) ? savedLevel.props : SCENE_PROPS;
   propModels.length = list.length;   // reserve slots so async GLB loads can't clobber later push-spawned props
-  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));   // slot=i preserves order
+  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>({ when:s.w, do:s.d, target:s.t })); if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));   // slot=i preserves order
 }
 loadHostedProps();
 
@@ -8842,7 +8862,7 @@ function loadLevelFromNet(level){
   // rebuild from the host's data
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }catch(e){ console.warn('net prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('net prop '+i+' failed', e); } });
+    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>({ when:s.w, do:s.d, target:s.t })); if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }catch(e){ console.warn('net prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('net prop '+i+' failed', e); } });
   }
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
@@ -10107,11 +10127,13 @@ function interact(){
     if(!tryUnlockProp(o)) return;   // locked and no key -> deny
     playPropAnimationOnce(o);
     const i = propModels.indexOf(o); if(i>=0) broadcastAnim(i);   // mirror it on every other player
+    fireSignals(o, 'interacted');
   } else if(nearTarget.type==='xanim'){
     const o = nearTarget.obj;
     if(!tryUnlockProp(o)) return;   // locked and no key -> deny
     xaToggle(o);
     const i = propModels.indexOf(o); if(i>=0) broadcastXAnim(i);   // open/close it for everyone
+    fireSignals(o, 'interacted');
   } else {
     openShop(nearTarget.chest);
   }
@@ -10323,7 +10345,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 340 · 2026-06-12';
+const BUILD_VERSION = 'build 342 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11159,6 +11181,7 @@ function updateFragments(){
 function shatterProp(obj, point, dir, power, byId){
   if(!obj || obj.userData._shattered) return;
   obj.userData._shattered = true;
+  if(typeof NET==='undefined' || NET.mode!=='client'){ try{ fireSignals(obj, 'destroyed'); }catch(e){} }   // clients converge via the actions' own broadcasts
   obj.updateMatrixWorld(true);
   _shBox.setFromObject(obj, true); _shBox.getSize(_shSize); _shBox.getCenter(_shCtr);
   if(point){ _shCtr.lerp(point, 0.35); }   // bias the burst toward the impact
@@ -13392,6 +13415,8 @@ function propEntry(o){
   }
   const m=propMaterialDesc(o); if(m) e.mat=m;
   if(o.userData.lockId){ e.lk=o.userData.lockId; if(o.userData.lockConsume) e.lkc=1; }
+  if(o.userData.tag) e.tg=o.userData.tag;
+  if(o.userData.signals && o.userData.signals.length) e.sg=o.userData.signals.map(s=>({ w:s.when, d:s.do, t:s.target }));
   if(o.userData.attribution) e.att=o.userData.attribution;
   if(o.userData.nid) e.nid=o.userData.nid;
   return e;
@@ -13655,7 +13680,7 @@ function restoreLevel(level){
   propModels.length = 0;
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }catch(e){ console.warn('prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('prop '+i+' failed to load', e); } });
+    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>({ when:s.w, do:s.d, target:s.t })); if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }catch(e){ console.warn('prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('prop '+i+' failed to load', e); } });
   }
   // lights
   for(let i=lightModels.length-1;i>=0;i--) removeLight(i);
@@ -13991,8 +14016,6 @@ function buildEditorPanel(){
   p.innerHTML = '<div id="editorResize" title="Drag to resize"></div>'
     + '<div id="edTopBar" style="display:flex;align-items:center;gap:6px;margin:0 0 6px;">'
       + '<h3 style="margin:0;flex:1;">LEVEL / TRANSFORM EDITOR</h3>'
-      + '<button id="edAdd" title="Add an object to the level" style="background:rgba(56,245,181,0.22);color:#eafff7;font-weight:600">\uff0b Add</button>'
-      + '<div id="edAddMenu" style="display:none;position:absolute;top:34px;right:10px;z-index:60;background:rgba(7,16,20,0.97);border:1px solid rgba(56,245,181,0.4);border-radius:6px;padding:4px;min-width:170px;box-shadow:0 8px 24px rgba(0,0,0,0.5)"></div>'
       + '<button id="edDock" title="Move panel to the other side">\u21c4</button>'
       + '<button id="edCollapse" title="Collapse panel">\u2304</button>'
     + '</div>'
@@ -14032,8 +14055,23 @@ function buildEditorPanel(){
     const cl=ed.querySelector('#edCollapse'); if(cl) cl.onclick=()=>{ const c=ed.classList.toggle('collapsed'); cl.textContent=c?'\u2303':'\u2304'; cl.title=c?'Expand panel':'Collapse panel'; };
     // "+ Add" palette: one categorized menu for everything placeable. Each item jumps to the owning
     // tab/target first, then runs the existing add function, so the result lands in view.
-    const addBtn=ed.querySelector('#edAdd'), addMenu=ed.querySelector('#edAddMenu');
+    let fab = document.getElementById('edAddFab');
+    if(!fab){
+      fab = document.createElement('div'); fab.id='edAddFab';
+      fab.style.cssText='position:absolute;top:14px;z-index:31;pointer-events:auto;';
+      fab.innerHTML = '<button id="edAdd" title="Add an object to the level" style="width:46px;height:46px;border-radius:50%;font-size:22px;line-height:1;background:rgba(56,245,181,0.25);border:1px solid rgba(56,245,181,0.6);color:#eafff7;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,0.45), 0 0 12px rgba(56,245,181,0.25);">\uff0b</button>'
+        + '<div id="edAddMenu" style="display:none;position:absolute;top:54px;z-index:60;background:rgba(7,16,20,0.97);border:1px solid rgba(56,245,181,0.4);border-radius:6px;padding:4px;min-width:170px;box-shadow:0 8px 24px rgba(0,0,0,0.5)"></div>';
+      (ed.parentNode || document.body).appendChild(fab);
+    }
+    const addBtn=fab.querySelector('#edAdd'), addMenu=fab.querySelector('#edAddMenu');
     if(addBtn && addMenu){
+      // sit just outside the panel's inner edge, whichever side it's docked on; track resize drags too
+      const placeFab=()=>{ const w=(ed.offsetWidth||320)+12; const left=ed.classList.contains('dockLeft');
+        fab.style.left = left ? w+'px' : ''; fab.style.right = left ? '' : w+'px';
+        addMenu.style.left = left ? '0' : ''; addMenu.style.right = left ? '' : '0'; };
+      placeFab();
+      if(typeof ResizeObserver!=='undefined'){ try{ new ResizeObserver(placeFab).observe(ed); }catch(e){} }
+      if(dk){ const _dock=dk.onclick; dk.onclick=()=>{ if(_dock) _dock(); placeFab(); }; }
       const jump=(mode,target)=>{ if(target) editorActive=target; setEditorMode(mode, !!target); };
       const ADD_ITEMS=[
         ['\u25a0 Box',      ()=>{ jump('build','props');   addSceneProp('box'); }],
@@ -14160,8 +14198,8 @@ function buildEditorPanel(){
 let _edFolds = {}; try{ _edFolds = JSON.parse(localStorage.getItem('breach_editor_folds')||'{}')||{}; }catch(e){}
 function edFold(host, id, titleHtml, openDefault){
   const open = (_edFolds[id]!=null) ? !_edFolds[id] : !!openDefault;   // stored value = collapsed
-  const head=document.createElement('div'); head.className='hint';
-  head.style.cssText='margin:10px 0 3px;cursor:pointer;user-select:none;';
+  const head=document.createElement('div');
+  head.style.cssText='margin:10px 0 4px;cursor:pointer;user-select:none;display:flex;align-items:center;gap:7px;padding:6px 9px;background:rgba(56,245,181,0.10);border:1px solid rgba(56,245,181,0.25);border-radius:5px;color:#cfeee6;font:600 12px ui-monospace,monospace;';
   head.innerHTML='<span style="display:inline-block;width:12px;">'+(open?'\u25be':'\u25b8')+'</span>'+titleHtml;
   const body=document.createElement('div'); body.style.display = open ? '' : 'none';
   head.onclick=()=>{ const vis = body.style.display!=='none';
@@ -14181,6 +14219,9 @@ function levelIssues(){
     if(!pickupsOn && pickupSpots.length) issues.push('Pickups are turned off, but '+pickupSpots.length+' pickup spot'+(pickupSpots.length>1?'s are':' is')+' placed.');
     audioZones.forEach((z,i)=>{ if(!(z.url||'').trim()) issues.push('Audio zone '+(i+1)+' has no sound URL.'); });
     if(cineCfg && cineCfg.on && !(cineCfg.path && cineCfg.path.length>=2)) issues.push('Intro cinematic is on, but its camera path has fewer than 2 points.');
+    const tags=new Set(); for(const o of propModels){ if(o && o.userData && o.userData.tag) tags.add(o.userData.tag); }
+    for(const o of propModels){ if(!o || !o.userData || !o.userData.signals) continue;
+      for(const s of o.userData.signals){ if(s.target && !tags.has(s.target)) issues.push("A signal targets tag '"+s.target+"', but no prop carries that tag."); } }
   }catch(e){}
   return issues;
 }
@@ -14903,6 +14944,33 @@ function renderEditorFields(){
           lh.textContent='Pressing E needs the '+sel.userData.lockId+' key (place a key pickup pad). Unlocks once per deploy, for everyone.';
           animHost.appendChild(lh);
         }
+      }
+      // ---- Signals: tag this prop / make it trigger other tagged props ----
+      if(sel){
+        const sgBody = edFold(animHost, 'signals', '<b>Signals</b> \u2014 tag this prop, or have it trigger others');
+        { const tr=document.createElement('div'); tr.style.cssText='display:flex;gap:6px;align-items:center;margin:2px 0 4px;font-size:11px;color:#9fe6cf;';
+          const tsp=document.createElement('span'); tsp.textContent='Tag'; tsp.style.minWidth='56px';
+          const tin=document.createElement('input'); tin.type='text'; tin.placeholder='e.g. vaultDoor'; tin.value=sel.userData.tag||'';
+          tin.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+          tin.onchange=()=>{ pushUndoSnapshot(); const v=tin.value.trim(); if(v) sel.userData.tag=v; else delete sel.userData.tag; };
+          tr.appendChild(tsp); tr.appendChild(tin); sgBody.appendChild(tr); }
+        const sigs = sel.userData.signals || (sel.userData.signals=[]);
+        sigs.forEach((s,si)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;gap:4px;align-items:center;margin:0 0 3px;';
+          const mkSel=(opts,val,on)=>{ const e=document.createElement('select'); e.style.cssText='font-size:11px;flex:1;'; opts.forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(val===o[0]) op.selected=true; e.appendChild(op); }); e.onchange=()=>{ pushUndoSnapshot(); on(e.value); }; return e; };
+          r.appendChild(mkSel([['destroyed','On destroyed'],['interacted','On E']], s.when, v=>{ s.when=v; }));
+          r.appendChild(mkSel([['toggle','Toggle'],['open','Open'],['close','Close'],['anim','Play anim'],['unlock','Unlock']], s.do, v=>{ s.do=v; }));
+          const ti=document.createElement('input'); ti.type='text'; ti.placeholder='target tag'; ti.value=s.target||'';
+          ti.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 5px;font-size:11px;';
+          ti.onchange=()=>{ pushUndoSnapshot(); s.target=ti.value.trim(); };
+          const del=document.createElement('button'); del.textContent='\u00d7'; del.style.cssText='padding:1px 7px;font-size:12px;';
+          del.onclick=()=>{ pushUndoSnapshot(); sigs.splice(si,1); renderEditorFields(); };
+          r.appendChild(ti); r.appendChild(del); sgBody.appendChild(r); });
+        { const add=document.createElement('button'); add.textContent='+ Add signal'; add.style.cssText='padding:2px 9px;font-size:11px;margin:1px 0 2px;';
+          add.onclick=()=>{ pushUndoSnapshot(); sigs.push({ when:'interacted', do:'toggle', target:'' }); renderEditorFields(); };
+          sgBody.appendChild(add); }
+        { const n=document.createElement('div'); n.className='hint'; n.style.margin='2px 0 0';
+          n.textContent='When this prop is destroyed or E-activated, fire the action on every prop carrying the target tag.';
+          sgBody.appendChild(n); }
       }
       // ---- Mechanism: move/rotate this object into a platform, door, elevator, etc. ----
       if(sel){
@@ -15957,6 +16025,7 @@ function toggleEditor(){
   if(editorOpen){
     if(!editorEl) buildEditorPanel();
     editorEl.style.display = 'block';
+    { const fb=document.getElementById('edAddFab'); if(fb) fb.style.display='block'; }
     firing=false; ads=false;
     safeExitPointerLock();
     teardownInstancing();   // show individual props so they can be edited/selected
@@ -15979,6 +16048,7 @@ function toggleEditor(){
     renderEditorFields();
   } else {
     if(editorEl) editorEl.style.display = 'none';
+    { const fb=document.getElementById('edAddFab'); if(fb) fb.style.display='none'; }
     editorAimPreview = false;
     spawnRouteEdit = null;
     if(typeof clearPreviewEnemy==='function') clearPreviewEnemy();
