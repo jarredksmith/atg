@@ -7542,6 +7542,10 @@ let _editorOpenFlag = false;   // mirror of editorOpen, read by applyWorldCfg at
 applyWorldCfg();
 // crouch (hold Ctrl or C): lowers the view and slows movement
 let crouching = false, crouchT = 0;
+// The body physically shrinks with the camera: full height standing, PLAYER_HEIGHT - CROUCH_DIP crouched.
+// Used by the KCC capsule, the classic wall/clearance bands, the head-bump, and enemy targeting.
+function effPlayerHeight(){ return PLAYER_HEIGHT - crouchT*CROUCH_DIP; }
+function effEyeY(){ return player.pos.y - crouchT*CROUCH_DIP; }
 let sliding=false, slideT=0, slideCD=0, _prevCrouchHeld=false; const slideDir=new THREE.Vector3(); const SLIDE_DUR=0.55;
 let _stepT=0;   // footstep cadence timer
 const CROUCH_DIP = 0.8;     // how far the camera lowers when fully crouched
@@ -8457,13 +8461,13 @@ function netStatus(msg){ const el=document.getElementById('mpStatus'); if(el) el
 // Players the host simulates against (enemy targeting + coin pickup). Each has a credit()/hurt()
 // that routes locally or over the wire. In solo or on a client this is just the local player.
 function allPlayers(){
-  const list = [{ id:NET.myId, pos:player.pos, local:true,
+  const list = [{ id:NET.myId, pos:player.pos, eyeY:effEyeY(), local:true,
     credit:v=>{ credits+=v; SFX.coin(); updateHUD(); },
     hurt:(d,sx,sz)=>applyEnemyDamageToSelf(d,sx,sz) }];
   if(NET.mode==='host'){
     for(const id in NET.players){
       const rp = NET.players[id], conn = NET.conns[id];
-      list.push({ id:+id, pos:rp.posEye, local:false,
+      list.push({ id:+id, pos:rp.posEye, eyeY:(rp.posEye?rp.posEye.y:null), local:false,
         credit:v=>{ if(conn) try{ conn.send({t:'credit', v}); }catch(e){} },
         hurt:d=>{ if(conn) try{ conn.send({t:'hurt', d}); }catch(e){} } });
     }
@@ -10271,7 +10275,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 328 · 2026-06-12';
+const BUILD_VERSION = 'build 329 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10752,6 +10756,7 @@ function ensurePlayerKCC(){
   const feetY = player.pos.y - EYE;
   playerBody = physWorld.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(player.pos.x, feetY + PLAYER_HEIGHT/2, player.pos.z));
   playerCollider = physWorld.createCollider(RAPIER.ColliderDesc.capsule(hh, PLAYER_CAP_R).setFriction(0).setRestitution(0), playerBody);
+  _kccH = PLAYER_HEIGHT;   // capsule currently built at full height; moveKCC retunes it as crouch changes
   playerCtrl = physWorld.createCharacterController(0.08);
   if(playerCtrl.setUp) playerCtrl.setUp({x:0,y:1,z:0});
   playerCtrl.enableAutostep(STEP, PLAYER_CAP_R*0.6, true);     // climb stairs / ledges up to one STEP
@@ -10766,8 +10771,14 @@ function ensurePlayerKCC(){
 }
 // One frame of movement via Rapier: slides along walls, climbs ramps/stairs, fits through openings, all
 // against the exact trimesh the dynamic props collide with. Throwing here is caught and reverts to classic.
+let _kccH = 0;   // capsule height currently applied to the player collider
 function moveKCC(dt){
-  const half = PLAYER_HEIGHT/2;
+  // crouch is physical: retune the capsule to the effective body height (feet stay anchored)
+  const effH = effPlayerHeight();
+  if(Math.abs(effH - _kccH) > 0.02 && playerCollider.setHalfHeight){
+    playerCollider.setHalfHeight(Math.max(0.05, (effH - 2*PLAYER_CAP_R)/2)); _kccH = effH;
+  }
+  const half = _kccH/2;
   playerBody.setTranslation({ x:player.pos.x, y:(player.pos.y - EYE) + half, z:player.pos.z }, true);   // sync to actual pos (spawn/knockback/teleport)
   const desired = { x:(player.vel.x+player.extVel.x)*dt, y:player.vel.y*dt, z:(player.vel.z+player.extVel.z)*dt };
   playerCtrl.computeColliderMovement(playerCollider, desired);
@@ -11717,7 +11728,8 @@ function segmentBlocked(ax, az, bx, bz, y){
 function fireEnemyShot(en, target, spread){
   flashEnemy(en);
   const from = new THREE.Vector3(en.mesh.position.x, 1.4, en.mesh.position.z);
-  const dir = new THREE.Vector3(target.pos.x - from.x, 1.3 - from.y, target.pos.z - from.z).normalize();
+  const aimY = ((target.eyeY!=null?target.eyeY:target.pos.y) || 1.7) - 0.4;   // chest of the (possibly crouched) target — was a hardcoded world y=1.3, which whiffed anyone on raised terrain
+  const dir = new THREE.Vector3(target.pos.x - from.x, aimY - from.y, target.pos.z - from.z).normalize();
   if(spread){ dir.x+=(Math.random()*2-1)*spread; dir.y+=(Math.random()*2-1)*spread*0.6; dir.z+=(Math.random()*2-1)*spread; dir.normalize(); }
   const mesh = makeEnemyBolt();
   mesh.position.copy(from);
@@ -11738,7 +11750,7 @@ function updateEnemyShots(dt){
     const p = s.mesh.position;
     emitBoltTrail(p);
     let dead = (now - s.born) > s.life || p.y < terrainHeightAt(p.x,p.z)+0.1;
-    if(!dead){ for(const pl of ps){ const dx=pl.pos.x-p.x, dy=((pl.pos.y!=null?pl.pos.y:1.4))-p.y, dz=pl.pos.z-p.z; if(dx*dx+dy*dy+dz*dz < 1.1*1.1){ if(pl.hurt) pl.hurt(s.dmg, s.from?s.from.x:null, s.from?s.from.z:null); dead=true; break; } } }
+    if(!dead){ for(const pl of ps){ const dx=pl.pos.x-p.x, dy=((pl.eyeY!=null?pl.eyeY:(pl.pos.y!=null?pl.pos.y:1.4)))-p.y, dz=pl.pos.z-p.z; if(dx*dx+dy*dy+dz*dz < 1.1*1.1){ if(pl.hurt) pl.hurt(s.dmg, s.from?s.from.x:null, s.from?s.from.z:null); dead=true; break; } } }
     if(!dead){ for(const c of colliders){ const b=c.userData.box; if(!b) continue; if(p.x>=b.min.x&&p.x<=b.max.x&&p.y>=b.min.y&&p.y<=b.max.y&&p.z>=b.min.z&&p.z<=b.max.z){ dead=true; break; } } }
     if(dead){ boltImpact(p, 0x6fe0ff); scene.remove(s.mesh); enemyShots.splice(i,1); }
   }
@@ -12015,7 +12027,7 @@ function clearAt(x, z, feetY){
   // fenced a body-radius away by its axis-aligned bounding box (which spans the model's full height).
   const surf = surfaceTopAt(x, z);
   const standY = (surf > -Infinity && surf <= feetY + STEP + 1e-4) ? Math.max(terrainHeightAt(x,z), surf) : feetY;
-  const bandLo = standY + STEP, bandHi = standY + PLAYER_HEIGHT;
+  const bandLo = standY + STEP, bandHi = standY + effPlayerHeight();
   for(const c of colliders){
     const bs = (c.userData && (c.userData.boxes || (c.userData.box && [c.userData.box]))); if(!bs) continue;
     for(const b of bs){
@@ -12046,7 +12058,7 @@ function clearAt(x, z, feetY){
 // Is the player's CENTER literally inside solid geometry (no radius margin)? Used as an escape hatch so a
 // player who ends up embedded (spawned inside, shoved in) can always walk back out instead of freezing.
 function insideSolid(x, z, feetY){
-  const bandLo = feetY + STEP, bandHi = feetY + PLAYER_HEIGHT;
+  const bandLo = feetY + STEP, bandHi = feetY + effPlayerHeight();
   for(const c of colliders){
     const r = c.rotation; if(r && (Math.abs(r.x)>0.05 || Math.abs(r.z)>0.05)) continue;
     const bs = (c.userData && (c.userData.boxes || (c.userData.box && [c.userData.box]))); if(!bs) continue;
@@ -12340,7 +12352,12 @@ function loop(){
   if(pvpMode() && duelDead){ wish.set(0,0,0); moveScale=0; }   // frozen until respawn
   if(_levelLoaderActive){ wish.set(0,0,0); moveScale=0; }   // frozen while the level is still loading
   wish.normalize();
-  crouching = gameOn && !shopOpen && !editorOpen && (keys['ControlLeft']||keys['ControlRight']||keys['KeyC']||padCrouch);
+  let _wantCrouch = (keys['ControlLeft']||keys['ControlRight']||keys['KeyC']||padCrouch);
+  if(!_wantCrouch && crouchT > 0.4){   // releasing crouch: only stand if there's headroom for the full body
+    const _feetY = player.pos.y - EYE;
+    if(ceilingAt(player.pos.x, player.pos.z, _feetY) < _feetY + PLAYER_HEIGHT + 0.05) _wantCrouch = true;
+  }
+  crouching = gameOn && !shopOpen && !editorOpen && _wantCrouch;
   crouchT += ((crouching?1:0) - crouchT) * Math.min(1, dt*12);
   let speedBase = (keys['ShiftLeft']||padSprint||touchSprint) ? SPEED*SPRINT : SPEED;
   if(crouching) speedBase = CROUCH_SPEED;          // crouch overrides sprint
@@ -12390,7 +12407,7 @@ function loop(){
   // head-bump: stop at the underside of an overhead prop instead of clipping through it. Only triggers
   // when the head actually crosses the underside this frame, so it can never yank the player downward.
   if(player.vel.y > 0){
-    const HEAD = PLAYER_HEIGHT - EYE;   // head sits this far above the eye
+    const HEAD = effPlayerHeight() - EYE;   // head top relative to pos.y (negative while crouched — body top sits below the standing-eye datum)
     const ceil = ceilingAt(player.pos.x, player.pos.z, player.pos.y - EYE);
     if(ceil < Infinity && prevY + HEAD <= ceil && player.pos.y + HEAD > ceil){
       player.pos.y = ceil - HEAD; player.vel.y = 0;   // bonk
