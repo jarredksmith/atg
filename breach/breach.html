@@ -10271,7 +10271,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 327 · 2026-06-11';
+const BUILD_VERSION = 'build 328 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14230,6 +14230,9 @@ function renderEditorFields(){
         const inp=document.createElement('input'); inp.type='text'; inp.value=cineCfg.audio||''; inp.placeholder='https://…/intro.mp3 or .ogg/.wav'; inp.style.cssText='width:100%;box-sizing:border-box;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:5px 7px;font-size:11px;';
         inp.onchange=()=>{ pushUndoSnapshot(); cineCfg.audio=inp.value.trim(); };
         r.appendChild(sp); r.appendChild(inp); b.appendChild(r); }
+      { const fsHold=document.createElement('div'); const fsBtn=document.createElement('button'); fsBtn.textContent='Search Freesound'; fsBtn.title='Find a free CC sound and use it as the cutscene track'; fsBtn.style.cssText='padding:2px 9px;font-size:11px;margin:1px 0 2px;'; let fsBox=null;
+        fsBtn.onclick=()=>{ if(fsBox){ fsBox.remove(); fsBox=null; fsBtn.textContent='Search Freesound'; return; } fsBox=renderFreesoundBrowser(fsHold, ()=>renderEditorFields(), { label:'Cutscene audio', set:v=>{ pushUndoSnapshot(); cineCfg.audio=(v||'').trim(); } }); fsHold.appendChild(fsBox); fsBtn.textContent='Hide Freesound'; };
+        fsHold.appendChild(fsBtn); b.appendChild(fsHold); }
       hint(b,'A one-shot track (voiceover, music sting) that fires when the cutscene begins and stops when it ends or is skipped. The file must allow cross-origin loading (CORS), same as custom music.','0 0 4px');
       { const prev=document.createElement('button'); prev.textContent='▶ Preview'; prev.style.cssText='width:100%;padding:6px 8px;font-size:12px;cursor:pointer;margin-top:4px;'; prev.disabled=!cineCfg.path.length; prev.onclick=()=>{ startCinematic({ path:cineCfg.path, lensFrom:cineCfg.lensFrom, lensTo:cineCfg.lensTo, focusOn:cineCfg.focusOn, focusFrom:cineCfg.focusFrom, focusTo:cineCfg.focusTo, dur:cineCfg.dur, look:cineCfg.look }, true); }; b.appendChild(prev); }
       if(typeof refreshCinePreview==='function') refreshCinePreview(); }
@@ -16126,7 +16129,7 @@ function _sndRow(label, get, set){
 const FS_DEFAULT_KEY = '2xg37rawZgZaYmQd1yz8unpUSlAscbw5t1xdPPEr';   // baked in so search works out of the box; the field below overrides it
 function fsGetKey(){ try{ return (localStorage.getItem('fs_api_key')||'') || FS_DEFAULT_KEY; }catch(e){ return FS_DEFAULT_KEY; } }
 function fsSetKey(k){ try{ localStorage.setItem('fs_api_key', k||''); }catch(e){} }
-let fsLastQuery='', fsLastResults=[]; let _fsAudio=null;
+let fsLastQuery='', fsLastResults=[]; let _fsAudio=null, _fsAudioBtn=null;
 function fsLicShort(u){ u=(u||'').toLowerCase(); if(u.indexOf('publicdomain')>=0||u.indexOf('zero')>=0) return 'CC0'; if(u.indexOf('by-nc')>=0) return 'CC-BY-NC'; if(u.indexOf('sampling')>=0) return 'Sampling+'; if(u.indexOf('/by')>=0) return 'CC-BY'; return 'CC'; }
 function fsParseSound(m){
   if(!m||typeof m!=='object') return null;
@@ -16177,7 +16180,14 @@ function renderFreesoundBrowser(host, refresh, directTarget){
       const meta=document.createElement('div'); meta.style.cssText='color:#5a7d72;font-size:10px;'; meta.textContent=(snd.username?('by '+snd.username):'')+(snd.duration?(' \u00b7 '+snd.duration.toFixed(1)+'s'):'')+(snd.license?(' \u00b7 '+fsLicShort(snd.license)):'');
       info.appendChild(nm); info.appendChild(meta);
       const play=document.createElement('button'); play.textContent='\u25b6'; play.title='Preview'; play.style.cssText='flex:0 0 auto;width:26px;'+B;
-      play.onclick=()=>{ try{ if(_fsAudio){ _fsAudio.pause(); } _fsAudio=new Audio(snd.preview); _fsAudio.volume=Math.min(1,(audioSettings.sfx||1)); _fsAudio.play(); }catch(e){} };
+      play.onclick=()=>{ try{
+        if(_fsAudio && _fsAudioBtn===play && !_fsAudio.paused){ _fsAudio.pause(); _fsAudio=null; _fsAudioBtn=null; play.textContent='\u25b6'; play.title='Preview'; return; }   // same card playing -> stop
+        if(_fsAudio){ try{ _fsAudio.pause(); }catch(e){} _fsAudio=null; }
+        if(_fsAudioBtn){ _fsAudioBtn.textContent='\u25b6'; _fsAudioBtn.title='Preview'; }   // reset whichever card was playing (may be in another panel)
+        _fsAudio=new Audio(snd.preview); _fsAudio.volume=Math.min(1,(audioSettings.sfx||1));
+        _fsAudio.onended=()=>{ if(_fsAudioBtn===play){ _fsAudioBtn=null; _fsAudio=null; } play.textContent='\u25b6'; play.title='Preview'; };
+        _fsAudio.play(); _fsAudioBtn=play; play.textContent='\u25a0'; play.title='Stop';
+      }catch(e){} };
       if(directTarget){
         const useb=document.createElement('button'); useb.textContent='Use'; useb.style.cssText='flex:0 0 auto;'+B;
         useb.onclick=()=>{ directTarget.set(snd.preview); saveAudioSettings(); initAudio(); loadSound(snd.preview); status.textContent='Assigned \u2713'; if(refresh) refresh(); };
