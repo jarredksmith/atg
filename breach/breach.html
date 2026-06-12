@@ -10366,7 +10366,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 352 · 2026-06-12';
+const BUILD_VERSION = 'build 353 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12229,8 +12229,8 @@ function updatePerfHud(){
 // Disabled / no path => deploy behaves exactly as before. Editor 'Preview' reuses the same engine.
 let cineCfg = { on:false, path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn', audio:'', shots2:[] };
 function _applyCine(lc){
-  if(lc){ cineCfg.on=!!lc.on; cineCfg.path=Array.isArray(lc.path)?lc.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lensFrom=+lc.lensFrom||+lc.lens||35; cineCfg.lensTo=+lc.lensTo||+lc.lens||cineCfg.lensFrom; cineCfg.focusOn=!!lc.focusOn; cineCfg.focusFrom=+lc.focusFrom||8; cineCfg.focusTo=+lc.focusTo||cineCfg.focusFrom; cineCfg.dur=+lc.dur||6; cineCfg.look=(lc.look==='path')?'path':'spawn'; cineCfg.audio=(typeof lc.audio==='string')?lc.audio:'';
-    cineCfg.shots2 = Array.isArray(lc.shots2) ? lc.shots2.map(s=>({ path:Array.isArray(s.path)?s.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):[], lensFrom:+s.lensFrom||35, lensTo:+s.lensTo||+s.lensFrom||35, focusOn:!!s.focusOn, focusFrom:+s.focusFrom||8, focusTo:+s.focusTo||+s.focusFrom||8, dur:+s.dur||6, look:(s.look==='path')?'path':'spawn' })) : []; }
+  if(lc){ cineCfg.on=!!lc.on; cineCfg.path=Array.isArray(lc.path)?lc.path.map(q=> q.length>=6 ? [+q[0]||0,+q[1]||0,+q[2]||0,+q[3]||0,+q[4]||0,+q[5]||0] : [+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lensFrom=+lc.lensFrom||+lc.lens||35; cineCfg.lensTo=+lc.lensTo||+lc.lens||cineCfg.lensFrom; cineCfg.focusOn=!!lc.focusOn; cineCfg.focusFrom=+lc.focusFrom||8; cineCfg.focusTo=+lc.focusTo||cineCfg.focusFrom; cineCfg.dur=+lc.dur||6; cineCfg.look=(lc.look==='path')?'path':'spawn'; cineCfg.audio=(typeof lc.audio==='string')?lc.audio:'';
+    cineCfg.shots2 = Array.isArray(lc.shots2) ? lc.shots2.map(s=>({ path:Array.isArray(s.path)?s.path.map(q=> q.length>=6 ? [+q[0]||0,+q[1]||0,+q[2]||0,+q[3]||0,+q[4]||0,+q[5]||0] : [+q[0]||0,+q[1]||0,+q[2]||0]):[], lensFrom:+s.lensFrom||35, lensTo:+s.lensTo||+s.lensFrom||35, focusOn:!!s.focusOn, focusFrom:+s.focusFrom||8, focusTo:+s.focusTo||+s.focusFrom||8, dur:+s.dur||6, look:(s.look==='path')?'path':'spawn' })) : []; }
   else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; cineCfg.audio=''; cineCfg.shots2=[]; }
 }
 _applyCine(savedLevel && savedLevel.cine);   // restore a saved cinematic on page reload (boot path doesn't go through restoreLevel)
@@ -12313,7 +12313,18 @@ function _startCineAudio(){
     try{ const g=actx.createGain(); g.gain.value=1; g.connect(masterBus); const src=actx.createBufferSource(); src.buffer=buf; src.connect(g); src.start(); _cineAudioSrc=src; _cineAudioGain=g; }catch(e){}
   });
 }
-function _normCineShot(s){ return { path:s.path.map(q=>q.slice()), lensFrom:+s.lensFrom||35, lensTo:+s.lensTo||(+s.lensFrom||35), focusOn:!!s.focusOn, focusFrom:+s.focusFrom||8, focusTo:+s.focusTo||(+s.focusFrom||8), dur:Math.max(0.2,+s.dur||6), look:(s.look==='path'?'path':'spawn') }; }
+function _normCineShot(s){
+  const path=s.path.map(q=>q.slice());
+  const out={ path, lensFrom:+s.lensFrom||35, lensTo:+s.lensTo||(+s.lensFrom||35), focusOn:!!s.focusOn, focusFrom:+s.focusFrom||8, focusTo:+s.focusTo||(+s.focusFrom||8), dur:Math.max(0.2,+s.dur||6), look:(s.look==='path'?'path':'spawn') };
+  if(path.some(q=>q.length>=6)){   // per-waypoint look targets (build 353): interpolate camera aim between them
+    const sy=terrainHeightAt(playerSpawn.x,playerSpawn.z)+EYE;
+    out.lookPts = path.map((q,i)=>{
+      if(q.length>=6) return [q[3],q[4],q[5]];
+      if(out.look==='path' && path.length>=2){ const n=(i<path.length-1)?path[i+1]:path[i-1];
+        return (i<path.length-1) ? [n[0],n[1],n[2]] : [q[0]*2-n[0], q[1]*2-n[1], q[2]*2-n[2]]; }   // unset waypoint keeps path-ahead aim
+      return [playerSpawn.x, sy, playerSpawn.z]; });   // ... or the spawn aim
+  }
+  return out; }
 function startCinematic(data, editorPreview){
   if(!data) return false;
   const raw = Array.isArray(data.shots) ? data.shots : [data];   // legacy single-shot callers still work
@@ -12350,7 +12361,9 @@ function updateCinematic(dt){
   if(path.length>=2){ const pp=pointAlongPath(path, te, false); _cineV0.set(pp[0],pp[1],pp[2]); }
   else { _cineV0.set(path[0][0], path[0][1], path[0][2]); }
   camera.position.copy(_cineV0);
-  if(d.look==='path' && path.length>=2){ const a=pointAlongPath(path, Math.min(1,te+0.02), false); _cineTgt.set(a[0],a[1],a[2]);
+  if(d.lookPts && d.lookPts.length>=2){ const a=pointAlongPath(d.lookPts, te, false); _cineTgt.set(a[0],a[1],a[2]); }
+  else if(d.lookPts && d.lookPts.length===1){ _cineTgt.set(d.lookPts[0][0], d.lookPts[0][1], d.lookPts[0][2]); }
+  else if(d.look==='path' && path.length>=2){ const a=pointAlongPath(path, Math.min(1,te+0.02), false); _cineTgt.set(a[0],a[1],a[2]);
     if(_cineTgt.distanceToSquared(_cineV0)<1e-4){   // at the very end the look-ahead sample lands on the camera itself
       const b=pointAlongPath(path, Math.max(0,te-0.02), false);   // keep the travel heading by extrapolating from just behind
       _cineTgt.set(_cineV0.x*2-b[0], _cineV0.y*2-b[1], _cineV0.z*2-b[2]);
@@ -12375,6 +12388,15 @@ function _dashPts(v, dash, gap){
     while(d<len){ const e=Math.min(d+dash, len); out.push(a.clone().addScaledVector(dir,d), a.clone().addScaledVector(dir,e)); d+=step; } }
   return out;
 }
+function _cineAimPoint(){   // the world point under the editor view's crosshair (for 'look at THAT')
+  try{
+    const rc=new THREE.Raycaster(); rc.setFromCamera(new THREE.Vector2(0,0), camera);
+    const skip=(o)=>{ for(let p=o; p; p=p.parent){ if(p===_cinePreviewGroup || (typeof gizmo!=='undefined' && p===gizmo) || (typeof selBox!=='undefined' && p===selBox)) return true; } return false; };
+    const hits=rc.intersectObjects(scene.children, true);
+    for(const h of hits){ if(!skip(h.object)) return h.point; }
+  }catch(e){}
+  const d=new THREE.Vector3(); camera.getWorldDirection(d); return camera.position.clone().addScaledVector(d, 30);   // open sky: 30m out
+}
 function refreshCinePreview(){
   try{
     _syncCineEditorAvatar();
@@ -12387,8 +12409,9 @@ function refreshCinePreview(){
     { const shot=cineAllShots()[Math.min(_cineShotSel, cineAllShots().length-1)], sp=shot.path;
       sp.forEach((q,i)=>{ const m=new THREE.Mesh(new THREE.SphereGeometry(0.4,10,8), new THREE.MeshBasicMaterial({ color: i===0?0x38f5b5:0xffcf6b, depthTest:false })); m.position.set(q[0],q[1],q[2]); m.renderOrder=999; g.add(m);
         // facing arrow: where the CAMERA will look from this point during playback (same rules as updateCinematic)
-        const p=new THREE.Vector3(q[0],q[1],q[2]); let dir;
-        if(shot.look==='path' && sp.length>=2){
+        const p=new THREE.Vector3(q[0],q[1],q[2]); let dir; let custom=false;
+        if(q.length>=6){ dir = new THREE.Vector3(q[3],q[4],q[5]).sub(p); custom=true; }
+        else if(shot.look==='path' && sp.length>=2){
           const nq = (i < sp.length-1) ? sp[i+1] : sp[i-1];
           dir = new THREE.Vector3(nq[0],nq[1],nq[2]).sub(p);
           if(i === sp.length-1) dir.negate();   // last point keeps the incoming heading (matches the no-flip playback fix)
@@ -12396,7 +12419,7 @@ function refreshCinePreview(){
           dir = new THREE.Vector3(playerSpawn.x, terrainHeightAt(playerSpawn.x,playerSpawn.z)+EYE, playerSpawn.z).sub(p);
         }
         if(dir.lengthSq()>1e-6){ dir.normalize();
-          const ar=new THREE.ArrowHelper(dir, p, 2.6, 0x7dd4ff, 0.9, 0.45);
+          const ar=new THREE.ArrowHelper(dir, p, 2.6, custom?0xffcf6b:0x7dd4ff, 0.9, 0.45);   // gold = authored look, blue = Look mode
           ar.line.material.depthTest=false; ar.cone.material.depthTest=false; ar.line.renderOrder=999; ar.cone.renderOrder=999;
           g.add(ar); } }); }
     scene.add(g); _cinePreviewGroup=g;
@@ -14481,9 +14504,17 @@ function renderEditorFields(){
         CS.path.forEach((pt,i)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;align-items:center;gap:6px;font-size:11px;color:#9fe6cf;margin:2px 0;';
           const lab=document.createElement('span'); lab.textContent=(i===0?'Start':('Pt '+i)); lab.style.flex='1';
           const go=document.createElement('button'); go.textContent='Go to'; go.title='Fly the editor camera to this waypoint'; go.style.cssText='padding:1px 7px;font-size:10px;'; go.onclick=()=>{ const q=CS.path[i]; if(!q) return; flyPos.set(q[0],q[1],q[2]); player.pos.set(q[0],q[1],q[2]); if(editorTopView){ topPanX=q[0]; topPanZ=q[2]; } };
-          const setb=document.createElement('button'); setb.textContent='Set'; setb.title='Update this waypoint to the current camera view'; setb.style.cssText='padding:1px 7px;font-size:10px;'; setb.onclick=()=>{ pushUndoSnapshot(); CS.path[i]=[+camera.position.x.toFixed(3),+camera.position.y.toFixed(3),+camera.position.z.toFixed(3)]; if(typeof refreshCinePreview==='function') refreshCinePreview(); };
+          const setb=document.createElement('button'); setb.textContent='Set'; setb.title='Update this waypoint to the current camera view'; setb.style.cssText='padding:1px 7px;font-size:10px;'; setb.onclick=()=>{ pushUndoSnapshot(); const o=CS.path[i]; const keep=(o && o.length>=6)?[o[3],o[4],o[5]]:[]; CS.path[i]=[+camera.position.x.toFixed(3),+camera.position.y.toFixed(3),+camera.position.z.toFixed(3), ...keep]; if(typeof refreshCinePreview==='function') refreshCinePreview(); };
           const del=document.createElement('button'); del.textContent='✕'; del.style.cssText='padding:1px 7px;font-size:10px;'; del.onclick=()=>{ pushUndoSnapshot(); CS.path.splice(i,1); renderEditorFields(); };
-          r.appendChild(lab); r.appendChild(go); r.appendChild(setb); r.appendChild(del); b.appendChild(r); });
+          const hasLook = pt.length>=6;
+          const eye=document.createElement('button'); eye.textContent='\ud83d\udc41';
+          eye.title = hasLook ? 'Update the look target to what the view is aiming at now' : 'Set a look target: aim the editor view at the subject, then click';
+          eye.style.cssText='padding:1px 6px;font-size:10px;'+(hasLook?'background:rgba(255,207,107,0.3);':'');
+          eye.onclick=()=>{ pushUndoSnapshot(); const t=_cineAimPoint(); const q=CS.path[i]; q[3]=+t.x.toFixed(3); q[4]=+t.y.toFixed(3); q[5]=+t.z.toFixed(3); if(typeof refreshCinePreview==='function') refreshCinePreview(); renderEditorFields(); };
+          r.appendChild(lab); r.appendChild(go); r.appendChild(setb); r.appendChild(eye);
+          if(hasLook){ const cl=document.createElement('button'); cl.textContent='\u2298'; cl.title='Clear the look target (fall back to the Look mode)'; cl.style.cssText='padding:1px 6px;font-size:10px;';
+            cl.onclick=()=>{ pushUndoSnapshot(); CS.path[i].length=3; if(typeof refreshCinePreview==='function') refreshCinePreview(); renderEditorFields(); }; r.appendChild(cl); }
+          r.appendChild(del); b.appendChild(r); });
         const clr=document.createElement('button'); clr.textContent='Clear path'; clr.style.cssText='padding:3px 10px;font-size:11px;margin:3px 0;'; clr.onclick=()=>{ pushUndoSnapshot(); CS.path.length=0; renderEditorFields(); }; b.appendChild(clr);
       }
       const crow=(lab,val,mn,mx,st,suffix,set)=>{ const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent=lab; sp.style.minWidth='56px'; const inp=document.createElement('input'); inp.type='range'; inp.min=mn; inp.max=mx; inp.step=st; inp.value=val; inp.style.flex='1'; inp.style.accentColor='#38f5b5'; const nm=document.createElement('span'); nm.textContent=val+suffix; nm.style.minWidth='44px'; nm.style.textAlign='right'; inp.oninput=()=>{ nm.textContent=inp.value+suffix; set(+inp.value); }; r.appendChild(sp); r.appendChild(inp); r.appendChild(nm); b.appendChild(r); };
