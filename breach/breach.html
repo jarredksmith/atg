@@ -6374,15 +6374,19 @@ function setPropAnimMode(obj, mode){
   }
 }
 // Play a trigger-mode prop's animation once from the start (E-key activation).
-function playPropAnimationOnce(obj){
+function playPropAnimationOnce(obj, clip){
   const acts = obj && obj.userData.animActions; if(!acts || !acts.length) return;
-  for(const a of acts){ a.reset(); a.play(); }
+  let list = acts;
+  if(clip){ const m = acts.filter(a=>{ try{ return a.getClip().name===clip; }catch(e){ return false; } });
+    if(m.length) list = m;   // exact clip match; an unknown name falls back to all clips rather than silence
+  }
+  for(const a of list){ a.reset(); a.play(); }
   if(SFX && SFX.swap) SFX.swap();   // small mechanical click for feedback
 }
 // Tell peers to play prop #i's trigger animation (so a trigger one player fires is seen by everyone).
-function broadcastAnim(i){
-  if(NET.mode==='host'){ for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'anim', i}); }catch(e){} } }
-  else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send({t:'anim', i}); }catch(e){} }
+function broadcastAnim(i, clip){
+  if(NET.mode==='host'){ for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'anim', i, c:clip||undefined}); }catch(e){} } }
+  else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send({t:'anim', i, c:clip||undefined}); }catch(e){} }
 }
 // ---------- Transform-animated mechanisms: move/rotate any object (platforms, doors). userData.xa holds the
 // authored offset + playback/trigger; base transform is captured at deploy so the editor position is point A. ----------
@@ -6429,7 +6433,7 @@ function fireSignals(o, when){
         if(s.do==='toggle'){ if(t.userData.xa && t.userData.xa.on){ xaToggle(t); broadcastXAnim(i); } }
         else if(s.do==='open'){ if(t.userData.xa && t.userData.xa.on && !t.userData.xa.dest){ t.userData.xa.dest=1; broadcastXAnim(i); } }
         else if(s.do==='close'){ if(t.userData.xa && t.userData.xa.on && t.userData.xa.dest){ t.userData.xa.dest=0; broadcastXAnim(i); } }
-        else if(s.do==='anim'){ playPropAnimationOnce(t); broadcastAnim(i); }
+        else if(s.do==='anim'){ playPropAnimationOnce(t, s.clip); broadcastAnim(i, s.clip); }
         else if(s.do==='unlock'){ if(t.userData.lockId && !t.userData.unlocked){ t.userData.unlocked=true; broadcastUnlock(i); } }
       }catch(e){}
     }
@@ -7125,7 +7129,7 @@ function removeProp(idx){
 function loadHostedProps(){
   const list = (savedLevel && Array.isArray(savedLevel.props)) ? savedLevel.props : SCENE_PROPS;
   propModels.length = list.length;   // reserve slots so async GLB loads can't clobber later push-spawned props
-  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>({ when:s.w, do:s.d, target:s.t })); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));   // slot=i preserves order
+  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));   // slot=i preserves order
 }
 loadHostedProps();
 
@@ -8868,7 +8872,7 @@ function loadLevelFromNet(level){
   // rebuild from the host's data
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>({ when:s.w, do:s.d, target:s.t })); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }catch(e){ console.warn('net prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('net prop '+i+' failed', e); } });
+    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }catch(e){ console.warn('net prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('net prop '+i+' failed', e); } });
   }
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
@@ -9353,7 +9357,7 @@ function handleClientMsg(conn, msg){
     if(msg.exp){ explodeAt(ctr.clone(), msg.br||7, 0, null); }   // explosive prop: blast visual (host already applied damage)
   }
   else if(msg.t==='buyChest'){ const ci=chests.findIndex(c=>c.id===msg.id); if(ci>=0){ scene.remove(chests[ci].mesh); chests.splice(ci,1); } }   // a client bought a crate -> remove it for everyone
-  else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'anim', i:msg.i}); }catch(e){} } } }   // play + relay to other clients
+  else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o, msg.c); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'anim', i:msg.i, c:msg.c}); }catch(e){} } } }   // play + relay to other clients
   else if(msg.t==='xa'){ const o=propModels[msg.i]; if(o&&o.userData.xa) o.userData.xa.dest=msg.dest?1:0; for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'xa', i:msg.i, dest:msg.dest}); }catch(e){} } } }   // mechanism toggle + relay
       else if(msg.t==='unlock'){ const o=propModels[msg.i]; if(o) o.userData.unlocked=true; for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'unlock', i:msg.i}); }catch(e){} } } }   // a client used a key + relay
   else if(msg.t==='pAdd'){ if(netApplyAddProp(msg.d)) relayProp({t:'pAdd', d:msg.d}, id); }       // a client added a prop -> mirror + relay
@@ -9395,7 +9399,7 @@ function handleHostMsg(msg){
   else if(msg.t==='feed'){ addKillFeed(msg.k, msg.v); }
   else if(msg.t==='chat'){ addChatLine(msg.name||'?', (''+(msg.text||'')).slice(0,200)); }   // chat from the host or relayed from another player
   else if(msg.t==='duelOver'){ showDuelResult(msg.w, msg.wt); }
-  else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o); }   // a trigger animation fired somewhere
+  else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o, msg.c); }   // a trigger animation fired somewhere
   else if(msg.t==='xa'){ const o=propModels[msg.i]; if(o&&o.userData.xa) o.userData.xa.dest=msg.dest?1:0; }   // a mechanism toggled somewhere
       else if(msg.t==='unlock'){ const o=propModels[msg.i]; if(o) o.userData.unlocked=true; }   // someone used a key on this prop
   else if(msg.t==='pAdd'){ netApplyAddProp(msg.d); }    // host/other player added a prop
@@ -10351,7 +10355,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 348 · 2026-06-12';
+const BUILD_VERSION = 'build 349 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13423,7 +13427,7 @@ function propEntry(o){
   const m=propMaterialDesc(o); if(m) e.mat=m;
   if(o.userData.lockId){ e.lk=o.userData.lockId; if(o.userData.lockConsume) e.lkc=1; }
   if(o.userData.tag) e.tg=o.userData.tag;
-  if(o.userData.signals && o.userData.signals.length) e.sg=o.userData.signals.map(s=>({ w:s.when, d:s.do, t:s.target }));
+  if(o.userData.signals && o.userData.signals.length) e.sg=o.userData.signals.map(s=>{ const x={ w:s.when, d:s.do, t:s.target }; if(s.clip) x.c=s.clip; return x; });
   if(o.userData.sigNeed>1) e.snd=o.userData.sigNeed;
   if(o.userData.attribution) e.att=o.userData.attribution;
   if(o.userData.nid) e.nid=o.userData.nid;
@@ -13688,7 +13692,7 @@ function restoreLevel(level){
   propModels.length = 0;
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>({ when:s.w, do:s.d, target:s.t })); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }catch(e){ console.warn('prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('prop '+i+' failed to load', e); } });
+    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }catch(e){ console.warn('prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('prop '+i+' failed to load', e); } });
   }
   // lights
   for(let i=lightModels.length-1;i>=0;i--) removeLight(i);
@@ -14997,7 +15001,7 @@ function renderEditorFields(){
           nr.appendChild(nsp); nr.appendChild(nin); nr.appendChild(nl); sgBody.appendChild(nr); }
         const sigs = sel.userData.signals || (sel.userData.signals=[]);
         sigs.forEach((s,si)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;gap:4px;align-items:center;margin:0 0 3px;';
-          const mkSel=(opts,val,on)=>{ const e=document.createElement('select'); e.style.cssText='font-size:11px;flex:1;'; opts.forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(val===o[0]) op.selected=true; e.appendChild(op); }); e.onchange=()=>{ pushUndoSnapshot(); on(e.value); }; return e; };
+          const mkSel=(opts,val,on)=>{ const e=document.createElement('select'); e.style.cssText='font-size:11px;flex:1;'; opts.forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(val===o[0]) op.selected=true; e.appendChild(op); }); e.onchange=()=>{ pushUndoSnapshot(); on(e.value); renderEditorFields(); }; return e; };
           r.appendChild(mkSel([['destroyed','On destroyed'],['interacted','On E']], s.when, v=>{ s.when=v; }));
           r.appendChild(mkSel([['toggle','Toggle'],['open','Open'],['close','Close'],['anim','Play anim'],['unlock','Unlock'],['win','Win level']], s.do, v=>{ s.do=v; }));
           const ti=document.createElement('input'); ti.type='text'; ti.placeholder='target tag'; ti.value=s.target||'';
@@ -15005,7 +15009,14 @@ function renderEditorFields(){
           ti.onchange=()=>{ pushUndoSnapshot(); s.target=ti.value.trim(); };
           const del=document.createElement('button'); del.textContent='\u00d7'; del.style.cssText='padding:1px 7px;font-size:12px;';
           del.onclick=()=>{ pushUndoSnapshot(); sigs.splice(si,1); renderEditorFields(); };
-          r.appendChild(ti); r.appendChild(del); sgBody.appendChild(r); });
+          r.appendChild(ti); r.appendChild(del); sgBody.appendChild(r);
+          if(s.do==='anim'){   // optional: name one clip from the target's GLB; blank = play them all
+            const cr2=document.createElement('div'); cr2.style.cssText='display:flex;gap:4px;align-items:center;margin:-1px 0 4px;padding-left:8px;';
+            const ci=document.createElement('input'); ci.type='text'; ci.placeholder='clip name (blank = all clips)'; ci.value=s.clip||'';
+            ci.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#9fe6cf;border-radius:4px;padding:2px 5px;font-size:10px;';
+            ci.onchange=()=>{ pushUndoSnapshot(); const v=ci.value.trim(); if(v) s.clip=v; else delete s.clip; };
+            cr2.appendChild(ci); sgBody.appendChild(cr2);
+          } });
         { const add=document.createElement('button'); add.textContent='+ Add signal'; add.style.cssText='padding:2px 9px;font-size:11px;margin:1px 0 2px;';
           add.onclick=()=>{ pushUndoSnapshot(); sigs.push({ when:'interacted', do:'toggle', target:'' }); renderEditorFields(); };
           sgBody.appendChild(add); }
