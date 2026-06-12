@@ -6385,6 +6385,10 @@ function playPropAnimationOnce(obj, clip){
   if(SFX && SFX.swap) SFX.swap();   // small mechanical click for feedback
 }
 // Tell peers to play prop #i's trigger animation (so a trigger one player fires is seen by everyone).
+function broadcastCine(){   // everyone watches the same story beat
+  if(NET.mode==='host'){ for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'cine'}); }catch(e){} } }
+  else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send({t:'cine'}); }catch(e){} }
+}
 function broadcastAnim(i, clip){
   if(NET.mode==='host'){ for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'anim', i, c:clip||undefined}); }catch(e){} } }
   else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send({t:'anim', i, c:clip||undefined}); }catch(e){} }
@@ -6425,6 +6429,10 @@ function fireSignals(o, when){
   for(const s of sigs){
     if(s.when !== when) continue;
     if(s.do==='win'){ if(typeof NET==='undefined' || NET.mode!=='client'){ try{ gameWon(); }catch(e){} } continue; }   // ends the level; needs no target. Solo/host only — a client's E can't end the match.
+    if(s.do==='cutscene'){   // plays the level's cinematic mid-game, for everyone. No target needed.
+      if(typeof cineHasData==='function' && cineHasData() && (typeof _cineActive==='undefined' || !_cineActive) && (typeof editorOpen==='undefined' || !editorOpen)){
+        try{ startCinematic({ shots: cineAllShots() }, false); if(typeof broadcastCine==='function') broadcastCine(); }catch(e){}
+      } continue; }
     if(!s.target) continue;
     for(let i=0;i<propModels.length;i++){
       const t = propModels[i]; if(!t || t.userData.tag !== s.target) continue;
@@ -9369,6 +9377,7 @@ function handleClientMsg(conn, msg){
   }
   else if(msg.t==='buyChest'){ const ci=chests.findIndex(c=>c.id===msg.id); if(ci>=0){ scene.remove(chests[ci].mesh); chests.splice(ci,1); } }   // a client bought a crate -> remove it for everyone
   else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o, msg.c); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'anim', i:msg.i, c:msg.c}); }catch(e){} } } }   // play + relay to other clients
+      else if(msg.t==='cine'){ if(!editorOpen && !_cineActive && cineHasData()) startCinematic({ shots: cineAllShots() }, false); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'cine'}); }catch(e){} } } }   // host plays it too, then relays
   else if(msg.t==='xa'){ const o=propModels[msg.i]; if(o&&o.userData.xa) o.userData.xa.dest=msg.dest?1:0; for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'xa', i:msg.i, dest:msg.dest}); }catch(e){} } } }   // mechanism toggle + relay
       else if(msg.t==='unlock'){ const o=propModels[msg.i]; if(o) o.userData.unlocked=true; for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'unlock', i:msg.i}); }catch(e){} } } }   // a client used a key + relay
   else if(msg.t==='pAdd'){ if(netApplyAddProp(msg.d)) relayProp({t:'pAdd', d:msg.d}, id); }       // a client added a prop -> mirror + relay
@@ -9411,6 +9420,7 @@ function handleHostMsg(msg){
   else if(msg.t==='chat'){ addChatLine(msg.name||'?', (''+(msg.text||'')).slice(0,200)); }   // chat from the host or relayed from another player
   else if(msg.t==='duelOver'){ showDuelResult(msg.w, msg.wt); }
   else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o, msg.c); }   // a trigger animation fired somewhere
+      else if(msg.t==='cine'){ if(!editorOpen && !_cineActive && cineHasData()) startCinematic({ shots: cineAllShots() }, false); }   // a story beat fired somewhere
   else if(msg.t==='xa'){ const o=propModels[msg.i]; if(o&&o.userData.xa) o.userData.xa.dest=msg.dest?1:0; }   // a mechanism toggled somewhere
       else if(msg.t==='unlock'){ const o=propModels[msg.i]; if(o) o.userData.unlocked=true; }   // someone used a key on this prop
   else if(msg.t==='pAdd'){ netApplyAddProp(msg.d); }    // host/other player added a prop
@@ -10366,7 +10376,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 353 · 2026-06-12';
+const BUILD_VERSION = 'build 354 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14315,7 +14325,8 @@ function levelIssues(){
     for(const o of propModels){ if(!o || !o.userData || !o.userData.signals) continue;
       for(const s of o.userData.signals){
         if(s.target && !tags.has(s.target)) issues.push("A signal targets tag '"+s.target+"', but no prop carries that tag.");
-        if(!s.target && s.do!=='win') issues.push('A signal has no target tag (only Win level works without one).'); } }
+        if(!s.target && s.do!=='win' && s.do!=='cutscene') issues.push('A signal has no target tag (only Win level and Play cutscene work without one).');
+        if(s.do==='cutscene'){ const _ok=[cineCfg, ...((cineCfg&&Array.isArray(cineCfg.shots2))?cineCfg.shots2:[])].some(x=>x && x.path && x.path.length>=2); if(!_ok) issues.push('A signal plays the cutscene, but no cinematic shot has 2+ path points \u2014 it will play nothing.'); } } }
     for(const o of propModels){ const a=o && o.userData && o.userData.xa; if(!a || !a.on || a.trig!=='signal') continue;
       const tg=o.userData.tag; let wired=false;
       if(tg){ for(const p of propModels){ const ss=p && p.userData && p.userData.signals; if(!ss) continue;
@@ -15095,7 +15106,7 @@ function renderEditorFields(){
         sigs.forEach((s,si)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;gap:4px;align-items:center;margin:0 0 3px;';
           const mkSel=(opts,val,on)=>{ const e=document.createElement('select'); e.style.cssText='font-size:11px;flex:1;'; opts.forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(val===o[0]) op.selected=true; e.appendChild(op); }); e.onchange=()=>{ pushUndoSnapshot(); on(e.value); renderEditorFields(); }; return e; };
           r.appendChild(mkSel([['destroyed','On destroyed'],['interacted','On E']], s.when, v=>{ s.when=v; }));
-          r.appendChild(mkSel([['toggle','Toggle'],['open','Open'],['close','Close'],['anim','Play anim'],['unlock','Unlock'],['win','Win level']], s.do, v=>{ s.do=v; }));
+          r.appendChild(mkSel([['toggle','Toggle'],['open','Open'],['close','Close'],['anim','Play anim'],['unlock','Unlock'],['win','Win level'],['cutscene','Play cutscene']], s.do, v=>{ s.do=v; }));
           const ti=document.createElement('input'); ti.type='text'; ti.placeholder='target tag'; ti.value=s.target||'';
           ti.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 5px;font-size:11px;';
           ti.onchange=()=>{ pushUndoSnapshot(); s.target=ti.value.trim(); };
