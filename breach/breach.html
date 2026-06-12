@@ -593,6 +593,7 @@
   <div class="menuBtns menuSub">
     <button id="loadCampBtn" class="secBtn ghost">📂 Load campaign</button>
     <button id="instrBtn" class="secBtn ghost">❔ Instructions</button>
+    <button id="helpBtn" class="secBtn ghost">📖 Field manual</button>
     <button id="fsBtn" class="secBtn ghost" style="display:none">⛶ Fullscreen</button>
     <input type="file" id="menuCampFile" accept=".json,application/json" style="display:none">
   </div>
@@ -10350,7 +10351,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 345 · 2026-06-12';
+const BUILD_VERSION = 'build 347 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14023,6 +14024,7 @@ function buildEditorPanel(){
   p.innerHTML = '<div id="editorResize" title="Drag to resize"></div>'
     + '<div id="edTopBar" style="display:flex;align-items:center;gap:6px;margin:0 0 6px;">'
       + '<h3 style="margin:0;flex:1;">LEVEL / TRANSFORM EDITOR</h3>'
+      + '<button id="edHelp" title="Open the field manual (new tab)">?</button>'
       + '<button id="edDock" title="Move panel to the other side">\u21c4</button>'
       + '<button id="edCollapse" title="Collapse panel">\u2304</button>'
     + '</div>'
@@ -14059,6 +14061,7 @@ function buildEditorPanel(){
   editorEl = p;
   (function(){ const ed=p;
     try{ if(localStorage.getItem('breach_editor_dock')==='left') ed.classList.add('dockLeft'); }catch(e){}
+    const hq=ed.querySelector('#edHelp'); if(hq) hq.onclick=()=>{ try{ window.open('breach-help.html','_blank'); }catch(e){} };
     const dk=ed.querySelector('#edDock'); if(dk) dk.onclick=()=>{ ed.classList.toggle('dockLeft'); try{ localStorage.setItem('breach_editor_dock', ed.classList.contains('dockLeft')?'left':'right'); }catch(e){} };
     const cl=ed.querySelector('#edCollapse'); if(cl) cl.onclick=()=>{ const c=ed.classList.toggle('collapsed'); cl.textContent=c?'\u2303':'\u2304'; cl.title=c?'Expand panel':'Collapse panel'; };
     // "+ Add" palette: one categorized menu for everything placeable. Each item jumps to the owning
@@ -14981,7 +14984,7 @@ function renderEditorFields(){
           tin.onchange=()=>{ pushUndoSnapshot(); const v=tin.value.trim(); if(v) sel.userData.tag=v; else delete sel.userData.tag; };
           tr.appendChild(tsp); tr.appendChild(tin); sgBody.appendChild(tr); }
         { const nr=document.createElement('div'); nr.style.cssText='display:flex;gap:6px;align-items:center;margin:0 0 4px;font-size:11px;color:#9fe6cf;';
-          const nsp=document.createElement('span'); nsp.textContent='Needs'; nsp.style.minWidth='56px';
+          const nsp=document.createElement('span'); nsp.innerHTML='<b>Needs</b>'; nsp.style.minWidth='56px'; nsp.title='How many incoming signals this prop absorbs before it reacts';
           const nin=document.createElement('input'); nin.type='number'; nin.min='1'; nin.max='20'; nin.value=sel.userData.sigNeed||1;
           nin.style.cssText='width:54px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 5px;font-size:11px;';
           nin.onchange=()=>{ pushUndoSnapshot(); const v=Math.max(1, Math.min(20, parseInt(nin.value)||1)); if(v>1) sel.userData.sigNeed=v; else delete sel.userData.sigNeed; nin.value=v; };
@@ -16179,7 +16182,7 @@ function startGame(){
   buffs.damage=0; buffs.speed=0; buffs.shield=0;
   // reset aim/shake state
   firing=false; ads=false; adsBlend=0; shake=0;
-  editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof _pathPreviewGroup!=='undefined' && _pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; } if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
+  editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; { const _fb=document.getElementById('edAddFab'); if(_fb) _fb.style.display='none'; }   // the + lives outside the panel — hide it on this direct-close path too gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof _pathPreviewGroup!=='undefined' && _pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; } if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
   camera.fov = (worldCfg && worldCfg.fov) || BASE_FOV; camera.updateProjectionMatrix(); camera.rotation.z = 0;
   // clear entities
   enemies.slice().forEach(e=>{ scene.remove(e.mesh); if(e.mesh.userData.mixer){ const mi=mixers.indexOf(e.mesh.userData.mixer); if(mi>=0) mixers.splice(mi,1); } }); enemies.length=0;
@@ -16312,7 +16315,7 @@ function endGame(){
   stopMusic();
   gameOn=false; gameOver=true; safeExitPointerLock(); if(typeof extractZone!=='undefined' && extractZone) extractZone.visible=false; if(typeof closeUpgradePicker==='function') closeUpgradePicker();
   firing=false; ads=false; shopOpen=false;
-  editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof _pathPreviewGroup!=='undefined' && _pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; } if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
+  editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; { const _fb=document.getElementById('edAddFab'); if(_fb) _fb.style.display='none'; }   // the + lives outside the panel — hide it on this direct-close path too gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof _pathPreviewGroup!=='undefined' && _pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; } if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG;
   $('shop').classList.add('hidden');
   $('prompt').style.display='none';
   const ov=$('overlay'); ov.classList.remove('hidden');
@@ -16529,6 +16532,7 @@ function bindMenu(){
   const fs=document.getElementById('fsBtn');
   if(fs){ if(!fsSupported()){ fs.style.display='none'; } else { fs.style.display=''; fs.onclick=toggleFullscreen; syncFsBtn(); } }   // desktop only
   const ib=document.getElementById('instrBtn'); if(ib) ib.onclick=()=>openModal('instrModal');
+  const hb=document.getElementById('helpBtn'); if(hb) hb.onclick=()=>{ try{ window.open('breach-help.html','_blank'); }catch(e){} };   // full docs, hosted beside the game
   const mo=document.getElementById('mpOpenBtn'); if(mo) mo.onclick=()=>{ const di=document.getElementById('mpBotDiff'); if(di && BOT_DIFF[NET.botDiff]) di.value=NET.botDiff; openModal('mpModal'); };
   { const fb=document.getElementById('mpFFA'); if(fb) fb.onclick=startFFA; }
   { const tb=document.getElementById('mpTDM'); if(tb) tb.onclick=startTDM; }
