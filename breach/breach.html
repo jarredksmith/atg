@@ -6565,7 +6565,7 @@ function updateXAnim(dt){
     const a=o&&o.userData&&o.userData.xa; if(!a||!a.on) continue;
     if(a.bpx===undefined){ a.bpx=o.position.x; a.bpy=o.position.y; a.bpz=o.position.z; a.brx=o.rotation.x; a.bry=o.rotation.y; a.brz=o.rotation.z; if(a.ph==null)a.ph=0; if(a.dir==null)a.dir=1; if(a.dest==null)a.dest=0; }
     const dur=Math.max(0.05, a.dur||2), step=dt/dur; let lin=false;
-    if(a.trig==='interact'){ const tgt=a.dest?1:0; if(a.ph<tgt) a.ph=Math.min(tgt,a.ph+step); else if(a.ph>tgt) a.ph=Math.max(tgt,a.ph-step); }
+    if(a.trig==='interact' || a.trig==='signal'){ const tgt=a.dest?1:0; if(a.ph<tgt) a.ph=Math.min(tgt,a.ph+step); else if(a.ph>tgt) a.ph=Math.max(tgt,a.ph-step); }
     else if(a.mode==='once'){ if(a.ph<1) a.ph=Math.min(1,a.ph+step); }
     else if(a.mode==='pingpong'){ a.ph+=a.dir*step; if(a.ph>=1){a.ph=1;a.dir=-1;} else if(a.ph<=0){a.ph=0;a.dir=1;} }
     else { a.ph+=step; if(a.ph>=1) a.ph-=1; lin=true; }   // loop = continuous (best for spins / conveyors)
@@ -10351,7 +10351,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 347 · 2026-06-12';
+const BUILD_VERSION = 'build 348 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14245,6 +14245,11 @@ function levelIssues(){
       for(const s of o.userData.signals){
         if(s.target && !tags.has(s.target)) issues.push("A signal targets tag '"+s.target+"', but no prop carries that tag.");
         if(!s.target && s.do!=='win') issues.push('A signal has no target tag (only Win level works without one).'); } }
+    for(const o of propModels){ const a=o && o.userData && o.userData.xa; if(!a || !a.on || a.trig!=='signal') continue;
+      const tg=o.userData.tag; let wired=false;
+      if(tg){ for(const p of propModels){ const ss=p && p.userData && p.userData.signals; if(!ss) continue;
+        for(const s of ss){ if(s.target===tg){ wired=true; break; } } if(wired) break; } }
+      if(!wired) issues.push('A Signals-only mechanism can never move \u2014 '+(tg ? ("nothing targets its tag '"+tg+"'.") : 'it has no tag for signals to target.')); }
   }catch(e){}
   return issues;
 }
@@ -15025,7 +15030,7 @@ function renderEditorFields(){
           num('Duration (s)','dur',0.1,60,0.1);
           const seg=(label,key,opts)=>{ const h=document.createElement('div'); h.className='hint'; h.style.margin='6px 0 2px'; h.textContent=label; xBody.appendChild(h); const row=document.createElement('div'); row.className='row2'; opts.forEach(o=>{ const b=document.createElement('button'); b.textContent=o[1]; if((xa[key]||opts[0][0])===o[0]){ b.style.background='rgba(122,215,255,0.28)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); xa[key]=o[0]; renderEditorFields(); }; row.appendChild(b); }); xBody.appendChild(row); };
           seg('Playback','mode',[['loop','\u27f3 Loop'],['pingpong','\u21c4 Ping-pong'],['once','\u2192 Once']]);
-          seg('Trigger','trig',[['auto','Auto'],['interact','E Activate']]);
+          seg('Trigger','trig',[['auto','Auto'],['interact','E Activate'],['signal','Signals only']]);   // signal: no autoplay, no E prompt — moves only when a signal drives it
           // ---- Waypoint path: prop travels through a series of points (ping-pong by default) ----
           { const wpBody = edFold(animHost, 'waypath', '<b>Waypoint path</b> \u2014 travels through points (overrides Move offset)');
             xa.path = xa.path || [];
