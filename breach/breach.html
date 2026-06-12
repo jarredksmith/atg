@@ -8297,6 +8297,7 @@ const POWERUP_KINDS = {
   key_gold: { c:0xffd166, label:'GOLD KEY', key:'gold' },
   key_green:{ c:0x9be15a, label:'GREEN KEY', key:'green' },
 };
+const PICKUP_KIND_OPTS = [['health','+Health'],['ammo','+Ammo'],['rifle','Rifle'],['smg','SMG'],['shotgun','Shotgun'],['sniper','Sniper'],['launcher','Rocket'],['grenade','Grenade'],['damage','2x Dmg'],['speed','Speed'],['shield','Shield'],['key_red','Red Key'],['key_blue','Blue Key'],['key_gold','Gold Key'],['key_green','Green Key']];   // editor dropdown labels, shared by add-row + per-spot selects
 let playerKeys = {};   // per-run key ring: color -> true. Reset every deploy; PvP respawns keep it.
 function renderKeyChips(){
   let host = document.getElementById('keyChips');
@@ -10345,7 +10346,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 342 · 2026-06-12';
+const BUILD_VERSION = 'build 344 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12327,7 +12328,8 @@ function updateCinematic(dt){
   if(d.focusOn && !IS_COARSE){ dofEnabled=true; dofFocus = d.focusFrom + (d.focusTo - d.focusFrom)*te; }   // rack focus: focus-distance ramp
   if(_cineT>=d.dur) endCinematic();
 }
-function maybeStartIntroCine(){ if(cineCfg.on && cineHasData()) startCinematic({ path:cineCfg.path, lensFrom:cineCfg.lensFrom, lensTo:cineCfg.lensTo, focusOn:cineCfg.focusOn, focusFrom:cineCfg.focusFrom, focusTo:cineCfg.focusTo, dur:cineCfg.dur, look:cineCfg.look }, false); }
+function maybeStartIntroCine(){ if(typeof editorOpen!=='undefined' && editorOpen) return;   // entering/being in the editor is authoring, not a deploy
+  if(cineCfg.on && cineHasData()) startCinematic({ path:cineCfg.path, lensFrom:cineCfg.lensFrom, lensTo:cineCfg.lensTo, focusOn:cineCfg.focusOn, focusFrom:cineCfg.focusFrom, focusTo:cineCfg.focusTo, dur:cineCfg.dur, look:cineCfg.look }, false); }
 function _dashPts(v, dash, gap){
   const out=[], step=dash+gap;
   for(let i=0;i<v.length-1;i++){ const a=v[i], b=v[i+1], len=a.distanceTo(b); if(len<1e-4) continue;
@@ -13163,7 +13165,7 @@ const MODE_SECTIONS = {
   build:   ['gizmo','object','material','transform','characters'],
   scene:   ['world','audiozones'],
   enemies: ['enemies','gizmo','object','transform'],   // spawn points live here now; their picker/fields/gizmo sections come along
-  rules:   ['game','loot'],
+  rules:   ['game','pickups','loot'],
   kit:     ['object','transform','impactfx','tracerfx'],   // 'object' carries the weapon model import + per-weapon shoot sound; impact/streak FX; music/SFX live in Scene
   files:   ['levelfile','campaign'],
 };
@@ -14031,6 +14033,7 @@ function buildEditorPanel(){
     + sec('World', 'world', '<div id="edWorld"></div>')
     + sec('Enemies', 'enemies', '<div id="edEnemies"></div>')
     + sec('Game / waves', 'game', '<div id="edGame"></div>')
+    + sec('Pickups', 'pickups', '<div id="edPickups"></div>')
     + sec('Loot', 'loot', '<div id="edLoot"></div>')
     + sec('Audio zones', 'audiozones', '<div id="edAudioZones"></div>')
     + sec('Impact FX', 'impactfx', '<div id="edImpactFx"></div>')
@@ -14080,18 +14083,28 @@ function buildEditorPanel(){
         ['\u25b2 Cone',     ()=>{ jump('build','props');   addSceneProp('cone'); }],
         ['\ud83d\udca1 Light',       ()=>{ jump('build','lights');  addSceneLight(); }],
         ['\ud83d\udc7e Enemy spawn', ()=>{ jump('enemies','spawns'); addSceneSpawn(); }],
-        ['\u25c6 Pickup pad',        ()=>{ jump('rules');           addPickupSpot(newPickupKind||'health'); }],
-        ['\ud83d\udd0a Audio zone',  ()=>{ jump('scene'); pushUndoSnapshot(); audioZones.push({ x:+player.pos.x.toFixed(2), z:+player.pos.z.toFixed(2), r:14, url:'', vol:0.8, loop:true }); refreshAudioZoneMarkers(); renderEditorFields(); }],
+        ['\u25c6 Pickup pad \u25b8',  '_pickupSub'],
+        ['\ud83d\udd0a Audio zone',  ()=>{ jump('scene'); pushUndoSnapshot(); audioZones.push({ x:+player.pos.x.toFixed(2), z:+player.pos.z.toFixed(2), r:14, url:'', vol:0.8, loop:true }); refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel(); }],   // the zones panel has its own renderer — renderEditorFields doesn't repaint it
       ];
-      for(const [label, act] of ADD_ITEMS){
-        const it=document.createElement('div'); it.textContent=label;
+      const menuItem=(label, on)=>{ const it=document.createElement('div'); it.textContent=label;
         it.style.cssText='padding:6px 10px;cursor:pointer;border-radius:4px;font:12px ui-monospace,monospace;color:#cfeee2;';
         it.onmouseenter=()=>{ it.style.background='rgba(56,245,181,0.18)'; };
         it.onmouseleave=()=>{ it.style.background=''; };
-        it.onclick=()=>{ addMenu.style.display='none'; try{ act(); }catch(e){ console.warn('add failed', e); } };
-        addMenu.appendChild(it);
-      }
-      addBtn.onclick=(e)=>{ e.stopPropagation(); addMenu.style.display = addMenu.style.display==='none' ? 'block' : 'none'; };
+        it.onclick=(e)=>{ e.stopPropagation(); on(); };
+        addMenu.appendChild(it); return it; };
+      const buildMain=()=>{ addMenu.innerHTML='';
+        for(const [label, act] of ADD_ITEMS){
+          if(act==='_pickupSub'){ menuItem(label, buildPickups); continue; }
+          menuItem(label, ()=>{ addMenu.style.display='none'; try{ act(); }catch(e){ console.warn('add failed', e); } });
+        } };
+      const buildPickups=()=>{ addMenu.innerHTML='';   // second level: pick which pad to drop
+        menuItem('\u2039 Back', buildMain);
+        for(const k of Object.keys(POWERUP_KINDS)){
+          const pk=POWERUP_KINDS[k];
+          menuItem((pk.key?'\ud83d\udd11 ':'\u25c6 ')+(pk.key?keyDisplayName(pk.key):pk.label), ()=>{ addMenu.style.display='none'; newPickupKind=k; jump('rules'); addPickupSpot(k); });
+        } };
+      buildMain();
+      addBtn.onclick=(e)=>{ e.stopPropagation(); const opening = addMenu.style.display==='none'; if(opening) buildMain(); addMenu.style.display = opening ? 'block' : 'none'; };
       document.addEventListener('click', ()=>{ addMenu.style.display='none'; });
     }
   })();
@@ -14574,19 +14587,21 @@ function renderEditorFields(){
       hint(gHost, '', '2px 0 0').textContent = 'Payload starts at your spawn and rolls to the beacon. Stay within '+(gameCfg.extractRadius||3.5)+'m to keep it moving.';
     }
     // ===== Pickups: weapons / ammo / health / buffs placed on the map =====
-    hint(gHost, '<b>Pickups</b> \u2014 items players grab on the map', '12px 0 4px');
+    const pkHost = (editorEl && editorEl.querySelector('#edPickups')) || gHost;   // own module since build 343
+    pkHost.innerHTML='';
+    hint(pkHost, '<b>Pickups</b> \u2014 items players grab on the map', '12px 0 4px');
     { const poLab=document.createElement('label'); poLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 6px;cursor:pointer;';
       const poCb=document.createElement('input'); poCb.type='checkbox'; poCb.checked=pickupsOn; poCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
       poCb.onchange=()=>{ pushUndoSnapshot(); pickupsOn=poCb.checked; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers(); renderEditorFields(); };
-      const poSp=document.createElement('span'); poSp.textContent='Spawn pickups'; poLab.appendChild(poCb); poLab.appendChild(poSp); gHost.appendChild(poLab); }
-    if(!pickupsOn){ hint(gHost,'','2px 0 6px').textContent='Pickups are off \u2014 no health/buff diamonds spawn (placed spots below are kept for when you turn this back on).'; }
+      const poSp=document.createElement('span'); poSp.textContent='Spawn pickups'; poLab.appendChild(poCb); poLab.appendChild(poSp); pkHost.appendChild(poLab); }
+    if(!pickupsOn){ hint(pkHost,'','2px 0 6px').textContent='Pickups are off \u2014 no health/buff diamonds spawn (placed spots below are kept for when you turn this back on).'; }
     { const krow=document.createElement('div'); krow.className='row2'; krow.style.flexWrap='wrap';
-      const KINDS=[['health','+Health'],['ammo','+Ammo'],['rifle','Rifle'],['smg','SMG'],['shotgun','Shotgun'],['sniper','Sniper'],['launcher','Rocket'],['grenade','Grenade'],['damage','2x Dmg'],['speed','Speed'],['shield','Shield'],['key_red','Red Key'],['key_blue','Blue Key'],['key_gold','Gold Key'],['key_green','Green Key']];
+      const KINDS=PICKUP_KIND_OPTS;
       const ksel=document.createElement('select'); ksel.style.cssText='flex:1;min-width:90px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
       KINDS.forEach(k=>{ const o=document.createElement('option'); o.value=k[0]; o.textContent=k[1]; if(k[0]===newPickupKind) o.selected=true; ksel.appendChild(o); });
       ksel.onchange=()=>{ newPickupKind=ksel.value; renderEditorFields(); };
       const addB=document.createElement('button'); addB.textContent='+ Place ahead'; addB.onclick=()=>addPickupSpot(newPickupKind);
-      krow.appendChild(ksel); krow.appendChild(addB); gHost.appendChild(krow); }
+      krow.appendChild(ksel); krow.appendChild(addB); pkHost.appendChild(krow); }
     if(POWERUP_KINDS[newPickupKind] && POWERUP_KINDS[newPickupKind].key){   // keys: optional display name ('Engine Room Keycard') used in toasts, prompts, chips, lock dropdown
       const kc = POWERUP_KINDS[newPickupKind].key;
       const nrow=document.createElement('div'); nrow.style.cssText='display:flex;gap:6px;margin-top:6px;align-items:center;';
@@ -14594,7 +14609,7 @@ function renderEditorFields(){
       const ninp=document.createElement('input'); ninp.type='text'; ninp.placeholder=kc.toUpperCase()+' KEY'; ninp.value=keyNames[kc]||'';
       ninp.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
       ninp.onchange=()=>{ pushUndoSnapshot(); const v=ninp.value.trim(); if(v) keyNames[kc]=v; else delete keyNames[kc]; };
-      nrow.appendChild(nsp); nrow.appendChild(ninp); gHost.appendChild(nrow);
+      nrow.appendChild(nsp); nrow.appendChild(ninp); pkHost.appendChild(nrow);
     }
     { const pm = pickupModels[newPickupKind] || (pickupModels[newPickupKind]={ url:'', scale:1 });
       const mrow=document.createElement('div'); mrow.style.cssText='display:flex;gap:6px;margin-top:6px;align-items:center;';
@@ -14602,16 +14617,20 @@ function renderEditorFields(){
       url.onchange=()=>{ pushUndoSnapshot(); pm.url=url.value.trim(); if(typeof refreshPickupMarkers==='function') refreshPickupMarkers(); };
       const sc=document.createElement('input'); sc.type='number'; sc.min='0.05'; sc.max='20'; sc.step='0.1'; sc.value=pm.scale||1; sc.title='scale'; sc.style.cssText='width:58px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 4px;font-size:12px;';
       sc.onchange=()=>{ pushUndoSnapshot(); pm.scale=parseFloat(sc.value)||1; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers(); };
-      mrow.appendChild(url); mrow.appendChild(sc); gHost.appendChild(mrow);
-      hint(gHost,'','2px 0 0').textContent='Custom model for the "'+newPickupKind+'" pickup (replaces the floating icon). Blank = default; weapons default to their gun model.';
+      mrow.appendChild(url); mrow.appendChild(sc); pkHost.appendChild(mrow);
+      hint(pkHost,'','2px 0 0').textContent='Custom model for the "'+newPickupKind+'" pickup (replaces the floating icon). Blank = default; weapons default to their gun model.';
     }
     if(pickupSpots.length){
-      hint(gHost,'','3px 0 2px').textContent = pickupSpots.length+' placed:';
+      hint(pkHost,'','3px 0 2px').textContent = pickupSpots.length+' placed:';
       pickupSpots.forEach((sp,i)=>{ const row=document.createElement('div'); row.style.cssText='display:flex;align-items:center;gap:8px;font-size:12px;color:#cfeee2;margin:2px 0;';
-        const lab=document.createElement('span'); lab.style.flex='1'; lab.textContent=(i+1)+'. '+((POWERUP_KINDS[sp.kind]&&POWERUP_KINDS[sp.kind].label)||sp.kind)+'  ('+sp.x.toFixed(1)+', '+sp.z.toFixed(1)+')';
+        const lab=document.createElement('span'); lab.textContent=(i+1)+'.'; lab.style.minWidth='18px';
+        const ks=document.createElement('select'); ks.style.cssText='flex:1;font-size:11px;';
+        PICKUP_KIND_OPTS.forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(sp.kind===o[0]) op.selected=true; ks.appendChild(op); });   // global list — the block-scoped KINDS isn't visible here
+        ks.onchange=()=>{ pushUndoSnapshot(); sp.kind=ks.value; refreshPickupMarkers(); renderEditorFields(); };   // change in place — no delete+re-add
+        const pos=document.createElement('span'); pos.textContent='('+sp.x.toFixed(1)+', '+sp.z.toFixed(1)+')'; pos.style.cssText='font-size:10px;opacity:0.7;';
         const del=document.createElement('button'); del.textContent='\u2715'; del.style.cssText='padding:1px 7px'; del.onclick=()=>removePickupSpot(i);
-        row.appendChild(lab); row.appendChild(del); gHost.appendChild(row); });
-    } else { hint(gHost,'','3px 0 0').textContent='None yet. Pick a kind, walk where you want it, then Place ahead. They respawn on a timer.'; }
+        row.appendChild(lab); row.appendChild(ks); row.appendChild(pos); row.appendChild(del); pkHost.appendChild(row); });
+    } else { hint(pkHost,'','3px 0 0').textContent='None yet. Pick a kind, walk where you want it, then Place ahead. They respawn on a timer.'; }
     hint(gHost, '<b>Wave mode</b>', '12px 0 4px');
     const gmRow=document.createElement('div'); gmRow.className='row2';
     const gmBtn=(key,txt)=>{ const b=document.createElement('button'); b.textContent=txt; if(gameCfg.mode===key){ b.style.background='rgba(56,245,181,0.30)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); gameCfg.mode=key; renderEditorFields(); }; return b; };
@@ -16035,6 +16054,8 @@ function toggleEditor(){
     if(typeof clearRuntimeProps==='function') clearRuntimeProps();        // radial props don't belong in the editor or the saved level
     if(typeof restoreDestroyedProps==='function') restoreDestroyedProps();   // show authored props that were destroyed in play, so they can be edited again
     if(typeof xaSnapToBase==='function') xaSnapToBase();
+    _cineIntroPending = false;   // an editor entry cancels any deferred intro (menu \u2192 editor goes through startGame)
+    if(_cineActive){ try{ endCinematic(); }catch(e){} }   // and kills one already running (stops its audio too)
     if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
     for(const p of powerups){ if(p.mesh) p.mesh.visible=false; }   // hide live pads while editing — markers stand in (updatePowerups is paused in the editor and re-shows ready pads on close)
     if(isTouch){ editorFreeFly=true; flyInit=false; }   // mobile: fly-around editing (joystick moves, drag the left side to look)
