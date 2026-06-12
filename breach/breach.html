@@ -10355,7 +10355,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 349 · 2026-06-12';
+const BUILD_VERSION = 'build 350 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12216,13 +12216,19 @@ function updatePerfHud(){
 // Reuses pointAlongPath. The camera rides cineCfg.path over cineCfg.dur seconds, framing either the player
 // start ('spawn') or its travel direction ('path'), letterboxed with the HUD hidden. Any input skips it.
 // Disabled / no path => deploy behaves exactly as before. Editor 'Preview' reuses the same engine.
-let cineCfg = { on:false, path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn', audio:'' };
+let cineCfg = { on:false, path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn', audio:'', shots2:[] };
 function _applyCine(lc){
-  if(lc){ cineCfg.on=!!lc.on; cineCfg.path=Array.isArray(lc.path)?lc.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lensFrom=+lc.lensFrom||+lc.lens||35; cineCfg.lensTo=+lc.lensTo||+lc.lens||cineCfg.lensFrom; cineCfg.focusOn=!!lc.focusOn; cineCfg.focusFrom=+lc.focusFrom||8; cineCfg.focusTo=+lc.focusTo||cineCfg.focusFrom; cineCfg.dur=+lc.dur||6; cineCfg.look=(lc.look==='path')?'path':'spawn'; cineCfg.audio=(typeof lc.audio==='string')?lc.audio:''; }
-  else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; cineCfg.audio=''; }
+  if(lc){ cineCfg.on=!!lc.on; cineCfg.path=Array.isArray(lc.path)?lc.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lensFrom=+lc.lensFrom||+lc.lens||35; cineCfg.lensTo=+lc.lensTo||+lc.lens||cineCfg.lensFrom; cineCfg.focusOn=!!lc.focusOn; cineCfg.focusFrom=+lc.focusFrom||8; cineCfg.focusTo=+lc.focusTo||cineCfg.focusFrom; cineCfg.dur=+lc.dur||6; cineCfg.look=(lc.look==='path')?'path':'spawn'; cineCfg.audio=(typeof lc.audio==='string')?lc.audio:'';
+    cineCfg.shots2 = Array.isArray(lc.shots2) ? lc.shots2.map(s=>({ path:Array.isArray(s.path)?s.path.map(q=>[+q[0]||0,+q[1]||0,+q[2]||0]):[], lensFrom:+s.lensFrom||35, lensTo:+s.lensTo||+s.lensFrom||35, focusOn:!!s.focusOn, focusFrom:+s.focusFrom||8, focusTo:+s.focusTo||+s.focusFrom||8, dur:+s.dur||6, look:(s.look==='path')?'path':'spawn' })) : []; }
+  else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; cineCfg.audio=''; cineCfg.shots2=[]; }
 }
 _applyCine(savedLevel && savedLevel.cine);   // restore a saved cinematic on page reload (boot path doesn't go through restoreLevel)
-let _cineActive=false, _cineT=0, _cineData=null, _cineReturn=null, _cineEditorPreview=false, _cinePreviewGroup=null, _cineIntroPending=false;   // intro deferred until the level loader reveals
+// Multi-shot cutscenes (build 350): cineCfg's flat fields ARE shot 1; extra shots live in cineCfg.shots2.
+// Shots play back to back with hard cuts; one audio track spans the whole sequence.
+let _cineShotSel = 0;   // editor: which shot the cinematic controls are bound to
+function cineAllShots(){ if(!Array.isArray(cineCfg.shots2)) cineCfg.shots2=[]; return [cineCfg, ...cineCfg.shots2]; }
+function _newCineShot(){ return { path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn' }; }
+let _cineActive=false, _cineT=0, _cineData=null, _cineReturn=null, _cineEditorPreview=false, _cinePreviewGroup=null, _cineIntroPending=false, _cineShots=null, _cineShotIdx=0;   // intro deferred until the level loader reveals
 let _interActive=false, _interTimer=null, _interKeyGo=null;   // campaign transition card (declared here so the render loop's freeze-check precedes it without a TDZ)
 let _cineAvatar=null;   // the local player's body, shown during a cutscene AND while authoring one in the editor
 let cineShowChar=true;   // editor: stand the character at the player start while building a cinematic
@@ -12275,7 +12281,7 @@ function _cineShowBars(show){
   else { el._top.style.height='0'; el._bot.style.height='0'; el.style.opacity='0'; }
 }
 function lensToFov(mm){ const f=Math.max(8, +mm||35), sensorH=24; return 2*Math.atan((sensorH/2)/f)*180/Math.PI; }   // vertical FOV, full-frame sensor
-function cineHasData(){ return !!(cineCfg && cineCfg.path && cineCfg.path.length>=1); }
+function cineHasData(){ return !!(cineCfg && cineAllShots().some(s=>s.path && s.path.length>=1)); }
 // A one-shot cutscene track: decoded like custom music, but routed straight to the master bus so it's
 // independent of the world music/SFX volumes (master volume + mute still apply). Starts with the shot,
 // stops when the shot ends or is skipped. Async-loaded; a token guards against a stale play if the shot
@@ -12296,9 +12302,13 @@ function _startCineAudio(){
     try{ const g=actx.createGain(); g.gain.value=1; g.connect(masterBus); const src=actx.createBufferSource(); src.buffer=buf; src.connect(g); src.start(); _cineAudioSrc=src; _cineAudioGain=g; }catch(e){}
   });
 }
+function _normCineShot(s){ return { path:s.path.map(q=>q.slice()), lensFrom:+s.lensFrom||35, lensTo:+s.lensTo||(+s.lensFrom||35), focusOn:!!s.focusOn, focusFrom:+s.focusFrom||8, focusTo:+s.focusTo||(+s.focusFrom||8), dur:Math.max(0.2,+s.dur||6), look:(s.look==='path'?'path':'spawn') }; }
 function startCinematic(data, editorPreview){
-  if(!data || !data.path || !data.path.length) return false;
-  _cineData={ path:data.path.map(q=>q.slice()), lensFrom:+data.lensFrom||35, lensTo:+data.lensTo||(+data.lensFrom||35), focusOn:!!data.focusOn, focusFrom:+data.focusFrom||8, focusTo:+data.focusTo||(+data.focusFrom||8), dur:Math.max(0.2,+data.dur||6), look:(data.look==='path'?'path':'spawn') };
+  if(!data) return false;
+  const raw = Array.isArray(data.shots) ? data.shots : [data];   // legacy single-shot callers still work
+  _cineShots = raw.filter(s=>s && s.path && s.path.length).map(_normCineShot);
+  if(!_cineShots.length) return false;
+  _cineShotIdx = 0; _cineData = _cineShots[0];
   _cineActive=true; _cineT=0; _cineEditorPreview=!!editorPreview;
   _cineReturn={ x:camera.position.x, y:camera.position.y, z:camera.position.z, q:camera.quaternion.clone(), fov:camera.fov, dofEn:dofEnabled, dofF:dofFocus };
   if(_cineData.focusOn && !IS_COARSE) dofEnabled=true;   // rack focus needs DoF (skipped on mobile where DoF is off)
@@ -12335,10 +12345,13 @@ function updateCinematic(dt){
   const lens = d.lensFrom + (d.lensTo - d.lensFrom)*te;          // zoom keyframe: focal-length ramp over the shot
   camera.fov=lensToFov(lens); camera.updateProjectionMatrix();
   if(d.focusOn && !IS_COARSE){ dofEnabled=true; dofFocus = d.focusFrom + (d.focusTo - d.focusFrom)*te; }   // rack focus: focus-distance ramp
-  if(_cineT>=d.dur) endCinematic();
+  if(_cineT>=d.dur){
+    if(_cineShots && _cineShotIdx < _cineShots.length-1){ _cineShotIdx++; _cineData=_cineShots[_cineShotIdx]; _cineT=0; }   // hard cut: next frame snaps to the new shot's first point/lens
+    else endCinematic();
+  }
 }
 function maybeStartIntroCine(){ if(typeof editorOpen!=='undefined' && editorOpen) return;   // entering/being in the editor is authoring, not a deploy
-  if(cineCfg.on && cineHasData()) startCinematic({ path:cineCfg.path, lensFrom:cineCfg.lensFrom, lensTo:cineCfg.lensTo, focusOn:cineCfg.focusOn, focusFrom:cineCfg.focusFrom, focusTo:cineCfg.focusTo, dur:cineCfg.dur, look:cineCfg.look }, false); }
+  if(cineCfg.on && cineHasData()) startCinematic({ shots: cineAllShots() }, false); }
 function _dashPts(v, dash, gap){
   const out=[], step=dash+gap;
   for(let i=0;i<v.length-1;i++){ const a=v[i], b=v[i+1], len=a.distanceTo(b); if(len<1e-4) continue;
@@ -12350,12 +12363,12 @@ function refreshCinePreview(){
   try{
     _syncCineEditorAvatar();
     if(_cinePreviewGroup){ scene.remove(_cinePreviewGroup); _cinePreviewGroup.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); _cinePreviewGroup=null; }
-    if(!editorOpen || !cineCfg.path || !cineCfg.path.length) return;
+    if(!editorOpen || !(cineAllShots()[Math.min(_cineShotSel, cineAllShots().length-1)].path) || !(cineAllShots()[Math.min(_cineShotSel, cineAllShots().length-1)].path).length) return;
     const g=new THREE.Group();
-    const pts=cineCfg.path.map(q=>new THREE.Vector3(q[0],q[1],q[2]));
+    const pts=(cineAllShots()[Math.min(_cineShotSel, cineAllShots().length-1)].path).map(q=>new THREE.Vector3(q[0],q[1],q[2]));
     if(pts.length>=2){ const line=new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(_dashPts(pts,0.7,0.45)), new THREE.LineBasicMaterial({ color:0xffcf6b, transparent:true, opacity:0.95, depthTest:false })); line.renderOrder=998; g.add(line); }
     if(pts.length>=1 && typeof playerSpawn!=='undefined'){ const aim=new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(_dashPts([pts[pts.length-1], new THREE.Vector3(playerSpawn.x, EYE, playerSpawn.z)],0.5,0.6)), new THREE.LineBasicMaterial({ color:0x4aa3ff, transparent:true, opacity:0.5, depthTest:false })); aim.renderOrder=998; g.add(aim); }
-    cineCfg.path.forEach((q,i)=>{ const m=new THREE.Mesh(new THREE.SphereGeometry(0.4,10,8), new THREE.MeshBasicMaterial({ color: i===0?0x38f5b5:0xffcf6b, depthTest:false })); m.position.set(q[0],q[1],q[2]); m.renderOrder=999; g.add(m); });
+    (cineAllShots()[Math.min(_cineShotSel, cineAllShots().length-1)].path).forEach((q,i)=>{ const m=new THREE.Mesh(new THREE.SphereGeometry(0.4,10,8), new THREE.MeshBasicMaterial({ color: i===0?0x38f5b5:0xffcf6b, depthTest:false })); m.position.set(q[0],q[1],q[2]); m.renderOrder=999; g.add(m); });
     scene.add(g); _cinePreviewGroup=g;
   }catch(e){ /* path preview is cosmetic; never let it break the editor */ }
 }
@@ -13469,7 +13482,7 @@ function serializeLevel(){
     extract: extractSpot ? { x: +extractSpot.x.toFixed(3), z: +extractSpot.z.toFixed(3) } : null,
     grenade: { model: GRENADE.model, scale: GRENADE.scale, radius: GRENADE.radius, damage: GRENADE.damage, fuse: GRENADE.fuse, throwForce: GRENADE.throwForce },
     audio:   { musicUrl: (audioSettings.musicUrl||''), sounds: _sanitizeSounds(audioSettings.sounds) },   // music track + custom SFX travel with the level (volumes/mute stay per-device)
-    cine:    { on: cineCfg.on, path: cineCfg.path.map(q=>q.slice()), lensFrom: cineCfg.lensFrom, lensTo: cineCfg.lensTo, focusOn: cineCfg.focusOn, focusFrom: cineCfg.focusFrom, focusTo: cineCfg.focusTo, dur: cineCfg.dur, look: cineCfg.look, audio: cineCfg.audio||'' },
+    cine:    { on: cineCfg.on, path: cineCfg.path.map(q=>q.slice()), lensFrom: cineCfg.lensFrom, lensTo: cineCfg.lensTo, focusOn: cineCfg.focusOn, focusFrom: cineCfg.focusFrom, focusTo: cineCfg.focusTo, dur: cineCfg.dur, look: cineCfg.look, audio: cineCfg.audio||'' , shots2: (cineCfg.shots2||[]).map(s=>({ path:(s.path||[]).map(q=>q.slice()), lensFrom:s.lensFrom, lensTo:s.lensTo, focusOn:s.focusOn, focusFrom:s.focusFrom, focusTo:s.focusTo, dur:s.dur, look:s.look })) },
   };
 }
 function saveLevel(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(serializeLevel())); return true; } catch(e){ return false; } }
@@ -14243,7 +14256,8 @@ function levelIssues(){
     for(const k of keys) if(!locks.has(k)) issues.push('A '+keyDisplayName(k)+' pad is placed, but nothing is locked with it.');
     if(!pickupsOn && pickupSpots.length) issues.push('Pickups are turned off, but '+pickupSpots.length+' pickup spot'+(pickupSpots.length>1?'s are':' is')+' placed.');
     audioZones.forEach((z,i)=>{ if(!(z.url||'').trim()) issues.push('Audio zone '+(i+1)+' has no sound URL.'); });
-    if(cineCfg && cineCfg.on && !(cineCfg.path && cineCfg.path.length>=2)) issues.push('Intro cinematic is on, but its camera path has fewer than 2 points.');
+    if(cineCfg && cineCfg.on){ const _sh=[cineCfg, ...((cineCfg.shots2&&Array.isArray(cineCfg.shots2))?cineCfg.shots2:[])];
+      _sh.forEach((s,i)=>{ if(!(s.path && s.path.length>=2)) issues.push('Cinematic shot '+(i+1)+' has fewer than 2 camera path points.'); }); }
     const tags=new Set(); for(const o of propModels){ if(o && o.userData && o.userData.tag) tags.add(o.userData.tag); }
     for(const o of propModels){ if(!o || !o.userData || !o.userData.signals) continue;
       for(const s of o.userData.signals){
@@ -14409,37 +14423,54 @@ function renderEditorFields(){
         const c=document.createElement('input'); c.type='checkbox'; c.checked=!!cineCfg.on; c.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
         c.onchange=()=>{ pushUndoSnapshot(); cineCfg.on=c.checked; };
         const sp=document.createElement('span'); sp.innerHTML='<b>Play intro flythrough on deploy</b>'; r.appendChild(c); r.appendChild(sp); b.appendChild(r); }
+      // ---- shot selector: the controls below edit ONE shot; shots play back to back with hard cuts ----
+      if(_cineShotSel >= cineAllShots().length) _cineShotSel = cineAllShots().length-1;
+      { const sr=document.createElement('div'); sr.style.cssText='display:flex;gap:5px;align-items:center;margin:0 0 6px;font-size:11px;color:#9fe6cf;';
+        const mkB=(txt,fn,dis)=>{ const e=document.createElement('button'); e.textContent=txt; e.style.cssText='padding:2px 8px;font-size:11px;'; e.disabled=!!dis; e.onclick=fn; return e; };
+        const N=cineAllShots().length;
+        sr.appendChild(mkB('\u25c2', ()=>{ _cineShotSel=Math.max(0,_cineShotSel-1); refreshCinePreview(); renderEditorFields(); }, _cineShotSel===0));
+        const lbl=document.createElement('span'); lbl.innerHTML='<b>Shot '+(_cineShotSel+1)+' / '+N+'</b>'; lbl.style.cssText='min-width:74px;text-align:center;'; sr.appendChild(lbl);
+        sr.appendChild(mkB('\u25b8', ()=>{ _cineShotSel=Math.min(cineAllShots().length-1,_cineShotSel+1); refreshCinePreview(); renderEditorFields(); }, _cineShotSel>=N-1));
+        sr.appendChild(mkB('+ Add shot', ()=>{ pushUndoSnapshot(); cineAllShots(); cineCfg.shots2.push(_newCineShot()); _cineShotSel=cineAllShots().length-1; refreshCinePreview(); renderEditorFields(); }));
+        sr.appendChild(mkB('\u2715', ()=>{ if(cineAllShots().length<=1) return; pushUndoSnapshot();
+          if(_cineShotSel===0){ const nx=cineCfg.shots2.shift(); cineCfg.path=nx.path; cineCfg.lensFrom=nx.lensFrom; cineCfg.lensTo=nx.lensTo; cineCfg.focusOn=nx.focusOn; cineCfg.focusFrom=nx.focusFrom; cineCfg.focusTo=nx.focusTo; cineCfg.dur=nx.dur; cineCfg.look=nx.look; }
+          else cineCfg.shots2.splice(_cineShotSel-1,1);
+          _cineShotSel=Math.min(_cineShotSel, cineAllShots().length-1); refreshCinePreview(); renderEditorFields(); }, N<=1));
+        const tot=document.createElement('span'); tot.style.cssText='flex:1;text-align:right;font-size:10px;opacity:0.75;';
+        tot.textContent='total '+cineAllShots().reduce((s,x)=>s+(+x.dur||0),0).toFixed(1)+'s'; sr.appendChild(tot);
+        b.appendChild(sr); }
+      const CS = cineAllShots()[_cineShotSel];   // every path/lens/focus/dur/look control below edits this shot
       { const r2=document.createElement('label'); r2.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:-2px 0 6px;cursor:pointer;';
         const c2=document.createElement('input'); c2.type='checkbox'; c2.checked=!!cineShowChar; c2.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
         c2.onchange=()=>{ cineShowChar=c2.checked; if(typeof refreshCinePreview==='function') refreshCinePreview(); };
         const sp2=document.createElement('span'); sp2.textContent='Show character at the player start'; r2.appendChild(c2); r2.appendChild(sp2); b.appendChild(r2); }
       hint(b,'Fly the editor camera to a spot, Add a waypoint, repeat. 2+ points moves the camera; 1 point is a held shot. The shot frames your player start (or its travel direction). Deploy to watch; any key or tap skips.','0 0 6px');
       { const add=document.createElement('button'); add.textContent='+ Add camera waypoint (current view)'; add.style.cssText='width:100%;padding:5px 8px;font-size:11px;cursor:pointer;margin-bottom:4px;';
-        add.onclick=()=>{ pushUndoSnapshot(); cineCfg.path.push([+camera.position.x.toFixed(3), +camera.position.y.toFixed(3), +camera.position.z.toFixed(3)]); renderEditorFields(); }; b.appendChild(add); }
-      if(cineCfg.path.length){
-        cineCfg.path.forEach((pt,i)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;align-items:center;gap:6px;font-size:11px;color:#9fe6cf;margin:2px 0;';
+        add.onclick=()=>{ pushUndoSnapshot(); CS.path.push([+camera.position.x.toFixed(3), +camera.position.y.toFixed(3), +camera.position.z.toFixed(3)]); renderEditorFields(); }; b.appendChild(add); }
+      if(CS.path.length){
+        CS.path.forEach((pt,i)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;align-items:center;gap:6px;font-size:11px;color:#9fe6cf;margin:2px 0;';
           const lab=document.createElement('span'); lab.textContent=(i===0?'Start':('Pt '+i)); lab.style.flex='1';
-          const go=document.createElement('button'); go.textContent='Go to'; go.title='Fly the editor camera to this waypoint'; go.style.cssText='padding:1px 7px;font-size:10px;'; go.onclick=()=>{ const q=cineCfg.path[i]; if(!q) return; flyPos.set(q[0],q[1],q[2]); player.pos.set(q[0],q[1],q[2]); if(editorTopView){ topPanX=q[0]; topPanZ=q[2]; } };
-          const setb=document.createElement('button'); setb.textContent='Set'; setb.title='Update this waypoint to the current camera view'; setb.style.cssText='padding:1px 7px;font-size:10px;'; setb.onclick=()=>{ pushUndoSnapshot(); cineCfg.path[i]=[+camera.position.x.toFixed(3),+camera.position.y.toFixed(3),+camera.position.z.toFixed(3)]; if(typeof refreshCinePreview==='function') refreshCinePreview(); };
-          const del=document.createElement('button'); del.textContent='✕'; del.style.cssText='padding:1px 7px;font-size:10px;'; del.onclick=()=>{ pushUndoSnapshot(); cineCfg.path.splice(i,1); renderEditorFields(); };
+          const go=document.createElement('button'); go.textContent='Go to'; go.title='Fly the editor camera to this waypoint'; go.style.cssText='padding:1px 7px;font-size:10px;'; go.onclick=()=>{ const q=CS.path[i]; if(!q) return; flyPos.set(q[0],q[1],q[2]); player.pos.set(q[0],q[1],q[2]); if(editorTopView){ topPanX=q[0]; topPanZ=q[2]; } };
+          const setb=document.createElement('button'); setb.textContent='Set'; setb.title='Update this waypoint to the current camera view'; setb.style.cssText='padding:1px 7px;font-size:10px;'; setb.onclick=()=>{ pushUndoSnapshot(); CS.path[i]=[+camera.position.x.toFixed(3),+camera.position.y.toFixed(3),+camera.position.z.toFixed(3)]; if(typeof refreshCinePreview==='function') refreshCinePreview(); };
+          const del=document.createElement('button'); del.textContent='✕'; del.style.cssText='padding:1px 7px;font-size:10px;'; del.onclick=()=>{ pushUndoSnapshot(); CS.path.splice(i,1); renderEditorFields(); };
           r.appendChild(lab); r.appendChild(go); r.appendChild(setb); r.appendChild(del); b.appendChild(r); });
-        const clr=document.createElement('button'); clr.textContent='Clear path'; clr.style.cssText='padding:3px 10px;font-size:11px;margin:3px 0;'; clr.onclick=()=>{ pushUndoSnapshot(); cineCfg.path.length=0; renderEditorFields(); }; b.appendChild(clr);
+        const clr=document.createElement('button'); clr.textContent='Clear path'; clr.style.cssText='padding:3px 10px;font-size:11px;margin:3px 0;'; clr.onclick=()=>{ pushUndoSnapshot(); CS.path.length=0; renderEditorFields(); }; b.appendChild(clr);
       }
       const crow=(lab,val,mn,mx,st,suffix,set)=>{ const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent=lab; sp.style.minWidth='56px'; const inp=document.createElement('input'); inp.type='range'; inp.min=mn; inp.max=mx; inp.step=st; inp.value=val; inp.style.flex='1'; inp.style.accentColor='#38f5b5'; const nm=document.createElement('span'); nm.textContent=val+suffix; nm.style.minWidth='44px'; nm.style.textAlign='right'; inp.oninput=()=>{ nm.textContent=inp.value+suffix; set(+inp.value); }; r.appendChild(sp); r.appendChild(inp); r.appendChild(nm); b.appendChild(r); };
-      crow('Lens start', cineCfg.lensFrom, 14, 120, 1, 'mm', v=>{ cineCfg.lensFrom=v; });
-      crow('Lens end', cineCfg.lensTo, 14, 120, 1, 'mm', v=>{ cineCfg.lensTo=v; });
+      crow('Lens start', CS.lensFrom, 14, 120, 1, 'mm', v=>{ CS.lensFrom=v; });
+      crow('Lens end', CS.lensTo, 14, 120, 1, 'mm', v=>{ CS.lensTo=v; });
       hint(b,'Different start/end lens = a zoom across the shot (e.g. 35 to 85 pushes in).','0 0 4px');
       { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0 2px;cursor:pointer;';
-        const c=document.createElement('input'); c.type='checkbox'; c.checked=!!cineCfg.focusOn; c.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
-        c.onchange=()=>{ pushUndoSnapshot(); cineCfg.focusOn=c.checked; renderEditorFields(); };
+        const c=document.createElement('input'); c.type='checkbox'; c.checked=!!CS.focusOn; c.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+        c.onchange=()=>{ pushUndoSnapshot(); CS.focusOn=c.checked; renderEditorFields(); };
         const sp=document.createElement('span'); sp.innerHTML='<b>Rack focus</b> (depth of field)'; r.appendChild(c); r.appendChild(sp); b.appendChild(r); }
-      if(cineCfg.focusOn){
-        crow('Focus start', cineCfg.focusFrom, 1, 120, 1, 'm', v=>{ cineCfg.focusFrom=v; });
-        crow('Focus end', cineCfg.focusTo, 1, 120, 1, 'm', v=>{ cineCfg.focusTo=v; });
+      if(CS.focusOn){
+        crow('Focus start', CS.focusFrom, 1, 120, 1, 'm', v=>{ CS.focusFrom=v; });
+        crow('Focus end', CS.focusTo, 1, 120, 1, 'm', v=>{ CS.focusTo=v; });
         hint(b,'Focus distance pulls from start to end over the shot. Needs depth of field, which is off on mobile.','0 0 4px');
       }
-      crow('Duration', cineCfg.dur, 1, 20, 0.5, 's', v=>{ cineCfg.dur=v; });
-      { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent='Framing'; sp.style.minWidth='56px'; const sel=document.createElement('select'); sel.style.cssText='flex:1;font-size:11px;'; [['spawn','Aim at player start'],['path','Look along path']].forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(cineCfg.look===o[0]) op.selected=true; sel.appendChild(op); }); sel.onchange=()=>{ cineCfg.look=sel.value; }; r.appendChild(sp); r.appendChild(sel); b.appendChild(r); }
+      crow('Duration', CS.dur, 1, 120, 0.5, 's', v=>{ CS.dur=v; });   // long takes allowed; chain shots for cuts
+      { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent='Framing'; sp.style.minWidth='56px'; const sel=document.createElement('select'); sel.style.cssText='flex:1;font-size:11px;'; [['spawn','Aim at player start'],['path','Look along path']].forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(CS.look===o[0]) op.selected=true; sel.appendChild(op); }); sel.onchange=()=>{ CS.look=sel.value; }; r.appendChild(sp); r.appendChild(sel); b.appendChild(r); }
       { const r=document.createElement('label'); r.style.cssText='display:flex;flex-direction:column;gap:3px;font-size:11px;color:#9fe6cf;margin:6px 0 2px;';
         const sp=document.createElement('span'); sp.innerHTML='<b>Cutscene audio</b> (plays at the start, separate from world audio)';
         const inp=document.createElement('input'); inp.type='text'; inp.value=cineCfg.audio||''; inp.placeholder='https://…/intro.mp3 or .ogg/.wav'; inp.style.cssText='width:100%;box-sizing:border-box;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:5px 7px;font-size:11px;';
@@ -14449,7 +14480,7 @@ function renderEditorFields(){
         fsBtn.onclick=()=>{ if(fsBox){ fsBox.remove(); fsBox=null; fsBtn.textContent='Search Freesound'; return; } fsBox=renderFreesoundBrowser(fsHold, ()=>renderEditorFields(), { label:'Cutscene audio', set:v=>{ pushUndoSnapshot(); cineCfg.audio=(v||'').trim(); } }); fsHold.appendChild(fsBox); fsBtn.textContent='Hide Freesound'; };
         fsHold.appendChild(fsBtn); b.appendChild(fsHold); }
       hint(b,'A one-shot track (voiceover, music sting) that fires when the cutscene begins and stops when it ends or is skipped. The file must allow cross-origin loading (CORS), same as custom music.','0 0 4px');
-      { const prev=document.createElement('button'); prev.textContent='▶ Preview'; prev.style.cssText='width:100%;padding:6px 8px;font-size:12px;cursor:pointer;margin-top:4px;'; prev.disabled=!cineCfg.path.length; prev.onclick=()=>{ startCinematic({ path:cineCfg.path, lensFrom:cineCfg.lensFrom, lensTo:cineCfg.lensTo, focusOn:cineCfg.focusOn, focusFrom:cineCfg.focusFrom, focusTo:cineCfg.focusTo, dur:cineCfg.dur, look:cineCfg.look }, true); }; b.appendChild(prev); }
+      { const prev=document.createElement('button'); prev.textContent='▶ Preview'; prev.style.cssText='width:100%;padding:6px 8px;font-size:12px;cursor:pointer;margin-top:4px;'; prev.disabled=!cineHasData(); prev.onclick=()=>{ startCinematic({ shots: cineAllShots() }, true); }; b.appendChild(prev); }
       if(typeof refreshCinePreview==='function') refreshCinePreview(); }
     { const b=subSec('Walls','walls',true);
       { const vr=document.createElement('label'); vr.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 6px;cursor:pointer;';

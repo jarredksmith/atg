@@ -71,7 +71,7 @@
 <div class="wrap">
 <nav>
   <p class="brand">BREACH</p>
-  <p class="build">FIELD MANUAL &middot; BUILD 348</p>
+  <p class="build">FIELD MANUAL &middot; BUILD 350</p>
   <div class="grp">PLAY</div>
   <a href="#quickstart">Quick start</a>
   <a href="#controls">Controls</a>
@@ -219,7 +219,7 @@
   <p>Signals let props affect <i>other</i> props — the puzzle layer. Two halves, both in the <b>Signals</b> bar of the inspector:</p>
   <ul>
     <li><b>Tag</b> — name a prop (e.g. <code>vaultDoor</code>) so signals can find it. Several props can share one tag.</li>
-    <li><b>Signal rules</b> — <i>when</i> this prop fires (<b>On destroyed</b> / <b>On E</b>), <i>do</i> something (<b>Toggle / Open / Close</b> a mechanism, <b>Play anim</b>, <b>Unlock</b>, or <b>Win level</b>) to every prop carrying the <i>target tag</i>.</li>
+    <li><b>Signal rules</b> — <i>when</i> this prop fires (<b>On destroyed</b> / <b>On E</b>), <i>do</i> something (<b>Toggle / Open / Close</b> a mechanism, <b>Play anim</b> (optionally a single named clip from the target&rsquo;s GLB — a field appears under the rule; blank plays every clip), <b>Unlock</b>, or <b>Win level</b>) to every prop carrying the <i>target tag</i>.</li>
     <li><b>Needs N</b> — set on the <i>target</i>: it absorbs signals until N have arrived, then reacts. This is the &ldquo;all of them&rdquo; gate.</li>
   </ul>
   <h3>Worked example — the three generators</h3>
@@ -247,7 +247,7 @@
 </div></details>
 
 <details class="sec" id="cinematics"><summary>CINEMATICS</summary><div class="bd">
-  <p>Author an intro flythrough in World → Cinematic: enable it, place camera path points, set duration, lens (with an optional lens ramp), and rack focus. Add a <b>Cutscene audio</b> track by URL or Freesound search. A dotted preview of the path shows while editing — the cinematic itself never plays inside the editor.</p>
+  <p>Author an intro sequence in World → Cinematic. A cutscene is one or more <b>shots</b>: use the Shot selector (&#9666; Shot 1 / N &#9656;, + Add shot, &#10005;) to chain takes back to back — each cut is a hard camera cut, perfect for establishing-shot-then-close-up sequences. Per shot: place camera path points, set duration (up to 120s each), lens (with an optional lens ramp), and rack focus; one audio track spans the whole sequence. Add a <b>Cutscene audio</b> track by URL or Freesound search. A dotted preview of the path shows while editing — the cinematic itself never plays inside the editor.</p>
   <p>On deploy, the cinematic waits for the loading screen — your models and audio are fully loaded before the first frame, then it plays with letterbox bars and hands off to gameplay.</p>
 </div></details>
 
@@ -278,7 +278,7 @@
   </table>
 </div></details>
 
-<footer>BREACH FIELD MANUAL &middot; MATCHES BUILD 348 &middot; SECTIONS COLLAPSE LIKE THE EDITOR — THAT&rsquo;S ON PURPOSE</footer>
+<footer>BREACH FIELD MANUAL &middot; MATCHES BUILD 350 &middot; SECTIONS COLLAPSE LIKE THE EDITOR — THAT&rsquo;S ON PURPOSE</footer>
 </main>
 </div>
 </body>
