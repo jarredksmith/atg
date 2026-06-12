@@ -6417,9 +6417,13 @@ function tryUnlockProp(o){
 function fireSignals(o, when){
   const sigs = o && o.userData && o.userData.signals; if(!sigs || !sigs.length) return;
   for(const s of sigs){
-    if(s.when !== when || !s.target) continue;
+    if(s.when !== when) continue;
+    if(s.do==='win'){ if(typeof NET==='undefined' || NET.mode!=='client'){ try{ gameWon(); }catch(e){} } continue; }   // ends the level; needs no target. Solo/host only — a client's E can't end the match.
+    if(!s.target) continue;
     for(let i=0;i<propModels.length;i++){
       const t = propModels[i]; if(!t || t.userData.tag !== s.target) continue;
+      // counter gate: a target with sigNeed>1 absorbs signals until enough have arrived ("all 3 generators")
+      if(t.userData.sigNeed>1){ t.userData._sigCount=(t.userData._sigCount||0)+1; if(t.userData._sigCount < t.userData.sigNeed) continue; }
       try{
         if(s.do==='toggle'){ if(t.userData.xa && t.userData.xa.on){ xaToggle(t); broadcastXAnim(i); } }
         else if(s.do==='open'){ if(t.userData.xa && t.userData.xa.on && !t.userData.xa.dest){ t.userData.xa.dest=1; broadcastXAnim(i); } }
@@ -7120,7 +7124,7 @@ function removeProp(idx){
 function loadHostedProps(){
   const list = (savedLevel && Array.isArray(savedLevel.props)) ? savedLevel.props : SCENE_PROPS;
   propModels.length = list.length;   // reserve slots so async GLB loads can't clobber later push-spawned props
-  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>({ when:s.w, do:s.d, target:s.t })); if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));   // slot=i preserves order
+  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>({ when:s.w, do:s.d, target:s.t })); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));   // slot=i preserves order
 }
 loadHostedProps();
 
@@ -8863,7 +8867,7 @@ function loadLevelFromNet(level){
   // rebuild from the host's data
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>({ when:s.w, do:s.d, target:s.t })); if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }catch(e){ console.warn('net prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('net prop '+i+' failed', e); } });
+    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>({ when:s.w, do:s.d, target:s.t })); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }catch(e){ console.warn('net prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('net prop '+i+' failed', e); } });
   }
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
@@ -10346,7 +10350,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 344 · 2026-06-12';
+const BUILD_VERSION = 'build 345 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13419,6 +13423,7 @@ function propEntry(o){
   if(o.userData.lockId){ e.lk=o.userData.lockId; if(o.userData.lockConsume) e.lkc=1; }
   if(o.userData.tag) e.tg=o.userData.tag;
   if(o.userData.signals && o.userData.signals.length) e.sg=o.userData.signals.map(s=>({ w:s.when, d:s.do, t:s.target }));
+  if(o.userData.sigNeed>1) e.snd=o.userData.sigNeed;
   if(o.userData.attribution) e.att=o.userData.attribution;
   if(o.userData.nid) e.nid=o.userData.nid;
   return e;
@@ -13682,7 +13687,7 @@ function restoreLevel(level){
   propModels.length = 0;
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>({ when:s.w, do:s.d, target:s.t })); if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }catch(e){ console.warn('prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('prop '+i+' failed to load', e); } });
+    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>({ when:s.w, do:s.d, target:s.t })); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }catch(e){ console.warn('prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('prop '+i+' failed to load', e); } });
   }
   // lights
   for(let i=lightModels.length-1;i>=0;i--) removeLight(i);
@@ -14234,7 +14239,9 @@ function levelIssues(){
     if(cineCfg && cineCfg.on && !(cineCfg.path && cineCfg.path.length>=2)) issues.push('Intro cinematic is on, but its camera path has fewer than 2 points.');
     const tags=new Set(); for(const o of propModels){ if(o && o.userData && o.userData.tag) tags.add(o.userData.tag); }
     for(const o of propModels){ if(!o || !o.userData || !o.userData.signals) continue;
-      for(const s of o.userData.signals){ if(s.target && !tags.has(s.target)) issues.push("A signal targets tag '"+s.target+"', but no prop carries that tag."); } }
+      for(const s of o.userData.signals){
+        if(s.target && !tags.has(s.target)) issues.push("A signal targets tag '"+s.target+"', but no prop carries that tag.");
+        if(!s.target && s.do!=='win') issues.push('A signal has no target tag (only Win level works without one).'); } }
   }catch(e){}
   return issues;
 }
@@ -14973,11 +14980,18 @@ function renderEditorFields(){
           tin.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
           tin.onchange=()=>{ pushUndoSnapshot(); const v=tin.value.trim(); if(v) sel.userData.tag=v; else delete sel.userData.tag; };
           tr.appendChild(tsp); tr.appendChild(tin); sgBody.appendChild(tr); }
+        { const nr=document.createElement('div'); nr.style.cssText='display:flex;gap:6px;align-items:center;margin:0 0 4px;font-size:11px;color:#9fe6cf;';
+          const nsp=document.createElement('span'); nsp.textContent='Needs'; nsp.style.minWidth='56px';
+          const nin=document.createElement('input'); nin.type='number'; nin.min='1'; nin.max='20'; nin.value=sel.userData.sigNeed||1;
+          nin.style.cssText='width:54px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 5px;font-size:11px;';
+          nin.onchange=()=>{ pushUndoSnapshot(); const v=Math.max(1, Math.min(20, parseInt(nin.value)||1)); if(v>1) sel.userData.sigNeed=v; else delete sel.userData.sigNeed; nin.value=v; };
+          const nl=document.createElement('span'); nl.textContent='signal(s) before this prop reacts'; nl.style.fontSize='10px';
+          nr.appendChild(nsp); nr.appendChild(nin); nr.appendChild(nl); sgBody.appendChild(nr); }
         const sigs = sel.userData.signals || (sel.userData.signals=[]);
         sigs.forEach((s,si)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;gap:4px;align-items:center;margin:0 0 3px;';
           const mkSel=(opts,val,on)=>{ const e=document.createElement('select'); e.style.cssText='font-size:11px;flex:1;'; opts.forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(val===o[0]) op.selected=true; e.appendChild(op); }); e.onchange=()=>{ pushUndoSnapshot(); on(e.value); }; return e; };
           r.appendChild(mkSel([['destroyed','On destroyed'],['interacted','On E']], s.when, v=>{ s.when=v; }));
-          r.appendChild(mkSel([['toggle','Toggle'],['open','Open'],['close','Close'],['anim','Play anim'],['unlock','Unlock']], s.do, v=>{ s.do=v; }));
+          r.appendChild(mkSel([['toggle','Toggle'],['open','Open'],['close','Close'],['anim','Play anim'],['unlock','Unlock'],['win','Win level']], s.do, v=>{ s.do=v; }));
           const ti=document.createElement('input'); ti.type='text'; ti.placeholder='target tag'; ti.value=s.target||'';
           ti.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 5px;font-size:11px;';
           ti.onchange=()=>{ pushUndoSnapshot(); s.target=ti.value.trim(); };
@@ -16155,6 +16169,7 @@ function startGame(){
   WEAPONS.shotgun.mag=6; WEAPONS.shotgun.reserve=24;
   WEAPONS.sniper.mag=5; WEAPONS.sniper.reserve=20;
   reloading=false; score=0; wave=1; credits=0; grenadeCount=0; runKills=0; playerKeys={}; if(typeof renderKeyChips==='function') renderKeyChips();
+  for(const o of propModels){ if(o && o.userData){ delete o.userData._sigCount; delete o.userData.unlocked; } }   // fresh run: counters back to zero, locked props re-lock (the hint always promised per-deploy)
   if(typeof startObjective==='function') startObjective();   // reset survival timer for this run
   if(typeof disposePickupMarkers==='function') disposePickupMarkers();   // remove editor previews; the live (grabbable) pads are spawned next
   if(typeof disposeAudioZoneMarkers==='function') disposeAudioZoneMarkers(); if(typeof stopAudioZones==='function') stopAudioZones();   // hide zone rings + reset zone playback for a fresh run
