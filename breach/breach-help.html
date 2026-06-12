@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BREACH — Field Manual</title>
+<style>
+  :root{
+    --void:#070d12; --panel:rgba(7,13,18,0.92); --ink:#d6f5e8; --dim:#9fc4b4;
+    --signal:#38f5b5; --signal-dim:rgba(56,245,181,0.25); --signal-wash:rgba(56,245,181,0.10);
+    --bolt:#4aa3ff; --caution:#ffb45a; --red:#ff5a5a; --gold:#ffd166; --green:#9be15a;
+    --mono:ui-monospace,Menlo,Consolas,monospace;
+    --body:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--void);color:var(--ink);font:15px/1.65 var(--body)}
+  a{color:var(--bolt);text-decoration:none} a:hover{text-decoration:underline}
+  kbd{display:inline-block;font:600 11px/1 var(--mono);letter-spacing:1px;color:#06110d;background:var(--signal);
+      border-radius:4px;padding:4px 7px;box-shadow:0 0 8px rgba(56,245,181,0.4);vertical-align:middle}
+  kbd.b{background:var(--bolt);box-shadow:0 0 8px rgba(74,163,255,0.4)}
+  code{font:13px var(--mono);color:var(--signal);background:rgba(56,245,181,0.08);padding:1px 5px;border-radius:3px}
+  /* layout: docked-panel nav + reading column */
+  .wrap{display:flex;min-height:100vh}
+  nav{position:sticky;top:0;align-self:flex-start;height:100vh;overflow-y:auto;width:248px;min-width:248px;
+      background:var(--panel);border-right:1px solid rgba(56,245,181,0.35);padding:18px 14px;
+      font:12px/1.5 var(--mono)}
+  nav .brand{font:700 16px var(--mono);letter-spacing:4px;color:var(--signal);margin:0 0 2px}
+  nav .build{font-size:10px;color:var(--dim);letter-spacing:2px;margin:0 0 16px}
+  nav a{display:block;color:var(--dim);padding:4px 8px;border-radius:4px;letter-spacing:0.5px}
+  nav a:hover{background:var(--signal-wash);color:var(--ink);text-decoration:none}
+  nav .grp{margin:12px 0 3px;color:var(--signal);font-weight:600;letter-spacing:2px;font-size:10px}
+  main{flex:1;max-width:790px;padding:34px 44px 90px}
+  /* hero */
+  header.hero{border:1px solid var(--signal-dim);border-radius:8px;padding:26px 28px;margin-bottom:26px;
+    background:linear-gradient(180deg, rgba(56,245,181,0.07), rgba(7,13,18,0) 65%)}
+  header.hero h1{font:700 30px var(--mono);letter-spacing:8px;color:var(--signal);margin:0;
+    text-shadow:0 0 26px rgba(56,245,181,0.45)}
+  header.hero .sub{color:var(--dim);font:12px var(--mono);letter-spacing:2px;margin-top:6px}
+  header.hero p{color:var(--ink);margin:14px 0 0;max-width:620px}
+  /* sections behave like editor folds */
+  details.sec{border:1px solid rgba(56,245,181,0.18);border-radius:6px;margin:0 0 14px;overflow:hidden;background:rgba(10,18,24,0.5)}
+  details.sec>summary{cursor:pointer;user-select:none;list-style:none;display:flex;align-items:center;gap:9px;
+    padding:11px 14px;background:var(--signal-wash);border-bottom:1px solid rgba(56,245,181,0.12);
+    font:600 13px var(--mono);letter-spacing:2px;color:#cfeee6}
+  details.sec>summary::-webkit-details-marker{display:none}
+  details.sec>summary::before{content:"\25B8";color:var(--signal);width:13px}
+  details.sec[open]>summary::before{content:"\25BE"}
+  .bd{padding:16px 20px 20px}
+  h3{font:600 13px var(--mono);letter-spacing:2px;color:var(--signal);margin:22px 0 8px;text-transform:uppercase}
+  .bd>h3:first-child{margin-top:2px}
+  p{margin:0 0 12px}
+  ul{margin:0 0 12px;padding-left:22px} li{margin:0 0 6px}
+  table{border-collapse:collapse;width:100%;margin:0 0 14px;font-size:13.5px}
+  th{font:600 11px var(--mono);letter-spacing:1.5px;color:var(--signal);text-align:left;padding:6px 10px;border-bottom:1px solid var(--signal-dim)}
+  td{padding:7px 10px;border-bottom:1px solid rgba(56,245,181,0.08);vertical-align:top}
+  /* callouts mirror the toast/issues look */
+  .tip,.warn{border-left:2px solid var(--signal);background:rgba(56,245,181,0.06);padding:9px 13px;border-radius:0 5px 5px 0;margin:0 0 13px;font-size:13.5px}
+  .warn{border-left-color:var(--caution);background:rgba(255,180,90,0.07);color:#ffd9a8}
+  .tip b,.warn b{font:600 11px var(--mono);letter-spacing:1.5px}
+  .chip{display:inline-block;font:700 9px/1 var(--mono);letter-spacing:1px;color:#06110d;border-radius:4px;padding:4px 6px;margin-right:4px}
+  .step{display:flex;gap:12px;margin:0 0 10px}
+  .step .n{font:700 13px var(--mono);color:var(--signal);border:1px solid var(--signal-dim);border-radius:50%;
+    width:26px;height:26px;min-width:26px;display:flex;align-items:center;justify-content:center}
+  footer{color:var(--dim);font:11px var(--mono);letter-spacing:1px;margin-top:40px;border-top:1px solid rgba(56,245,181,0.12);padding-top:14px}
+  @media(max-width:860px){ .wrap{flex-direction:column} nav{position:static;width:100%;height:auto;border-right:0;border-bottom:1px solid rgba(56,245,181,0.35)} main{padding:22px 18px 70px} }
+  @media(prefers-reduced-motion:no-preference){ details.sec>summary{transition:background .15s} details.sec>summary:hover{background:rgba(56,245,181,0.16)} }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav>
+  <p class="brand">BREACH</p>
+  <p class="build">FIELD MANUAL &middot; BUILD 345</p>
+  <div class="grp">PLAY</div>
+  <a href="#quickstart">Quick start</a>
+  <a href="#controls">Controls</a>
+  <a href="#combat">Combat &amp; movement</a>
+  <a href="#modes">Game modes</a>
+  <a href="#multiplayer">Multiplayer</a>
+  <div class="grp">BUILD</div>
+  <a href="#editor">Editor basics</a>
+  <a href="#building">Props &amp; building</a>
+  <a href="#mechanisms">Mechanisms &amp; paths</a>
+  <a href="#physics">Physics &amp; destruction</a>
+  <a href="#keys">Keys &amp; locks</a>
+  <a href="#signals">Signals &amp; logic</a>
+  <a href="#enemies">Enemies &amp; spawns</a>
+  <a href="#pickups">Pickups</a>
+  <a href="#world">World &amp; audio</a>
+  <a href="#cinematics">Cinematics</a>
+  <a href="#gameplay">Objectives &amp; rules</a>
+  <a href="#saving">Saving &amp; sharing</a>
+  <div class="grp">REFERENCE</div>
+  <a href="#faq">Troubleshooting</a>
+</nav>
+<main>
+
+<header class="hero">
+  <h1>BREACH</h1>
+  <div class="sub">FIELD MANUAL — EVERYTHING FROM FIRST DEPLOY TO FULL LEVEL LOGIC</div>
+  <p>BREACH is a browser FPS with a complete in-game level editor. This manual covers both halves:
+  how to fight, and how to build — props, physics, locked doors, signal logic, cinematics, and sharing
+  what you make. Every section below collapses, just like the editor panel itself.</p>
+</header>
+
+<details class="sec" open id="quickstart"><summary>QUICK START</summary><div class="bd">
+  <div class="step"><div class="n">1</div><div>Open the game and press <b>Deploy</b>. You spawn with a rifle; enemies arrive in waves.</div></div>
+  <div class="step"><div class="n">2</div><div>Survive the wave, collect coins and pickups, pick an upgrade between waves, repeat. The objective banner at the top tells you the win condition for the current level.</div></div>
+  <div class="step"><div class="n">3</div><div>Press <kbd>P</kbd> any time mid-run to open the level editor and reshape the world you are standing in. Press <kbd>P</kbd> again (or ▶ Play level) to jump back in.</div></div>
+  <p>The HUD shows health and ammo bottom-center, credits and wave info top, grenades and buffs near your health, and a minimap. Key items you are carrying appear as colored chips bottom-left.</p>
+</div></details>
+
+<details class="sec" id="controls"><summary>CONTROLS</summary><div class="bd">
+  <table>
+    <tr><th>Action</th><th>Input</th><th>Notes</th></tr>
+    <tr><td>Move / sprint</td><td><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + <kbd>SHIFT</kbd></td><td>Sprinting while crouching starts a slide.</td></tr>
+    <tr><td>Jump</td><td><kbd>SPACE</kbd></td><td></td></tr>
+    <tr><td>Crouch</td><td><kbd>CTRL</kbd> or <kbd>C</kbd></td><td>Physically shrinks your body — duck under gaps, harder to hit. You will stay crouched if there is no headroom to stand.</td></tr>
+    <tr><td>Fire / aim</td><td>Mouse 1 / Mouse 2</td><td>The sniper uses a true scope view when aiming.</td></tr>
+    <tr><td>Use / interact</td><td><kbd>E</kbd></td><td>Doors, levers, ammo stations, loot, locked props.</td></tr>
+    <tr><td>Grab / drop prop</td><td><kbd>G</kbd> or middle mouse</td><td>Carry physics props; scroll-push throws.</td></tr>
+    <tr><td>Grenade</td><td><kbd>F</kbd></td><td></td></tr>
+    <tr><td>Melee</td><td><kbd>V</kbd></td><td></td></tr>
+    <tr><td>Reload / weapons</td><td><kbd>R</kbd> &middot; <kbd>1</kbd>–<kbd>5</kbd></td><td></td></tr>
+    <tr><td>Radial menu</td><td><kbd>TAB</kbd></td><td>Quick deploy options.</td></tr>
+    <tr><td>Chat (multiplayer)</td><td><kbd>T</kbd></td><td></td></tr>
+    <tr><td>Mute</td><td><kbd>M</kbd></td><td></td></tr>
+    <tr><td>Editor</td><td><kbd>P</kbd></td><td>Toggle the level editor (disabled mid-match in PvP).</td></tr>
+    <tr><td>Editor: duplicate / delete / undo</td><td><kbd>SHIFT</kbd>+<kbd>D</kbd> &middot; <kbd>DEL</kbd> &middot; <kbd>Z</kbd>/<kbd>Y</kbd></td><td>With an object selected.</td></tr>
+  </table>
+  <p>Touch devices get an on-screen stick, fire/jump/use buttons, and fly-around editing in the editor.</p>
+</div></details>
+
+<details class="sec" id="combat"><summary>COMBAT &amp; MOVEMENT</summary><div class="bd">
+  <h3>Weapons</h3>
+  <p>Rifle (starting, accurate auto), SMG (fast, big mag), Shotgun (pellets, close range), Sniper (scoped, huge damage), Rocket launcher (splash), Crowbar (melee), plus grenades. Refill ammo at supply stations with credits (<kbd>E</kbd>), from ammo pickups, or in loot caches. Headshots hit harder.</p>
+  <h3>Movement tech</h3>
+  <ul>
+    <li><b>Slide</b> — sprint, then crouch. Keeps speed, lowers your profile.</li>
+    <li><b>Crouch is physical</b> — your collision capsule and hit volume genuinely shrink. Use low cover and gaps; enemies aim at your actual chest height, crouched or standing, on flat ground or hills.</li>
+    <li><b>Grab &amp; throw</b> — physics props can be carried (<kbd>G</kbd>) and thrown. Heavy props hurt what they land on.</li>
+  </ul>
+  <h3>Destruction</h3>
+  <p>Breakable props shatter into debris; explosive props (think gas cans) detonate with grenade-style splash — shoot them near enemies, not near yourself.</p>
+</div></details>
+
+<details class="sec" id="modes"><summary>GAME MODES</summary><div class="bd">
+  <h3>Solo / co-op waves</h3>
+  <p>The default mode: enemy waves with an objective that the level author chooses — clear N waves, <b>survival</b> (outlast the clock), <b>defend</b> (hold a zone), <b>destroy</b> (kill marked objective props), <b>escort</b> (walk the payload), or <b>extraction</b> (reach the green ring). Between waves you pick a run upgrade.</p>
+  <h3>PvP</h3>
+  <p><b>Duel</b> (1v1, first to the kill target), <b>FFA</b>, <b>TDM</b> (red vs blue), and <b>Control point</b> (king-of-the-hill capture). The host can fill matches with <b>bots</b> at four skill tiers — Recruit, Regular, Veteran, Elite — which tune their speed, aim, fire rate, and durability.</p>
+</div></details>
+
+<details class="sec" id="multiplayer"><summary>MULTIPLAYER</summary><div class="bd">
+  <div class="step"><div class="n">1</div><div><b>Host</b> a game from the menu — you get a room code (your peer id).</div></div>
+  <div class="step"><div class="n">2</div><div>Friends choose <b>Join</b> and paste the code. Connections are direct peer-to-peer; nothing to install or host.</div></div>
+  <div class="step"><div class="n">3</div><div>The host&rsquo;s level — including all logic, keys, and signals — is pushed to everyone automatically.</div></div>
+  <p>The host owns the simulation (enemies, waves, coins, win conditions); everyone runs their own movement locally so it feels instant. Each player has their own key ring, but once anyone unlocks a door it stays unlocked for the whole team.</p>
+  <div class="warn"><b>CAUTION</b> &mdash; P2P connections occasionally fail on strict networks (NAT). If a join hangs, both players retrying or switching networks usually resolves it.</div>
+</div></details>
+
+<details class="sec" id="editor"><summary>EDITOR BASICS</summary><div class="bd">
+  <p>Press <kbd>P</kbd> to open the editor. The panel docks right (swap sides with ⇄, drag the edge to resize, collapse with ⌄). Click objects to select; <kbd>SHIFT</kbd>+click multi-selects props. Move / Rotate / Scale with the gizmo handles or type exact values.</p>
+  <h3>Tabs</h3>
+  <table>
+    <tr><th>Tab</th><th>What lives there</th></tr>
+    <tr><td><b>Build</b></td><td>Shapes, models, lights, the selected-prop inspector, materials, transforms, character roster.</td></tr>
+    <tr><td><b>World</b></td><td>Sky, fog, terrain, depth of field, boundary walls, audio zones, music, cinematics.</td></tr>
+    <tr><td><b>Enemies</b></td><td>Enemy types &amp; models, spawn points with patrol routes.</td></tr>
+    <tr><td><b>Gameplay</b></td><td>Objective &amp; waves, the Pickups module, loot and coins.</td></tr>
+    <tr><td><b>Weapons</b></td><td>Weapon models, per-weapon aim, shoot sounds, impact and tracer FX.</td></tr>
+    <tr><td><b>Save</b></td><td>Save, share link, export/import, campaigns — and the Level check list.</td></tr>
+  </table>
+  <h3>The ＋ button</h3>
+  <p>The floating circle beside the panel adds anything placeable: shapes, a light, an enemy spawn, audio zones, and pickup pads (with a submenu to choose exactly which pad — keys included). Whatever you add, the editor jumps to the right tab so you are looking at it.</p>
+  <p>Heavy tool groups (Mechanism, Waypoint path, Physics &amp; destruction, Signals) are collapsed bars in the inspector — click to open; the editor remembers which you keep open.</p>
+</div></details>
+
+<details class="sec" id="building"><summary>PROPS &amp; BUILDING</summary><div class="bd">
+  <h3>Shapes &amp; models</h3>
+  <p>Drop primitive shapes (box, sphere, cylinder, cone) and restyle them in <b>Material</b> — color, texture with tiling, emissive glow. For real models, paste any GLB URL or search the built-in 🔍 Poly Pizza library. Models with animations can auto-loop or be set to <b>E&nbsp;Activate</b> (trigger on interact).</p>
+  <h3>Lights</h3>
+  <p>Add point lights, tune color / intensity / distance, and drag them with the gizmo. Markers only show while editing.</p>
+  <div class="tip"><b>TIP</b> &mdash; Repeated identical static shapes are automatically instanced for performance when you play, and split back apart when you edit.</div>
+</div></details>
+
+<details class="sec" id="mechanisms"><summary>MECHANISMS &amp; PATHS</summary><div class="bd">
+  <p>Any prop can become a <b>mechanism</b> — a door, platform, or elevator. Open the Mechanism bar on a selected prop and give it a move offset and/or rotation, a duration, a mode, and a trigger:</p>
+  <ul>
+    <li><b>Mode</b> — Loop (back and forth forever), or <b>Once</b> (travels and locks at the destination; a fired Once stops offering its <kbd>E</kbd> prompt).</li>
+    <li><b>Trigger</b> — Auto (always running) or <b>E&nbsp;Activate</b> (a player toggles it).</li>
+    <li><b>Waypoint path</b> — instead of a single offset, trace a route: move yourself, add waypoints, and the prop ping-pongs through them. Players ride moving platforms.</li>
+  </ul>
+  <p>Mechanism state is mirrored to every player in multiplayer — one person opens the door, everyone sees it open.</p>
+</div></details>
+
+<details class="sec" id="physics"><summary>PHYSICS &amp; DESTRUCTION</summary><div class="bd">
+  <p>The Physics &amp; destruction bar on a selected prop controls how it behaves under fire:</p>
+  <ul>
+    <li><b>Dynamic</b> — falls, tumbles, stacks, reacts to shots. Set its mass.</li>
+    <li><b>Grabbable</b> — players can carry and throw it.</li>
+    <li><b>Breakable</b> — HP, then it shatters (jagged shards or clean cubes; tune fragment count and size) or puffs.</li>
+    <li><b>🎯 Objective target</b> — counts toward the <i>destroy</i> objective.</li>
+    <li><b>💥 Explosive</b> — detonates when destroyed: blast radius, damage, and impact-detonation velocity.</li>
+  </ul>
+</div></details>
+
+<details class="sec" id="keys"><summary>KEYS &amp; LOCKS</summary><div class="bd">
+  <p>Gate any interactable behind a key:</p>
+  <div class="step"><div class="n">1</div><div>Place a key pad — ＋ → Pickup pad ▸ → a key (<span class="chip" style="background:#ff5a5a">RED</span><span class="chip" style="background:#4aa3ff">BLUE</span><span class="chip" style="background:#ffd166;color:#332200">GOLD</span><span class="chip" style="background:#9be15a;color:#1c2a00">GREEN</span>). Key pads are one-shot per run — they never respawn.</div></div>
+  <div class="step"><div class="n">2</div><div>Select the door / lever / mechanism and set its <b>Lock</b> dropdown to the matching key. Optionally check <b>Consume key on unlock</b>.</div></div>
+  <div class="step"><div class="n">3</div><div>In play, the prompt reads <i>LOCKED — needs RED KEY</i> until the player holds it, then <kbd>E</kbd> unlocks. Unlocks last for the current deploy and apply to the whole team; everything re-locks on the next deploy.</div></div>
+  <h3>Custom names &amp; models</h3>
+  <p>In the Pickups module, select a key kind to reveal a <b>Key name</b> field — rename RED KEY to <i>Engine Room Keycard</i> and that name appears on the pad toast, the prompt, the HUD chip, and the Lock dropdown. Below it, paste a GLB URL to replace the floating diamond with your own model.</p>
+</div></details>
+
+<details class="sec" id="signals"><summary>SIGNALS &amp; LOGIC</summary><div class="bd">
+  <p>Signals let props affect <i>other</i> props — the puzzle layer. Two halves, both in the <b>Signals</b> bar of the inspector:</p>
+  <ul>
+    <li><b>Tag</b> — name a prop (e.g. <code>vaultDoor</code>) so signals can find it. Several props can share one tag.</li>
+    <li><b>Signal rules</b> — <i>when</i> this prop fires (<b>On destroyed</b> / <b>On E</b>), <i>do</i> something (<b>Toggle / Open / Close</b> a mechanism, <b>Play anim</b>, <b>Unlock</b>, or <b>Win level</b>) to every prop carrying the <i>target tag</i>.</li>
+    <li><b>Needs N</b> — set on the <i>target</i>: it absorbs signals until N have arrived, then reacts. This is the &ldquo;all of them&rdquo; gate.</li>
+  </ul>
+  <h3>Worked example — the three generators</h3>
+  <div class="step"><div class="n">1</div><div>Build a vault door as a Once mechanism. Tag it <code>vault</code>. Set <b>Needs 3</b>.</div></div>
+  <div class="step"><div class="n">2</div><div>Place three breakable generator props. Give each one signal: <b>On destroyed → Open → vault</b>.</div></div>
+  <div class="step"><div class="n">3</div><div>Optional finish: an exit prop inside with <b>On E → Win level</b>.</div></div>
+  <p>Mix sources freely — two destroyed crates plus a lever pull sum toward the same Needs counter. Counters reset every deploy.</p>
+  <div class="warn"><b>CAUTION</b> &mdash; In co-op, <b>Win level</b> fires when the host (or solo player) triggers it; a joining player&rsquo;s <kbd>E</kbd> won&rsquo;t end the match. All other actions work from anyone.</div>
+</div></details>
+
+<details class="sec" id="enemies"><summary>ENEMIES &amp; SPAWNS</summary><div class="bd">
+  <p>The Enemies tab covers who attacks and from where. Set per-type models, scale, colliders, and animation clips. Gunners fire re-aiming bursts; all enemies aim at your real (crouch- and terrain-aware) position.</p>
+  <p><b>Spawn points</b> live here too: add one (＋ or the Add spawn button), drag it with the gizmo, and set its patrol radius and detect range — or trace a full patrol route. With spawns placed, waves use them; with none, waves spawn randomly.</p>
+</div></details>
+
+<details class="sec" id="pickups"><summary>PICKUPS</summary><div class="bd">
+  <p>The Pickups module (Gameplay tab) manages every pad on the map: health, ammo, weapons, buffs (double damage, speed, shield), grenades, and keys. Pick a kind, walk to the spot, <b>Place ahead</b>. Each placed pad in the list has a dropdown — change what it is any time, no re-placing. Pads respawn on a 15-second timer; key pads are one-shot. Give any kind a custom model (URL + scale) to replace its floating icon. Turning <b>Spawn pickups</b> off hides everything while keeping your placements.</p>
+</div></details>
+
+<details class="sec" id="world"><summary>WORLD &amp; AUDIO</summary><div class="bd">
+  <h3>World</h3>
+  <p>Terrain (rugged hills with real collision), sky / HDR environments, fog, depth of field, and boundary walls all live in the World tab. Physics rebuilds automatically when you play.</p>
+  <h3>Audio zones</h3>
+  <p>Drop ambient sound bubbles: position, radius, volume, loop, and a sound URL — or hit <b>Search Freesound</b> to browse free CC audio in place. The ▶ on each result is a play/stop toggle. The same Freesound search appears anywhere audio is assignable: weapon shoot sounds, events, and the cutscene track.</p>
+</div></details>
+
+<details class="sec" id="cinematics"><summary>CINEMATICS</summary><div class="bd">
+  <p>Author an intro flythrough in World → Cinematic: enable it, place camera path points, set duration, lens (with an optional lens ramp), and rack focus. Add a <b>Cutscene audio</b> track by URL or Freesound search. A dotted preview of the path shows while editing — the cinematic itself never plays inside the editor.</p>
+  <p>On deploy, the cinematic waits for the loading screen — your models and audio are fully loaded before the first frame, then it plays with letterbox bars and hands off to gameplay.</p>
+</div></details>
+
+<details class="sec" id="gameplay"><summary>OBJECTIVES &amp; RULES</summary><div class="bd">
+  <p>The Gameplay tab sets the win condition (waves / survival / defend / destroy / escort / extraction), wave pacing, respawn rules, hit numbers, loot caches (and what they sell), and coin drops. Extraction marks a green ring — auto-placed opposite spawn, or drag it yourself.</p>
+</div></details>
+
+<details class="sec" id="saving"><summary>SAVING &amp; SHARING</summary><div class="bd">
+  <ul>
+    <li><b>💾 Save</b> — stores the level in your browser; it loads automatically next visit.</li>
+    <li><b>🔗 Copy share link</b> — a URL that opens your level for anyone.</li>
+    <li><b>⬇ Export / ⬆ Import .json</b> — the level as a file: back it up, hand-edit it, trade it.</li>
+    <li><b>Campaigns</b> — chain levels into a sequence with carry-over loadouts and a finale screen.</li>
+  </ul>
+  <h3>Level check</h3>
+  <p>Above the Save button, the editor reviews your level continuously: a lock with no matching key pad, an orphaned key, signals pointing at tags nothing carries, targetless signals, empty audio-zone URLs, a cinematic with no path. Warnings never block saving — they are there so a shared level plays the way you meant it.</p>
+</div></details>
+
+<details class="sec" id="faq"><summary>TROUBLESHOOTING</summary><div class="bd">
+  <table>
+    <tr><th>Symptom</th><th>Likely cause &amp; fix</th></tr>
+    <tr><td>A door won&rsquo;t open</td><td>It&rsquo;s locked (check the prompt — you may need a key), it&rsquo;s a fired Once mechanism (spent by design), or its Needs-N counter isn&rsquo;t satisfied yet.</td></tr>
+    <tr><td>My signal does nothing</td><td>Check the Save tab&rsquo;s Level check — the target tag probably doesn&rsquo;t match any prop, or the target needs more signals.</td></tr>
+    <tr><td>A key door is open on a fresh run</td><td>It shouldn&rsquo;t be — unlocks reset every deploy. Make sure you&rsquo;re on the current build.</td></tr>
+    <tr><td>Multiplayer join hangs</td><td>P2P/NAT issue — both retry, or try another network.</td></tr>
+    <tr><td>A model won&rsquo;t load</td><td>The URL must serve a GLB with CORS allowed; Poly Pizza results are pre-cleared.</td></tr>
+    <tr><td>Editor feels cluttered</td><td>Collapse sections and the inspector bars — the editor remembers your layout. Headers and panel side/size are all yours to arrange.</td></tr>
+  </table>
+</div></details>
+
+<footer>BREACH FIELD MANUAL &middot; MATCHES BUILD 345 &middot; SECTIONS COLLAPSE LIKE THE EDITOR — THAT&rsquo;S ON PURPOSE</footer>
+</main>
+</div>
+</body>
+</html>
