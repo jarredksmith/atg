@@ -10323,7 +10323,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 338 · 2026-06-12';
+const BUILD_VERSION = 'build 340 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13991,6 +13991,8 @@ function buildEditorPanel(){
   p.innerHTML = '<div id="editorResize" title="Drag to resize"></div>'
     + '<div id="edTopBar" style="display:flex;align-items:center;gap:6px;margin:0 0 6px;">'
       + '<h3 style="margin:0;flex:1;">LEVEL / TRANSFORM EDITOR</h3>'
+      + '<button id="edAdd" title="Add an object to the level" style="background:rgba(56,245,181,0.22);color:#eafff7;font-weight:600">\uff0b Add</button>'
+      + '<div id="edAddMenu" style="display:none;position:absolute;top:34px;right:10px;z-index:60;background:rgba(7,16,20,0.97);border:1px solid rgba(56,245,181,0.4);border-radius:6px;padding:4px;min-width:170px;box-shadow:0 8px 24px rgba(0,0,0,0.5)"></div>'
       + '<button id="edDock" title="Move panel to the other side">\u21c4</button>'
       + '<button id="edCollapse" title="Collapse panel">\u2304</button>'
     + '</div>'
@@ -14012,7 +14014,8 @@ function buildEditorPanel(){
     + sec('Bullet streak', 'tracerfx', '<div id="edTracerFx"></div>')
     + sec('Characters', 'characters', '<div id="edCharRoster"></div>')
     + sec('Level file', 'levelfile',
-        '<div class="row2"><button id="edSave">💾 Save</button><button id="edClear">Clear save</button></div>'
+        '<div id="edIssues"></div>'
+      + '<div class="row2"><button id="edSave">💾 Save</button><button id="edClear">Clear save</button></div>'
       + '<div class="row2" style="margin-top:6px"><button id="edShare">🔗 Copy share link</button></div>'
       + '<div class="row2" style="margin-top:6px"><button id="edExport">⬇ Export .json</button><button id="edImport">⬆ Import .json</button></div>'
       + '<input type="file" id="edImportFile" accept=".json,application/json" style="display:none">'
@@ -14027,6 +14030,32 @@ function buildEditorPanel(){
     try{ if(localStorage.getItem('breach_editor_dock')==='left') ed.classList.add('dockLeft'); }catch(e){}
     const dk=ed.querySelector('#edDock'); if(dk) dk.onclick=()=>{ ed.classList.toggle('dockLeft'); try{ localStorage.setItem('breach_editor_dock', ed.classList.contains('dockLeft')?'left':'right'); }catch(e){} };
     const cl=ed.querySelector('#edCollapse'); if(cl) cl.onclick=()=>{ const c=ed.classList.toggle('collapsed'); cl.textContent=c?'\u2303':'\u2304'; cl.title=c?'Expand panel':'Collapse panel'; };
+    // "+ Add" palette: one categorized menu for everything placeable. Each item jumps to the owning
+    // tab/target first, then runs the existing add function, so the result lands in view.
+    const addBtn=ed.querySelector('#edAdd'), addMenu=ed.querySelector('#edAddMenu');
+    if(addBtn && addMenu){
+      const jump=(mode,target)=>{ if(target) editorActive=target; setEditorMode(mode, !!target); };
+      const ADD_ITEMS=[
+        ['\u25a0 Box',      ()=>{ jump('build','props');   addSceneProp('box'); }],
+        ['\u25cf Sphere',   ()=>{ jump('build','props');   addSceneProp('sphere'); }],
+        ['\u25ac Cylinder', ()=>{ jump('build','props');   addSceneProp('cylinder'); }],
+        ['\u25b2 Cone',     ()=>{ jump('build','props');   addSceneProp('cone'); }],
+        ['\ud83d\udca1 Light',       ()=>{ jump('build','lights');  addSceneLight(); }],
+        ['\ud83d\udc7e Enemy spawn', ()=>{ jump('enemies','spawns'); addSceneSpawn(); }],
+        ['\u25c6 Pickup pad',        ()=>{ jump('rules');           addPickupSpot(newPickupKind||'health'); }],
+        ['\ud83d\udd0a Audio zone',  ()=>{ jump('scene'); pushUndoSnapshot(); audioZones.push({ x:+player.pos.x.toFixed(2), z:+player.pos.z.toFixed(2), r:14, url:'', vol:0.8, loop:true }); refreshAudioZoneMarkers(); renderEditorFields(); }],
+      ];
+      for(const [label, act] of ADD_ITEMS){
+        const it=document.createElement('div'); it.textContent=label;
+        it.style.cssText='padding:6px 10px;cursor:pointer;border-radius:4px;font:12px ui-monospace,monospace;color:#cfeee2;';
+        it.onmouseenter=()=>{ it.style.background='rgba(56,245,181,0.18)'; };
+        it.onmouseleave=()=>{ it.style.background=''; };
+        it.onclick=()=>{ addMenu.style.display='none'; try{ act(); }catch(e){ console.warn('add failed', e); } };
+        addMenu.appendChild(it);
+      }
+      addBtn.onclick=(e)=>{ e.stopPropagation(); addMenu.style.display = addMenu.style.display==='none' ? 'block' : 'none'; };
+      document.addEventListener('click', ()=>{ addMenu.style.display='none'; });
+    }
   })();
   if(typeof renderCampaignPanel==='function') renderCampaignPanel();
   if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
@@ -14141,12 +14170,39 @@ function edFold(host, id, titleHtml, openDefault){
   host.appendChild(head); host.appendChild(body);
   return body;
 }
+// Pre-save sanity check: non-blocking warnings about authoring mistakes that make a level feel broken.
+function levelIssues(){
+  const issues=[];
+  try{
+    const locks=new Set(); for(const o of propModels){ if(o && o.userData && o.userData.lockId) locks.add(o.userData.lockId); }
+    const keys=new Set(); for(const s of pickupSpots){ const k=POWERUP_KINDS[s.kind]; if(k && k.key) keys.add(k.key); }
+    for(const lk of locks) if(!keys.has(lk)) issues.push('Something is locked with the '+keyDisplayName(lk)+', but no matching key pad is placed.');
+    for(const k of keys) if(!locks.has(k)) issues.push('A '+keyDisplayName(k)+' pad is placed, but nothing is locked with it.');
+    if(!pickupsOn && pickupSpots.length) issues.push('Pickups are turned off, but '+pickupSpots.length+' pickup spot'+(pickupSpots.length>1?'s are':' is')+' placed.');
+    audioZones.forEach((z,i)=>{ if(!(z.url||'').trim()) issues.push('Audio zone '+(i+1)+' has no sound URL.'); });
+    if(cineCfg && cineCfg.on && !(cineCfg.path && cineCfg.path.length>=2)) issues.push('Intro cinematic is on, but its camera path has fewer than 2 points.');
+  }catch(e){}
+  return issues;
+}
+function renderLevelIssues(){
+  const host = editorEl && editorEl.querySelector('#edIssues'); if(!host) return;
+  const issues = levelIssues();
+  host.innerHTML = '';
+  if(!issues.length){ host.style.display='none'; return; }
+  host.style.display='';
+  const head=document.createElement('div'); head.className='hint'; head.style.margin='0 0 4px';
+  head.innerHTML='<b>\u26a0 Level check</b> \u2014 '+issues.length+' thing'+(issues.length>1?'s':'')+' worth a look (saving still works):';
+  host.appendChild(head);
+  for(const msg of issues){ const d=document.createElement('div');
+    d.style.cssText='font-size:11px;color:#ffd9a8;border-left:2px solid rgba(255,180,90,0.6);padding:2px 0 2px 7px;margin:0 0 3px;';
+    d.textContent=msg; host.appendChild(d); }
+}
 function renderEditorFields(){
   if(!editorEl) return;
   // The wholesale rebuild below resets the panel's scroll position on every change; restore it once
   // this pass (whichever return path it takes) has finished, before the next paint.
   const _edScroll = editorEl.scrollTop;
-  queueMicrotask(()=>{ try{ if(editorEl) editorEl.scrollTop = _edScroll; }catch(e){} });
+  queueMicrotask(()=>{ try{ if(editorEl) editorEl.scrollTop = _edScroll; }catch(e){} try{ renderLevelIssues(); }catch(e){} });
   if(spawnRouteEdit && (editorActive!=='spawns' || editorTargets.spawns.obj()!==spawnRouteEdit || spawnRouteEdit.userData.mark.mode!=='patrol')) spawnRouteEdit=null;   // route placement only while its patrol spawn stays selected
   editorEl.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.key===editorActive));
   const tgt = editorTargets[editorActive];
