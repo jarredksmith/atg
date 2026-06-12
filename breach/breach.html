@@ -10275,7 +10275,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 329 · 2026-06-12';
+const BUILD_VERSION = 'build 330 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12141,7 +12141,7 @@ function _applyCine(lc){
   else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; cineCfg.audio=''; }
 }
 _applyCine(savedLevel && savedLevel.cine);   // restore a saved cinematic on page reload (boot path doesn't go through restoreLevel)
-let _cineActive=false, _cineT=0, _cineData=null, _cineReturn=null, _cineEditorPreview=false, _cinePreviewGroup=null;
+let _cineActive=false, _cineT=0, _cineData=null, _cineReturn=null, _cineEditorPreview=false, _cinePreviewGroup=null, _cineIntroPending=false;   // intro deferred until the level loader reveals
 let _interActive=false, _interTimer=null, _interKeyGo=null;   // campaign transition card (declared here so the render loop's freeze-check precedes it without a TDZ)
 let _cineAvatar=null;   // the local player's body, shown during a cutscene AND while authoring one in the editor
 let cineShowChar=true;   // editor: stand the character at the player start while building a cinematic
@@ -15865,7 +15865,7 @@ function waitAssetsThenReveal(){
   // The physics world was built at deploy, possibly before async model geometry finished loading, so its
   // static colliders can be incomplete (player passes through). Rebuild it now that all assets are in,
   // so the character controller collides against the fully-loaded scene.
-  const reveal=()=>{ try{ if(physWorld) buildPhysWorld(); }catch(e){} hideLevelLoader(); };
+  const reveal=()=>{ try{ if(physWorld) buildPhysWorld(); }catch(e){} hideLevelLoader(); if(_cineIntroPending){ _cineIntroPending=false; try{ maybeStartIntroCine(); }catch(e){} } };
   const tick=()=>{
     if(!_levelLoaderActive) return;
     const now=performance.now();
@@ -15883,10 +15883,11 @@ function waitAssetsThenReveal(){
 // this gate, so without prewarming the loader sees 0 pending models and reveals before they load -> players
 // pop from capsule to model mid-match. Kicking the loads off here makes the existing loader wait for them.
 function _prewarmMatchModels(){
-  if(NET.mode!=='host' && NET.mode!=='client') return;
   const urls=new Set();
+  // local character ALWAYS — solo included: the intro cinematic frames this body, and an unwarmed GLB
+  // means buildAvatarVisual shows the placeholder capsule mid-shot until the model pops in.
   try{ const mc=(typeof myCharCfg==='function')?myCharCfg():null; if(mc && mc.url) urls.add(mc.url); }catch(e){}
-  if(NET.charById){ for(const id in NET.charById){ const c=NET.charById[id]; if(c && c.url) urls.add(c.url); } }
+  if((NET.mode==='host'||NET.mode==='client') && NET.charById){ for(const id in NET.charById){ const c=NET.charById[id]; if(c && c.url) urls.add(c.url); } }
   urls.forEach(u=>{ try{ loadGLTFCached(u, ()=>{}, ()=>{}); }catch(e){} });
 }
 function startGame(){
@@ -15961,7 +15962,10 @@ function startGame(){
   resetDynamicProps();        // dynamic objects return to their authored spots each deploy
   teardownInstancing(); buildInstancing();   // (re)collapse repeated static shapes for play
   if(typeof buildPhysWorld==='function') buildPhysWorld();   // build a FRESH physics world for this level every match — never inherit a stale one from a previous session (fixes the client free-fly when no assets were pending, so the loader/reveal never rebuilt it)
-  if(typeof maybeStartIntroCine==='function') maybeStartIntroCine();   // optional authored intro flythrough (no-op if disabled / no path)
+  if(typeof maybeStartIntroCine==='function'){   // optional authored intro flythrough (no-op if disabled / no path)
+    if(_levelLoaderActive) _cineIntroPending = true;   // defer: starting now would play the cutscene AUDIO behind the loading screen (the loop freezes the shot but the track is already running) and frame a half-loaded scene
+    else maybeStartIntroCine();
+  }
   tryPointerLock();
 }
 // ---- Persistent best + end-of-run summary (localStorage; survives refresh/sessions) ----
