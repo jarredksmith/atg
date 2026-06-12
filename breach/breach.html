@@ -10266,7 +10266,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 325 · 2026-06-11';
+const BUILD_VERSION = 'build 326 · 2026-06-11';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10754,6 +10754,9 @@ function ensurePlayerKCC(){
   playerCtrl.setMaxSlopeClimbAngle(55*Math.PI/180);
   playerCtrl.setMinSlopeSlideAngle(38*Math.PI/180);
   if(playerCtrl.setApplyImpulsesToDynamicBodies) playerCtrl.setApplyImpulsesToDynamicBodies(true);
+  // Warm step: a freshly created collider isn't in the broadphase until the world steps once,
+  // so without this the player's very first move can miss the floor entirely.
+  try{ physWorld.step(); }catch(e){}
   return true;
 }
 // One frame of movement via Rapier: slides along walls, climbs ramps/stairs, fits through openings, all
