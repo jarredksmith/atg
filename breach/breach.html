@@ -8240,6 +8240,7 @@ const POWERUP_KINDS = {
   rifle:  { c:0xffe08a, label:'RIFLE' },
   smg:    { c:0xa8e6ff, label:'SMG' },
   shotgun:{ c:0xffb86b, label:'SHOTGUN' },
+  sniper: { c:0xc6ff7a, label:'SNIPER RIFLE' },
   launcher:{ c:0xff7a3a, label:'ROCKET LAUNCHER' },
   grenade:{ c:0x9be15a, label:'+GRENADE' },
 };
@@ -10265,7 +10266,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 323 · 2026-06-11';
+const BUILD_VERSION = 'build 325 · 2026-06-11';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13167,9 +13168,13 @@ function addSceneProp(src, meta){
   const fwd = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
   const px = player.pos.x + fwd.x*5, pz = player.pos.z + fwd.z*5;
   const async = !isPrimitive(src);                              // primitives finalize synchronously: no overlay
-  let _done=false, _to=null;
-  const _finish = ()=>{ if(_done) return; _done=true; if(_to) clearTimeout(_to); hidePropLoader(); };
-  if(async){ showPropLoader(meta.name ? ('Loading \u201c'+meta.name+'\u201d\u2026') : 'Loading model\u2026'); _to=setTimeout(_finish, 60000); }   // safety: never stuck if a callback is missed
+  let _done=false, _to=null, _shownAt=0;
+  // Hold the overlay for a brief minimum once shown. A browser-HTTP-cached .glb can resolve faster than a
+  // paint, so without this floor the loader is set visible and hidden in the same frame and never appears.
+  const _finish = ()=>{ if(_done) return; _done=true; if(_to) clearTimeout(_to);
+    if(async){ const wait=Math.max(0, 220-(performance.now()-_shownAt)); if(wait>0){ setTimeout(hidePropLoader, wait); return; } }
+    hidePropLoader(); };
+  if(async){ showPropLoader(meta.name ? ('Loading \u201c'+meta.name+'\u201d\u2026') : 'Loading model\u2026'); _shownAt=performance.now(); _to=setTimeout(_finish, 60000); }   // safety: never stuck if a callback is missed
   spawnProp(src, [px, 0, pz, 0, 0, 0, 1], (obj)=>{
     if(meta.attribution) obj.userData.attribution = meta.attribution;   // credit (CC-BY models)
     editorActive='props'; editorTargets.props.idx = propModels.indexOf(obj); selProps=[obj]; renderEditorFields();
