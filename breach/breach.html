@@ -10065,6 +10065,7 @@ function checkProximity(){
   if(!nearTarget){
     let best=null, bd=2.6;
     for(const o of propModels){ const a=o&&o.userData&&o.userData.xa; if(!a||!a.on||a.trig!=='interact') continue;
+      if(a.mode==='once' && a.dest) continue;   // a fired Once mechanism is spent — xaToggle would no-op, so drop the E prompt too
       const b=o.userData.box; let d;
       if(b){ const cx=Math.max(b.min.x,Math.min(player.pos.x,b.max.x)), cy=Math.max(b.min.y,Math.min(player.pos.y,b.max.y)), cz=Math.max(b.min.z,Math.min(player.pos.z,b.max.z)); d=Math.hypot(player.pos.x-cx, player.pos.y-cy, player.pos.z-cz); }
       else d=Math.hypot(player.pos.x-o.position.x, player.pos.y-o.position.y, player.pos.z-o.position.z);
@@ -10322,7 +10323,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 334 · 2026-06-12';
+const BUILD_VERSION = 'build 335 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15892,6 +15893,7 @@ function toggleEditor(){
     if(typeof restoreDestroyedProps==='function') restoreDestroyedProps();   // show authored props that were destroyed in play, so they can be edited again
     if(typeof xaSnapToBase==='function') xaSnapToBase();
     if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
+    for(const p of powerups){ if(p.mesh) p.mesh.visible=false; }   // hide live pads while editing — markers stand in (updatePowerups is paused in the editor and re-shows ready pads on close)
     if(isTouch){ editorFreeFly=true; flyInit=false; }   // mobile: fly-around editing (joystick moves, drag the left side to look)
     for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible = true; }
     if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(true);
@@ -15909,6 +15911,7 @@ function toggleEditor(){
     if(selBox) selBox.visible = false;
     for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible = false; }
     if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false);
+    if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false);   // markers linger visible otherwise — the 'stuck double' next to every live pad
     for(const en of enemies){ en.mesh.visible = true; }   // un-hide enemies when leaving the editor
     const mm=$('minimap'); if(mm) mm.style.display='';
     const wp=$('wavePanel'); if(wp) wp.style.display='';
