@@ -594,6 +594,7 @@
     <button id="loadCampBtn" class="secBtn ghost">📂 Load campaign</button>
     <button id="instrBtn" class="secBtn ghost">❔ Instructions</button>
     <button id="helpBtn" class="secBtn ghost">📖 Field manual</button>
+    <button id="ctrlBtn" class="secBtn ghost">🎮 Controls: Auto</button>
     <button id="fsBtn" class="secBtn ghost" style="display:none">⛶ Fullscreen</button>
     <input type="file" id="menuCampFile" accept=".json,application/json" style="display:none">
   </div>
@@ -7600,8 +7601,18 @@ const CROUCH_DIP = 0.8;     // how far the camera lowers when fully crouched
 const keys = {};
 // ---- Touch / mobile input ----
 let isTouch = (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches);   // primary input is a touchscreen
+// Control mode override: 'auto' trusts detection (+ touch promotion below); 'touch'/'desktop' force it.
+let _ctrlPref = 'auto'; try{ const v=localStorage.getItem('breach_controls'); if(v==='touch'||v==='desktop') _ctrlPref=v; }catch(e){}
+function applyControlMode(){
+  if(_ctrlPref==='touch') isTouch = true;
+  else if(_ctrlPref==='desktop') isTouch = false;
+  else isTouch = (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches);
+  try{ if(document.body) document.body.classList.toggle('touch', isTouch); }catch(e){}
+  if(!isTouch){ const tu=document.getElementById('touchUI'); if(tu) tu.style.display='none'; }   // the per-frame manager only runs while isTouch — hide explicitly on the way out
+}
+applyControlMode();
 if(isTouch && document.body) document.body.classList.add('touch');
-addEventListener('touchstart', ()=>{ isTouch = true; if(document.body) document.body.classList.add('touch'); }, { once:true, passive:true });          // or reveal as soon as a real touch happens
+addEventListener('touchstart', ()=>{ if(_ctrlPref==='desktop') return; isTouch = true; if(document.body) document.body.classList.add('touch'); }, { once:true, passive:true });          // or reveal as soon as a real touch happens
 let touchMoveX=0, touchMoveZ=0, touchSprint=false, touchFiring=false, touchAds=false, touchJump=false, touchLookDX=0, touchLookDY=0;
 const TOUCH_LOOK_SENS = 0.0042, TOUCH_ADS_SENS = 0.0022;
 // Pointer Lock isn't supported on iOS Safari (the methods are undefined). Route every call through these
@@ -10355,7 +10366,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 350 · 2026-06-12';
+const BUILD_VERSION = 'build 352 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -10478,13 +10489,13 @@ addEventListener('contextmenu', e=>{ if(gameOn) e.preventDefault(); });
   let R = 60;
   // virtual joystick
   let stickId=null, sx=0, sy=0;
-  stick.addEventListener('pointerdown', e=>{ isTouch=true; stickId=e.pointerId; const r=stick.getBoundingClientRect(); sx=r.left+r.width/2; sy=r.top+r.height/2; R=Math.max(36, r.width*0.5); try{stick.setPointerCapture(e.pointerId);}catch(_){} e.preventDefault(); });
+  stick.addEventListener('pointerdown', e=>{ if(_ctrlPref!=='desktop') isTouch=true; stickId=e.pointerId; const r=stick.getBoundingClientRect(); sx=r.left+r.width/2; sy=r.top+r.height/2; R=Math.max(36, r.width*0.5); try{stick.setPointerCapture(e.pointerId);}catch(_){} e.preventDefault(); });
   stick.addEventListener('pointermove', e=>{ if(e.pointerId!==stickId) return; const dx=e.clientX-sx, dy=e.clientY-sy; const d=Math.hypot(dx,dy)||1; const cl=Math.min(d,R), nx=dx/d*cl, ny=dy/d*cl; thumb.style.transform='translate('+nx+'px,'+ny+'px)'; touchMoveX=nx/R; touchMoveZ=ny/R; touchSprint=(d/R)>0.85; e.preventDefault(); });
   const stickEnd=e=>{ if(e.pointerId!==stickId) return; stickId=null; touchMoveX=0; touchMoveZ=0; touchSprint=false; thumb.style.transform='translate(0,0)'; };
   stick.addEventListener('pointerup', stickEnd); stick.addEventListener('pointercancel', stickEnd);
   // look pad (drag anywhere on the right to aim)
   let lookId=null, lx=0, ly=0;
-  look.addEventListener('pointerdown', e=>{ isTouch=true; lookId=e.pointerId; lx=e.clientX; ly=e.clientY; try{look.setPointerCapture(e.pointerId);}catch(_){}
+  look.addEventListener('pointerdown', e=>{ if(_ctrlPref!=='desktop') isTouch=true; lookId=e.pointerId; lx=e.clientX; ly=e.clientY; try{look.setPointerCapture(e.pointerId);}catch(_){}
     // In the editor a press first tries to grab a gizmo axis handle; otherwise it's a look-drag (or, if it ends without moving, a tap-to-select).
     if(editorOpen){ editorDragMoved=false; if(typeof tryGizmoGrab==='function' && tryGizmoGrab(e)){ editorDragMoved=true; } else { gizmoDrag=null; } }
     e.preventDefault(); });
@@ -10510,7 +10521,7 @@ addEventListener('contextmenu', e=>{ if(gameOn) e.preventDefault(); });
   (function(){
     const fire=document.getElementById('tFire'); if(!fire) return;
     let fid=null, fx=0, fy=0;
-    fire.addEventListener('pointerdown', e=>{ isTouch=true; fid=e.pointerId; fx=e.clientX; fy=e.clientY; touchFiring=true; fire.classList.add('on'); try{fire.setPointerCapture(e.pointerId);}catch(_){} e.preventDefault(); });
+    fire.addEventListener('pointerdown', e=>{ if(_ctrlPref!=='desktop') isTouch=true; fid=e.pointerId; fx=e.clientX; fy=e.clientY; touchFiring=true; fire.classList.add('on'); try{fire.setPointerCapture(e.pointerId);}catch(_){} e.preventDefault(); });
     fire.addEventListener('pointermove', e=>{ if(e.pointerId!==fid) return; touchLookDX+=(e.clientX-fx); touchLookDY+=(e.clientY-fy); fx=e.clientX; fy=e.clientY; e.preventDefault(); });   // drag while firing -> aim
     const fireEnd=e=>{ if(e.pointerId!==fid) return; fid=null; touchFiring=false; fire.classList.remove('on'); };
     fire.addEventListener('pointerup', fireEnd); fire.addEventListener('pointercancel', fireEnd);
@@ -10524,7 +10535,7 @@ addEventListener('contextmenu', e=>{ if(gameOn) e.preventDefault(); });
   (function(){
     const aim=document.getElementById('tAim'); if(!aim) return;
     let aid=null, ax=0, ay=0;
-    aim.addEventListener('pointerdown', e=>{ isTouch=true; aid=e.pointerId; ax=e.clientX; ay=e.clientY; touchAds=!touchAds; aim.classList.toggle('on', touchAds); try{aim.setPointerCapture(e.pointerId);}catch(_){} e.preventDefault(); });
+    aim.addEventListener('pointerdown', e=>{ if(_ctrlPref!=='desktop') isTouch=true; aid=e.pointerId; ax=e.clientX; ay=e.clientY; touchAds=!touchAds; aim.classList.toggle('on', touchAds); try{aim.setPointerCapture(e.pointerId);}catch(_){} e.preventDefault(); });
     aim.addEventListener('pointermove', e=>{ if(e.pointerId!==aid) return; touchLookDX+=(e.clientX-ax); touchLookDY+=(e.clientY-ay); ax=e.clientX; ay=e.clientY; e.preventDefault(); });   // drag to aim the camera
     const aimEnd=e=>{ if(e.pointerId!==aid) return; aid=null; };
     aim.addEventListener('pointerup', aimEnd); aim.addEventListener('pointercancel', aimEnd);
@@ -12339,7 +12350,12 @@ function updateCinematic(dt){
   if(path.length>=2){ const pp=pointAlongPath(path, te, false); _cineV0.set(pp[0],pp[1],pp[2]); }
   else { _cineV0.set(path[0][0], path[0][1], path[0][2]); }
   camera.position.copy(_cineV0);
-  if(d.look==='path' && path.length>=2){ const a=pointAlongPath(path, Math.min(1,te+0.02), false); _cineTgt.set(a[0],a[1],a[2]); if(_cineTgt.distanceToSquared(_cineV0)<1e-4) _cineTgt.set(playerSpawn.x, terrainHeightAt(playerSpawn.x,playerSpawn.z)+EYE, playerSpawn.z); }
+  if(d.look==='path' && path.length>=2){ const a=pointAlongPath(path, Math.min(1,te+0.02), false); _cineTgt.set(a[0],a[1],a[2]);
+    if(_cineTgt.distanceToSquared(_cineV0)<1e-4){   // at the very end the look-ahead sample lands on the camera itself
+      const b=pointAlongPath(path, Math.max(0,te-0.02), false);   // keep the travel heading by extrapolating from just behind
+      _cineTgt.set(_cineV0.x*2-b[0], _cineV0.y*2-b[1], _cineV0.z*2-b[2]);
+      if(_cineTgt.distanceToSquared(_cineV0)<1e-4) _cineTgt.set(playerSpawn.x, terrainHeightAt(playerSpawn.x,playerSpawn.z)+EYE, playerSpawn.z);   // degenerate single-point path only
+    } }
   else { _cineTgt.set(playerSpawn.x, terrainHeightAt(playerSpawn.x,playerSpawn.z)+EYE, playerSpawn.z); }
   camera.lookAt(_cineTgt);
   const lens = d.lensFrom + (d.lensTo - d.lensFrom)*te;          // zoom keyframe: focal-length ramp over the shot
@@ -12368,7 +12384,21 @@ function refreshCinePreview(){
     const pts=(cineAllShots()[Math.min(_cineShotSel, cineAllShots().length-1)].path).map(q=>new THREE.Vector3(q[0],q[1],q[2]));
     if(pts.length>=2){ const line=new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(_dashPts(pts,0.7,0.45)), new THREE.LineBasicMaterial({ color:0xffcf6b, transparent:true, opacity:0.95, depthTest:false })); line.renderOrder=998; g.add(line); }
     if(pts.length>=1 && typeof playerSpawn!=='undefined'){ const aim=new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(_dashPts([pts[pts.length-1], new THREE.Vector3(playerSpawn.x, EYE, playerSpawn.z)],0.5,0.6)), new THREE.LineBasicMaterial({ color:0x4aa3ff, transparent:true, opacity:0.5, depthTest:false })); aim.renderOrder=998; g.add(aim); }
-    (cineAllShots()[Math.min(_cineShotSel, cineAllShots().length-1)].path).forEach((q,i)=>{ const m=new THREE.Mesh(new THREE.SphereGeometry(0.4,10,8), new THREE.MeshBasicMaterial({ color: i===0?0x38f5b5:0xffcf6b, depthTest:false })); m.position.set(q[0],q[1],q[2]); m.renderOrder=999; g.add(m); });
+    { const shot=cineAllShots()[Math.min(_cineShotSel, cineAllShots().length-1)], sp=shot.path;
+      sp.forEach((q,i)=>{ const m=new THREE.Mesh(new THREE.SphereGeometry(0.4,10,8), new THREE.MeshBasicMaterial({ color: i===0?0x38f5b5:0xffcf6b, depthTest:false })); m.position.set(q[0],q[1],q[2]); m.renderOrder=999; g.add(m);
+        // facing arrow: where the CAMERA will look from this point during playback (same rules as updateCinematic)
+        const p=new THREE.Vector3(q[0],q[1],q[2]); let dir;
+        if(shot.look==='path' && sp.length>=2){
+          const nq = (i < sp.length-1) ? sp[i+1] : sp[i-1];
+          dir = new THREE.Vector3(nq[0],nq[1],nq[2]).sub(p);
+          if(i === sp.length-1) dir.negate();   // last point keeps the incoming heading (matches the no-flip playback fix)
+        } else {
+          dir = new THREE.Vector3(playerSpawn.x, terrainHeightAt(playerSpawn.x,playerSpawn.z)+EYE, playerSpawn.z).sub(p);
+        }
+        if(dir.lengthSq()>1e-6){ dir.normalize();
+          const ar=new THREE.ArrowHelper(dir, p, 2.6, 0x7dd4ff, 0.9, 0.45);
+          ar.line.material.depthTest=false; ar.cone.material.depthTest=false; ar.line.renderOrder=999; ar.cone.renderOrder=999;
+          g.add(ar); } }); }
     scene.add(g); _cinePreviewGroup=g;
   }catch(e){ /* path preview is cosmetic; never let it break the editor */ }
 }
@@ -16580,6 +16610,15 @@ function bindMenu(){
   if(fs){ if(!fsSupported()){ fs.style.display='none'; } else { fs.style.display=''; fs.onclick=toggleFullscreen; syncFsBtn(); } }   // desktop only
   const ib=document.getElementById('instrBtn'); if(ib) ib.onclick=()=>openModal('instrModal');
   const hb=document.getElementById('helpBtn'); if(hb) hb.onclick=()=>{ try{ window.open('breach-help.html','_blank'); }catch(e){} };   // full docs, hosted beside the game
+  const cb=document.getElementById('ctrlBtn');
+  if(cb){
+    const lbl=()=>{ cb.textContent='🎮 Controls: ' + (_ctrlPref==='touch'?'Touch':_ctrlPref==='desktop'?'Desktop':'Auto'); };
+    lbl(); applyControlMode();   // boot-apply with body present (covers forced modes before any touch event)
+    cb.onclick=()=>{ _ctrlPref = _ctrlPref==='auto' ? 'touch' : _ctrlPref==='touch' ? 'desktop' : 'auto';
+      try{ localStorage.setItem('breach_controls', _ctrlPref); }catch(e){}
+      applyControlMode(); lbl();
+      if(typeof flashToast==='function') flashToast(_ctrlPref==='auto' ? 'CONTROLS: AUTO-DETECT' : _ctrlPref==='touch' ? 'TOUCH CONTROLS ON' : 'DESKTOP CONTROLS \u2014 keyboard + mouse'); };
+  }
   const mo=document.getElementById('mpOpenBtn'); if(mo) mo.onclick=()=>{ const di=document.getElementById('mpBotDiff'); if(di && BOT_DIFF[NET.botDiff]) di.value=NET.botDiff; openModal('mpModal'); };
   { const fb=document.getElementById('mpFFA'); if(fb) fb.onclick=startFFA; }
   { const tb=document.getElementById('mpTDM'); if(tb) tb.onclick=startTDM; }
