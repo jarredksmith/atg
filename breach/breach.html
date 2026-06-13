@@ -8789,7 +8789,7 @@ function updateBots(dt){
       if(b.pos.y>groundY+0.04 || (b.vy||0)>0){ b.vy=(b.vy||0)-GRAV*dt; b.pos.y+=b.vy*dt; if(b.vy<=0 && b.pos.y<=groundY){ b.pos.y=groundY; b.vy=0; b.grounded=true; } else b.grounded=false; }
       else { b.pos.y=groundY; b.vy=0; b.grounded=true; }
     }
-    b.yaw = tgt ? Math.atan2(tgt.pos.x-b.pos.x, tgt.pos.z-b.pos.z) : Math.atan2(mvx,mvz);
+    b.yaw = tgt ? Math.atan2(-(tgt.pos.x-b.pos.x), -(tgt.pos.z-b.pos.z)) : Math.atan2(-mvx,-mvz);   // player-yaw convention (rotation.y = atan2(-dx,-dz)); plain atan2(dx,dz) faced bots 180 the wrong way
     if(b.mesh){ b.mesh.position.set(b.pos.x,b.pos.y,b.pos.z); if(b.grounded===false){ b._spin=(b._spin||0)+(Math.hypot(b.evx||0,b.evz||0)+Math.abs(b.vy||0))*dt*0.5; b.mesh.rotation.set(b._spin, b.yaw, b._spin*0.5); } else { b._spin=0; b.mesh.rotation.set(0, b.yaw, 0); }
       if(b.mesh.userData.hasModel && b.mesh.userData.visual && b.mesh.userData.visual.userData.stateActions){
         const md=Math.hypot(b.pos.x-ox, b.pos.z-oz);
@@ -10525,7 +10525,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 384 · 2026-06-12';
+const BUILD_VERSION = 'build 385 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
