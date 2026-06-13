@@ -9138,40 +9138,77 @@ let playerModelClips = [];   // animation clip names discovered when the avatar 
 // Attach (or swap) the held weapon model on a third-person avatar group `g`. weaponKey picks WEAPONS[key].model.
 // The gun is parented to the avatar so it follows the body's position + facing; a tunable grip offset places it.
 // No bone dependency — works on any character model. Empty model url -> no gun (clears any existing one).
+// Find a hand bone to hold the gun, so it follows the character's animation. Models name bones many ways
+// (Mixamo 'mixamorigRightHand', Blender 'hand.R'/'Hand_R', 'wrist_r', etc.) — match a prioritized set, prefer
+// the RIGHT hand, and accept a generic hand/wrist as a fallback. Returns the bone or null.
+function _findHandBone(root){
+  if(!root) return null;
+  const bones=[]; root.traverse(o=>{ if(o.isBone) bones.push(o); });
+  if(!bones.length) return null;
+  const norm=b=>(b.name||'').toLowerCase().replace(/[\s_.:|-]/g,'');
+  // strongest -> weakest preference. 'hand' beats 'wrist'; right beats left/unspecified.
+  const tiers=[
+    b=>/righthand$|handr$|rhand$|hand_?right/.test(norm(b)),
+    b=>/(right|_r|\br)hand/.test(norm(b)) && !/left/.test(norm(b)),
+    b=>/hand/.test(norm(b)) && !/left/.test(norm(b)),
+    b=>/(rightwrist|wristr|rwrist)/.test(norm(b)),
+    b=>/wrist/.test(norm(b)) && !/left/.test(norm(b)),
+    b=>/hand|wrist/.test(norm(b)),                 // last resort: any hand/wrist, even left
+  ];
+  for(const test of tiers){ const hit=bones.find(test); if(hit) return hit; }
+  return null;
+}
 function _applyGunGrip(gun){
   if(!gun) return;
   gun.position.set(tpGunX, tpGunY, tpGunZ);
   gun.rotation.set(tpGunPitch, tpGunYaw, tpGunRoll);
   gun.scale.setScalar(tpGunScale||1);
 }
+// place the gun on a hand bone: the grip offset becomes a SMALL local nudge in the hand's space, and we undo
+// the bone's world scale so the gun isn't distorted by the skeleton's scaling.
+function _applyGunGripToHand(gun, bone){
+  if(!gun) return;
+  gun.position.set(tpGunX, tpGunY, tpGunZ);
+  gun.rotation.set(tpGunPitch, tpGunYaw, tpGunRoll);
+  let s = tpGunScale||1;
+  bone.updateWorldMatrix(true,false);
+  const bs=new THREE.Vector3(); bone.matrixWorld.decompose(new THREE.Vector3(), new THREE.Quaternion(), bs);
+  const avg=(bs.x+bs.y+bs.z)/3; if(avg>1e-4) s/=avg;   // counter the bone's world scale so the gun keeps its size
+  gun.scale.setScalar(s);
+}
 function attachAvatarGun(g, weaponKey){
   if(!g) return;
-  const w = WEAPONS[weaponKey]; const url = (w && w.model) ? w.model : '';
+  const w = WEAPONS[weaponKey]; let url = (w && w.model) ? w.model : '';
+  if(!url){ for(const k of Object.keys(WEAPONS)){ if(WEAPONS[k] && WEAPONS[k].model){ url=WEAPONS[k].model; break; } } }   // this weapon has no model -> borrow any set model so the hands aren't empty
   // clear a previous gun if the weapon changed or there's no model
   if(g.userData.gunKey === weaponKey && g.userData.gun) return;   // already the right gun
-  if(g.userData.gun){ g.remove(g.userData.gun); g.userData.gun=null; }
+  if(g.userData.gun){ if(g.userData.gun.parent) g.userData.gun.parent.remove(g.userData.gun); g.userData.gun=null; g.userData.gunBone=null; }
   g.userData.gunKey = weaponKey;
   if(!url){ return; }   // no model for this weapon -> bare hands (fine)
   g.userData._gunLoadUrl = url;
   loadGLTFCached(url,
     (gltf)=>{
       if(g.userData._gunLoadUrl !== url || g.userData.gunKey !== weaponKey) return;   // weapon changed mid-load
-      if(g.userData.gun){ g.remove(g.userData.gun); g.userData.gun=null; }
+      if(g.userData.gun){ if(g.userData.gun.parent) g.userData.gun.parent.remove(g.userData.gun); g.userData.gun=null; }
       const gun = THREE.cloneSkinned(gltf.scene);
       gun.traverse(o=>{ if(o.isMesh){ o.castShadow=true; o.raycast=()=>{}; } });   // gun never blocks shots/picks
-      _applyGunGrip(gun);
-      g.add(gun); g.userData.gun = gun;
+      const hand = _findHandBone(g.userData.visual);
+      if(hand){ hand.add(gun); g.userData.gunBone=hand; _applyGunGripToHand(gun, hand); }   // follows the hand animation
+      else { g.add(gun); g.userData.gunBone=null; _applyGunGrip(gun); }                        // no usable bone -> fixed body grip
+      g.userData.gun = gun;
     },
     (err)=>{ console.warn('TP gun model load failed:', err && err.message); }
   );
 }
 // Re-apply the grip offset live to every avatar currently holding a gun (used while tuning the sliders).
 function refreshAvatarGunGrips(){
-  if(typeof _ownAvatar!=='undefined' && _ownAvatar && _ownAvatar.userData.gun) _applyGunGrip(_ownAvatar.userData.gun);
-  for(const id in NET.players){ const rp=NET.players[id]; if(rp && rp.mesh && rp.mesh.userData.gun) _applyGunGrip(rp.mesh.userData.gun); }
-  if(typeof previewAvatar!=='undefined' && previewAvatar && previewAvatar.userData.gun) _applyGunGrip(previewAvatar.userData.gun);
+  const reapply=(grp)=>{ if(grp && grp.userData.gun){ if(grp.userData.gunBone) _applyGunGripToHand(grp.userData.gun, grp.userData.gunBone); else _applyGunGrip(grp.userData.gun); } };
+  if(typeof _ownAvatar!=='undefined') reapply(_ownAvatar);
+  for(const id in NET.players){ const rp=NET.players[id]; if(rp) reapply(rp.mesh); }
+  if(typeof previewAvatar!=='undefined') reapply(previewAvatar);
 }
 function buildAvatarVisual(g, cfg){
+  if(g.userData.gun){ if(g.userData.gun.parent) g.userData.gun.parent.remove(g.userData.gun); g.userData.gun=null; g.userData.gunBone=null; g.userData.gunKey=null; }   // body is rebuilding; the held gun (maybe parented to an old bone) must be re-attached afterward
   if(g.userData.visual){ if(g.userData.mixer){ const mi=mixers.indexOf(g.userData.mixer); if(mi>=0) mixers.splice(mi,1); g.userData.mixer=null; } g.remove(g.userData.visual); g.userData.visual=null; }
   if(g.userData.hitProxy){ g.remove(g.userData.hitProxy); g.userData.hitProxy=null; }
   if(g.userData.headProxy){ g.remove(g.userData.headProxy); g.userData.headProxy=null; }
@@ -10649,7 +10686,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 391 · 2026-06-12';
+const BUILD_VERSION = 'build 392 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
