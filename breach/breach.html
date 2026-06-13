@@ -10447,7 +10447,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 360 · 2026-06-12';
+const BUILD_VERSION = 'build 361 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15588,8 +15588,9 @@ function renderEditorFields(){
   if(matHost){
     matHost.innerHTML = '';
     const selObj = (editorActive==='props' && editorTargets.props.obj) ? editorTargets.props.obj() : null;
-    const matOn = !!(selObj && isShapePrimitive(selObj.userData.src));
-    const matSec = matHost.closest('.edSection'); if(matSec) matSec.style.display = matOn ? '' : 'none';   // only shape primitives have material
+    const matInMode = (MODE_SECTIONS[editorMode]||[]).indexOf('material')>=0;   // only the Build tab owns Material; without this it leaks onto Save/etc.
+    const matOn = matInMode && !!(selObj && isShapePrimitive(selObj.userData.src));
+    const matSec = matHost.closest('.edSection'); if(matSec) matSec.style.display = matOn ? '' : 'none';   // shape primitive selected AND we're on a tab that shows Material
     if(matOn){
       const toHex = n => '#' + ('000000'+(n>>>0).toString(16)).slice(-6);
 
