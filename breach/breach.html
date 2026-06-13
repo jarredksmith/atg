@@ -9091,8 +9091,15 @@ let _sprintMode = 'hold';   // 'hold' = press Shift to run; 'toggle' = tap Shift
 try{ const v=localStorage.getItem('breach_sprint_mode'); if(v==='toggle'||v==='hold') _sprintMode=v; }catch(e){}
 let _sprintToggled = false;
 function sprinting(){ if(padSprint || touchSprint) return true; if(_sprintMode==='toggle') return _sprintToggled; return !!keys['ShiftLeft']; }
-let tpShoulder = 0;   // third-person over-the-shoulder offset: + right, - left, 0 centered
-try{ const _ts=parseFloat(localStorage.getItem('breach_tp_shoulder')); if(!isNaN(_ts)) tpShoulder=Math.max(-3,Math.min(3,_ts)); }catch(e){}
+// Third-person camera framing (all in camera-local space): side pushes the body left/right of screen,
+// dist is how far back the camera sits, height lifts/drops it. Looking PARALLEL to forward means a nonzero
+// side genuinely moves the character off-center (true over-the-shoulder), not just orbits around it.
+let tpSide = 0;       // + = body to the LEFT of screen (camera to the right), - = opposite, 0 = centered
+let tpDist = 4.2;     // chase distance (smaller = closer to the character)
+let tpHeight = 0;     // vertical nudge of the camera
+try{ const s=parseFloat(localStorage.getItem('breach_tp_side')); if(!isNaN(s)) tpSide=Math.max(-3,Math.min(3,s)); }catch(e){}
+try{ const d=parseFloat(localStorage.getItem('breach_tp_dist')); if(!isNaN(d)) tpDist=Math.max(1.5,Math.min(10,d)); }catch(e){}
+try{ const h=parseFloat(localStorage.getItem('breach_tp_height')); if(!isNaN(h)) tpHeight=Math.max(-2,Math.min(3,h)); }catch(e){}
 let _ownAvatar=null, _ownAvatarKey='', _tpCaster=null, _ownPrevX=0, _ownPrevZ=0, _ownSpeed=0;
 const _tpBack=new THREE.Vector3(), _tpEye=new THREE.Vector3(), _tpLookAt=new THREE.Vector3();
 function ensureOwnAvatar(){
@@ -9137,21 +9144,17 @@ function tpCameraPushback(){
     const cl=_ownAvatar.userData.centerLocal, fY=(_ownAvatar.userData.footY!=null)?_ownAvatar.userData.footY:(player.pos.y-EYE);
     px=player.pos.x + cl.x*cy + cl.z*sy; pz=player.pos.z - cl.x*sy + cl.z*cy; py=fY + cl.y;
   }
-  let dist=TP_DIST;
+  let dist=tpDist;
   if(!_tpCaster) _tpCaster=new THREE.Raycaster();
-  _tpCaster.set(_tpEye.set(px,py,pz), _tpBack.set(-fx,-fy,-fz)); _tpCaster.far=TP_DIST;
+  _tpCaster.set(_tpEye.set(px,py,pz), _tpBack.set(-fx,-fy,-fz)); _tpCaster.far=tpDist;
   const hits=_tpCaster.intersectObjects(colliders, false);
   if(hits.length) dist=Math.max(TP_MIN, hits[0].distance-0.35);   // don't clip through a wall behind us
-  if(tpShoulder){
-    const rx = cy, rz = -sy;   // yaw-only view-right (stays level)
-    const camx = px - fx*dist + rx*tpShoulder, camy = py - fy*dist, camz = pz - fz*dist + rz*tpShoulder;
-    camera.position.set(camx, camy, camz);
-    // look PARALLEL to the aim axis (camera + forward), NOT at the pivot — converging on the pivot would tilt
-    // the camera and desync the crosshair, since shots read camera.getWorldDirection(). This keeps forward forward.
-    _tpLookAt.set(camx + fx, camy + fy, camz + fz); camera.lookAt(_tpLookAt);
-  } else {
-    camera.position.set(px - fx*dist, py - fy*dist, pz - fz*dist);   // centered: pivot stays on the crosshair
-  }
+  const rx = cy, rz = -sy;   // yaw-only view-right (level)
+  // camera sits back by dist, shifted sideways by tpSide and vertically by tpHeight, then looks PARALLEL to
+  // forward. With a nonzero side the pivot (character) lands off-center on screen -> real over-the-shoulder.
+  const camx = px - fx*dist + rx*tpSide, camy = py - fy*dist + tpHeight, camz = pz - fz*dist + rz*tpSide;
+  camera.position.set(camx, camy, camz);
+  if(tpSide || tpHeight){ _tpLookAt.set(camx + fx, camy + fy, camz + fz); camera.lookAt(_tpLookAt); }   // keep view on the forward axis (crosshair accurate)
 }
 // ---- per-player characters: each player owns + broadcasts their avatar config; others build from it ----
 function myCharCfg(){ const c=(myRosterIdx>=0 && charRoster[myRosterIdx]) ? charRoster[myRosterIdx] : playerModelCfg; return { url:c.url||'', scale:c.scale||1, face:c.face||0, rx:c.rx||0, rz:c.rz||0, xoff:c.xoff||0, yoff:c.yoff||0, zoff:c.zoff||0, thumb:c.thumb||'', clips:Object.assign({}, c.clips||{}), tint:(CHARACTERS[myCharIdx]?CHARACTERS[myCharIdx].color:null) }; }
@@ -10477,7 +10480,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 370 · 2026-06-12';
+const BUILD_VERSION = 'build 371 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15598,16 +15601,22 @@ function renderEditorFields(){
         pbRow.appendChild(b);
       }
       urlHost.appendChild(pbRow);
-      // third-person shoulder offset: slide the chase camera so the body isn't dead-center on the crosshair
-      { const shRow=document.createElement('div'); shRow.className='row2'; shRow.style.cssText='display:flex;align-items:center;gap:8px;margin-top:8px;';
-        const shSp=document.createElement('span'); shSp.className='hint'; shSp.innerHTML='<b>3rd-person offset</b>'; shSp.style.flex='1';
-        const shRng=document.createElement('input'); shRng.type='range'; shRng.min='-3'; shRng.max='3'; shRng.step='0.1'; shRng.value=String(tpShoulder); shRng.style.flex='1.4';
-        const shNum=document.createElement('span'); shNum.className='hint'; shNum.style.minWidth='60px'; shNum.style.textAlign='right';
-        const shFmt=()=>{ shNum.textContent = tpShoulder===0 ? 'centered' : (tpShoulder>0?'right ':'left ')+Math.abs(tpShoulder).toFixed(1); };
-        shFmt();
-        shRng.oninput=()=>{ tpShoulder=Math.max(-3,Math.min(3,parseFloat(shRng.value)||0)); try{ localStorage.setItem('breach_tp_shoulder', String(tpShoulder)); }catch(e){} shFmt(); };
-        shRow.appendChild(shSp); shRow.appendChild(shRng); shRow.appendChild(shNum); urlHost.appendChild(shRow);
-        const shHint=document.createElement('div'); shHint.className='hint'; shHint.style.cssText='font-size:10px;opacity:0.7;margin:2px 0 0;'; shHint.textContent='Over-the-shoulder camera for third-person. Only applies in third-person view.'; urlHost.appendChild(shHint);
+      // third-person camera framing: side / distance / height. Live-applied + persisted.
+      { const tpHdr=document.createElement('div'); tpHdr.className='hint'; tpHdr.innerHTML='<b>Third-person camera</b>'; tpHdr.style.margin='8px 0 2px'; urlHost.appendChild(tpHdr);
+        const mkSlider=(label, get, set, lo, hi, step, fmt, key)=>{
+          const row=document.createElement('div'); row.style.cssText='display:flex;align-items:center;gap:8px;margin:3px 0;';
+          const sp=document.createElement('span'); sp.className='hint'; sp.textContent=label; sp.style.cssText='flex:0 0 64px;font-size:11px;';
+          const rng=document.createElement('input'); rng.type='range'; rng.min=String(lo); rng.max=String(hi); rng.step=String(step); rng.value=String(get()); rng.style.flex='1';
+          const num=document.createElement('span'); num.className='hint'; num.style.cssText='flex:0 0 64px;text-align:right;font-size:10px;';
+          const upd=()=>{ num.textContent=fmt(get()); };
+          upd();
+          rng.oninput=()=>{ const v=Math.max(lo,Math.min(hi,parseFloat(rng.value)||0)); set(v); try{ localStorage.setItem(key, String(v)); }catch(e){} upd(); };
+          row.appendChild(sp); row.appendChild(rng); row.appendChild(num); urlHost.appendChild(row);
+        };
+        mkSlider('Side', ()=>tpSide, v=>tpSide=v, -3, 3, 0.1, v=> v===0?'centered':(v>0?'left ':'right ')+Math.abs(v).toFixed(1), 'breach_tp_side');
+        mkSlider('Distance', ()=>tpDist, v=>tpDist=v, 1.5, 10, 0.1, v=>v.toFixed(1)+'m', 'breach_tp_dist');
+        mkSlider('Height', ()=>tpHeight, v=>tpHeight=v, -2, 3, 0.1, v=> v===0?'level':(v>0?'+':'')+v.toFixed(1), 'breach_tp_height');
+        const tpHint=document.createElement('div'); tpHint.className='hint'; tpHint.style.cssText='font-size:10px;opacity:0.7;margin:2px 0 0;'; tpHint.textContent='Applies in third-person view (toggle Camera in the pause menu). Side pushes the character off-center; Distance moves the camera closer/farther.'; urlHost.appendChild(tpHint);
       }
       const pHint=document.createElement('div'); pHint.className='hint'; pHint.style.margin='3px 0 0'; pHint.textContent='Preview avatar is in front of you. Tap a state to test its clip; in-game it switches automatically with movement.';
       urlHost.appendChild(pHint);
