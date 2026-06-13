@@ -9143,9 +9143,12 @@ function tpCameraPushback(){
   const hits=_tpCaster.intersectObjects(colliders, false);
   if(hits.length) dist=Math.max(TP_MIN, hits[0].distance-0.35);   // don't clip through a wall behind us
   if(tpShoulder){
-    const rx = cy, rz = -sy;   // yaw-only view-right (stays level), slides the body off-center
-    camera.position.set(px - fx*dist + rx*tpShoulder, py - fy*dist, pz - fz*dist + rz*tpShoulder);
-    _tpLookAt.set(px + rx*tpShoulder, py, pz + rz*tpShoulder); camera.lookAt(_tpLookAt);   // re-aim so forward stays forward (crosshair still marks impact)
+    const rx = cy, rz = -sy;   // yaw-only view-right (stays level)
+    const camx = px - fx*dist + rx*tpShoulder, camy = py - fy*dist, camz = pz - fz*dist + rz*tpShoulder;
+    camera.position.set(camx, camy, camz);
+    // look PARALLEL to the aim axis (camera + forward), NOT at the pivot — converging on the pivot would tilt
+    // the camera and desync the crosshair, since shots read camera.getWorldDirection(). This keeps forward forward.
+    _tpLookAt.set(camx + fx, camy + fy, camz + fz); camera.lookAt(_tpLookAt);
   } else {
     camera.position.set(px - fx*dist, py - fy*dist, pz - fz*dist);   // centered: pivot stays on the crosshair
   }
@@ -10474,7 +10477,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 369 · 2026-06-12';
+const BUILD_VERSION = 'build 370 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
