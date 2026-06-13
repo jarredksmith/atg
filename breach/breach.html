@@ -6304,7 +6304,8 @@ const _gunClipNames = {};   // weapon key -> clip names discovered on its loaded
 function _resolveGunClip(gltf, clips, st){
   const want = clips && clips[st];
   if(want){ const c=gltf.animations.find(a=>(a.name||'')===want); if(c) return c; }
-  return gltf.animations.find(a=>_GUN_CLIP_RE[st].test(a.name||'')) || null;
+  const re = _GUN_CLIP_RE[st]; if(!re) return null;
+  return gltf.animations.find(a=>re.test(a.name||'')) || null;
 }
 function playGunStates(root, gltf, clips){
   if(!gltf || !gltf.animations || !gltf.animations.length) return null;
@@ -6355,11 +6356,12 @@ function playEnemyClip(root, gltf, clipName){
 // --- 4-state animation set (idle / walk / run / attack) ---------------------------------------------
 // All four actions play at weight 0 except the active one; setEnemyAnimState crossfades between them as
 // the enemy moves or attacks. Clips are auto-resolved by name, with per-state overrides in `clips`.
-const _STATE_RE = { idle:/idle|stand|breath/i, walk:/walk/i, run:/run|sprint|jog/i, attack:/attack|melee|punch|kick|bite|swipe|slash|shoot|fire|cast/i, jump:/jump|leap|hop|fall|air/i, die:/die|death|dead|killed|defeat/i };
+const _STATE_RE = { idle:/idle|stand|breath/i, walk:/walk/i, run:/run|sprint|jog/i, attack:/attack|melee|punch|kick|bite|swipe|slash|shoot|fire|cast/i, jump:/jump|leap|hop|fall|air/i, slide:/slide|slid|crouch|dash/i, die:/die|death|dead|killed|defeat/i };
 function _resolveStateClip(gltf, clips, state){
   const want = clips && clips[state];
   if(want){ const c = gltf.animations.find(a=>(a.name||'')===want); if(c) return c; }   // explicit override
-  return gltf.animations.find(a=>_STATE_RE[state].test(a.name||'')) || null;             // auto by name
+  const re = _STATE_RE[state]; if(!re) return null;   // unknown state with no name-pattern: skip auto-match (don't crash)
+  return gltf.animations.find(a=>re.test(a.name||'')) || null;             // auto by name
 }
 function playEnemyStates(root, gltf, clips){
   if(!gltf || !gltf.animations || !gltf.animations.length) return null;
@@ -10493,7 +10495,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 373 · 2026-06-12';
+const BUILD_VERSION = 'build 374 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
