@@ -5887,10 +5887,37 @@ scene.fog = SCENE_FOG;
 
 const camera = new THREE.PerspectiveCamera(78, innerWidth/innerHeight, 0.1, 400);
 const IS_COARSE = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches);   // touch/mobile -> trade visual polish for frame rate
-const renderer = new THREE.WebGLRenderer({ antialias: true });   // smooth edges everywhere (modern mobile GPUs handle MSAA fine)
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });   // smooth edges + ask dual-GPU laptops for the discrete card
 renderer.setSize(innerWidth, innerHeight, false);
-renderer.setPixelRatio(Math.min(devicePixelRatio, IS_COARSE ? 2.0 : 1.5));   // render closer to native res on hi-DPI phones (1x looked low-res/jagged); still capped for FPS
+const _prBase = Math.min(devicePixelRatio, IS_COARSE ? 2.0 : 1.5);   // the ceiling: native-ish, capped for FPS
+let _prScale = 1;                       // adaptive multiplier on top of the base, 1.0 down to the floor
+const _PR_FLOOR = IS_COARSE ? 0.5 : 0.66;   // never blurrier than this
+const _PR_STEPS = IS_COARSE ? [1, 0.85, 0.72, 0.6, 0.5] : [1, 0.85, 0.72, 0.66];
+let _prStepI = 0;
+function _applyPixelRatio(){ renderer.setPixelRatio(_prBase * _prScale); }
+_applyPixelRatio();
+// Rolling frame-time monitor (always on, ~free). Targets ~50fps; if we miss it for a stretch, drop a
+// step; if we beat ~58fps comfortably for longer, climb back. Asymmetric: quick to relieve, slow to push.
+let _adaptAcc=0, _adaptN=0, _adaptNext=0, _adaptCool=0, _adaptGood=0;
+const ADAPT_ENABLED_DEFAULT = IS_COARSE;   // on for touch by default; desktop opts in
+let _adaptOn = ADAPT_ENABLED_DEFAULT;
+try{ const v=localStorage.getItem('breach_adaptres'); if(v==='on') _adaptOn=true; else if(v==='off') _adaptOn=false; }catch(e){}
+function _adaptResTick(frameMs, now){
+  if(!_adaptOn) return;
+  _adaptAcc += frameMs; _adaptN++;
+  if(now < _adaptNext) return;
+  _adaptNext = now + 500;                 // evaluate twice a second
+  if(_adaptN < 8){ _adaptAcc=0; _adaptN=0; return; }   // need a real sample
+  const avg = _adaptAcc/_adaptN; _adaptAcc=0; _adaptN=0;
+  if(now < _adaptCool) return;            // settling after a change
+  if(avg > 20 && _prStepI < _PR_STEPS.length-1){       // worse than ~50fps -> downshift now
+    _prStepI++; _prScale=_PR_STEPS[_prStepI]; _applyPixelRatio(); _adaptGood=0; _adaptCool=now+900;
+  } else if(avg < 17 && _prStepI > 0){                 // better than ~58fps -> bank headroom, then upshift
+    if(++_adaptGood >= 6){ _prStepI--; _prScale=_PR_STEPS[_prStepI]; _applyPixelRatio(); _adaptGood=0; _adaptCool=now+900; }
+  } else _adaptGood=0;
+}
 renderer.shadowMap.enabled = true;
+renderer.shadowMap.autoUpdate = false; renderer.shadowMap.needsUpdate = true;   // static by default; _dirtyShadows() requests a refresh
 renderer.shadowMap.type = IS_COARSE ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 
@@ -6385,9 +6412,9 @@ function playPropAnimationOnce(obj, clip){
   if(SFX && SFX.swap) SFX.swap();   // small mechanical click for feedback
 }
 // Tell peers to play prop #i's trigger animation (so a trigger one player fires is seen by everyone).
-function broadcastCine(){   // everyone watches the same story beat
-  if(NET.mode==='host'){ for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'cine'}); }catch(e){} } }
-  else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send({t:'cine'}); }catch(e){} }
+function broadcastCine(name){   // everyone watches the same story beat
+  if(NET.mode==='host'){ for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'cine', n:name||undefined}); }catch(e){} } }
+  else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send({t:'cine', n:name||undefined}); }catch(e){} }
 }
 function broadcastAnim(i, clip){
   if(NET.mode==='host'){ for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'anim', i, c:clip||undefined}); }catch(e){} } }
@@ -6429,9 +6456,10 @@ function fireSignals(o, when){
   for(const s of sigs){
     if(s.when !== when) continue;
     if(s.do==='win'){ if(typeof NET==='undefined' || NET.mode!=='client'){ try{ gameWon(); }catch(e){} } continue; }   // ends the level; needs no target. Solo/host only — a client's E can't end the match.
-    if(s.do==='cutscene'){   // plays the level's cinematic mid-game, for everyone. No target needed.
-      if(typeof cineHasData==='function' && cineHasData() && (typeof _cineActive==='undefined' || !_cineActive) && (typeof editorOpen==='undefined' || !editorOpen)){
-        try{ startCinematic({ shots: cineAllShots() }, false); if(typeof broadcastCine==='function') broadcastCine(); }catch(e){}
+    if(s.do==='cutscene'){   // plays a cutscene by name mid-game, for everyone. No target needed; blank name = cutscene #1.
+      const cc = (typeof cutsceneByName==='function') ? cutsceneByName(s.cs) : null;
+      if(cc && _ccHasData(cc) && (typeof _cineActive==='undefined' || !_cineActive) && (typeof editorOpen==='undefined' || !editorOpen)){
+        try{ startCinematic({ shots: cineShotsOf(cc), audio: cc.audio }, false); if(typeof broadcastCine==='function') broadcastCine(s.cs); }catch(e){}
       } continue; }
     if(!s.target) continue;
     for(let i=0;i<propModels.length;i++){
@@ -6959,6 +6987,29 @@ let _levelLoaderEl=null, _levelLoaderActive=false;   // declared early: loop() r
 const _glbQueue = []; let _glbActive = 0; const GLB_MAX_CONCURRENT = 3;
 function _glbPump(){ while(_glbActive < GLB_MAX_CONCURRENT && _glbQueue.length){ const task = _glbQueue.shift(); _glbActive++; task(); } }
 const _glbWaiters = {};   // url -> [{cb,errcb}] all riding a single in-flight load, so a model shared by several avatars (or a prewarm + the real build) is fetched once
+const _shrunkTex = (typeof WeakSet!=='undefined') ? new WeakSet() : null;   // each texture is shared via the cache; shrink once
+function _shrinkTexturesForMobile(root){
+  if(!IS_COARSE || !root || !root.traverse) return;
+  const MAXD = 1024;
+  root.traverse(o=>{
+    const mats = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : null; if(!mats) return;
+    for(const m of mats){ if(!m) continue;
+      for(const k of ['map','normalMap','roughnessMap','metalnessMap','aoMap','emissiveMap','alphaMap']){
+        const t=m[k]; if(!t || !t.image || (_shrunkTex && _shrunkTex.has(t))) continue;
+        const im=t.image, w=im.width||0, h=im.height||0;
+        if(!(w>MAXD || h>MAXD)) { if(_shrunkTex) _shrunkTex.add(t); continue; }
+        if(typeof im.getContext==='function' || (typeof HTMLImageElement!=='undefined' && im instanceof HTMLImageElement) || (typeof ImageBitmap!=='undefined' && im instanceof ImageBitmap)){
+          try{
+            const sc=MAXD/Math.max(w,h), cw=Math.max(1,Math.round(w*sc)), ch=Math.max(1,Math.round(h*sc));
+            const cv=document.createElement('canvas'); cv.width=cw; cv.height=ch;
+            cv.getContext('2d').drawImage(im, 0, 0, cw, ch);
+            t.image=cv; t.needsUpdate=true;
+            if(typeof im.close==='function') try{ im.close(); }catch(e){}   // free the ImageBitmap's backing store
+          }catch(e){}
+        }
+        if(_shrunkTex) _shrunkTex.add(t);
+      } } });
+}
 function loadGLTFCached(url, cb, errcb){
   if(gltfCache[url]){ cb(gltfCache[url]); return; }   // cached: synchronous, nothing to wait on
   if(_glbWaiters[url]){ _glbWaiters[url].push({cb:cb,errcb:errcb}); return; }   // a load for this url is already in flight; ride along instead of fetching again
@@ -6966,7 +7017,7 @@ function loadGLTFCached(url, cb, errcb){
   _glbPending++;
   let _fin=false; const _done=()=>{ if(_fin) return; _fin=true; _glbPending=Math.max(0,_glbPending-1); delete _glbWaiters[url]; };
   const _release=()=>{ _glbActive=Math.max(0,_glbActive-1); _glbPump(); };
-  const _cb=(g)=>{ _done(); _release(); for(const w of waiters){ try{ w.cb && w.cb(g); }catch(e){} } };
+  const _cb=(g)=>{ _done(); _release(); try{ if(g && g.scene) _shrinkTexturesForMobile(g.scene); }catch(e){} for(const w of waiters){ try{ w.cb && w.cb(g); }catch(e){} } };
   let _tries=0;
   const _ec=(e)=>{
     if(++_tries<=2){ _release(); setTimeout(()=>{ _glbQueue.push(start); _glbPump(); }, 500*_tries + Math.random()*400); return; }   // retry transient failures (429 rate-limit) with backoff
@@ -7138,7 +7189,7 @@ function removeProp(idx){
 function loadHostedProps(){
   const list = (savedLevel && Array.isArray(savedLevel.props)) ? savedLevel.props : SCENE_PROPS;
   propModels.length = list.length;   // reserve slots so async GLB loads can't clobber later push-spawned props
-  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));   // slot=i preserves order
+  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; if(s.n) x.cs=s.n; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));   // slot=i preserves order
 }
 loadHostedProps();
 
@@ -7482,11 +7533,31 @@ function applySkyHdri(url){
     _skyHdriUrl = '';
     return;
   }
+  const _clampHdrForMobile = (tex)=>{
+    try{
+      const im=tex.image; if(!im) return tex; const w=im.width||0, h=im.height||0; const MAXW=2048;   // 2048x1024 HDR ~ 17MB vs 67MB at 4K
+      if(w<=MAXW || typeof document==='undefined') return tex;
+      const sc=MAXW/w, cw=MAXW, ch=Math.max(1,Math.round(h*sc));
+      // RGBELoader gives Float/HalfFloat data, not a drawable image — resample via DataTexture nearest-step.
+      if(im.data && typeof im.data.length==='number'){
+        const src=im.data, comps=src.length/(w*h)|0; if(comps<3) return tex;
+        const Ctor=src.constructor; const dst=new Ctor(cw*ch*comps);
+        for(let y=0;y<ch;y++){ const sy=Math.min(h-1, (y/sc)|0); for(let x=0;x<cw;x++){ const sx=Math.min(w-1,(x/sc)|0);
+          const si=(sy*w+sx)*comps, di=(y*cw+x)*comps; for(let c=0;c<comps;c++) dst[di+c]=src[si+c]; } }
+        const dt=new THREE.DataTexture(dst, cw, ch, tex.format, tex.type);
+        dt.mapping=tex.mapping; dt.colorSpace=tex.colorSpace; if('encoding' in tex) dt.encoding=tex.encoding;
+        dt.needsUpdate=true; if(tex.dispose) try{ tex.dispose(); }catch(_){ }
+        return dt;
+      }
+    }catch(e){ /* clamp is best-effort; fall back to the full-res sky */ }
+    return tex;
+  };
   const onTex = (tex)=>{
     if(_skyHdriUrl !== url){ tex.dispose && tex.dispose(); return; }
     _skyPending = false;
     if(!_isHdr){ if('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace; else if('encoding' in tex) tex.encoding = 3001; }   // HDR is linear/float; only LDR panoramas get the sRGB tag
     if(_skyOrigTex && _skyOrigTex !== tex && _skyOrigTex.dispose){ try{ _skyOrigTex.dispose(); }catch(_){ } }
+    if(_isHdr && IS_COARSE) tex = _clampHdrForMobile(tex);   // 4K float panoramas are a mobile memory killer
     _skyOrigTex = tex; _skyOrigKind = _isHdr ? 'hdr' : 'ldr';
     _applyOrientedSky(skyStatus);   // builds background + PMREM, applying any saved rotation
   };
@@ -8891,7 +8962,7 @@ function loadLevelFromNet(level){
   // rebuild from the host's data
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }catch(e){ console.warn('net prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('net prop '+i+' failed', e); } });
+    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; if(s.n) x.cs=s.n; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }catch(e){ console.warn('net prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('net prop '+i+' failed', e); } });
   }
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
@@ -9377,7 +9448,7 @@ function handleClientMsg(conn, msg){
   }
   else if(msg.t==='buyChest'){ const ci=chests.findIndex(c=>c.id===msg.id); if(ci>=0){ scene.remove(chests[ci].mesh); chests.splice(ci,1); } }   // a client bought a crate -> remove it for everyone
   else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o, msg.c); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'anim', i:msg.i, c:msg.c}); }catch(e){} } } }   // play + relay to other clients
-      else if(msg.t==='cine'){ if(!editorOpen && !_cineActive && cineHasData()) startCinematic({ shots: cineAllShots() }, false); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'cine'}); }catch(e){} } } }   // host plays it too, then relays
+      else if(msg.t==='cine'){ const cc=cutsceneByName(msg.n); if(cc && !editorOpen && !_cineActive && _ccHasData(cc)) startCinematic({ shots: cineShotsOf(cc), audio: cc.audio }, false); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'cine', n:msg.n}); }catch(e){} } } }   // host plays it too, then relays
   else if(msg.t==='xa'){ const o=propModels[msg.i]; if(o&&o.userData.xa) o.userData.xa.dest=msg.dest?1:0; for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'xa', i:msg.i, dest:msg.dest}); }catch(e){} } } }   // mechanism toggle + relay
       else if(msg.t==='unlock'){ const o=propModels[msg.i]; if(o) o.userData.unlocked=true; for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'unlock', i:msg.i}); }catch(e){} } } }   // a client used a key + relay
   else if(msg.t==='pAdd'){ if(netApplyAddProp(msg.d)) relayProp({t:'pAdd', d:msg.d}, id); }       // a client added a prop -> mirror + relay
@@ -9420,7 +9491,7 @@ function handleHostMsg(msg){
   else if(msg.t==='chat'){ addChatLine(msg.name||'?', (''+(msg.text||'')).slice(0,200)); }   // chat from the host or relayed from another player
   else if(msg.t==='duelOver'){ showDuelResult(msg.w, msg.wt); }
   else if(msg.t==='anim'){ const o=propModels[msg.i]; if(o) playPropAnimationOnce(o, msg.c); }   // a trigger animation fired somewhere
-      else if(msg.t==='cine'){ if(!editorOpen && !_cineActive && cineHasData()) startCinematic({ shots: cineAllShots() }, false); }   // a story beat fired somewhere
+      else if(msg.t==='cine'){ const cc=cutsceneByName(msg.n); if(cc && !editorOpen && !_cineActive && _ccHasData(cc)) startCinematic({ shots: cineShotsOf(cc), audio: cc.audio }, false); }   // a story beat fired somewhere
   else if(msg.t==='xa'){ const o=propModels[msg.i]; if(o&&o.userData.xa) o.userData.xa.dest=msg.dest?1:0; }   // a mechanism toggled somewhere
       else if(msg.t==='unlock'){ const o=propModels[msg.i]; if(o) o.userData.unlocked=true; }   // someone used a key on this prop
   else if(msg.t==='pAdd'){ netApplyAddProp(msg.d); }    // host/other player added a prop
@@ -10376,7 +10447,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 355 · 2026-06-12';
+const BUILD_VERSION = 'build 360 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12238,16 +12309,28 @@ function updatePerfHud(){
 // start ('spawn') or its travel direction ('path'), letterboxed with the HUD hidden. Any input skips it.
 // Disabled / no path => deploy behaves exactly as before. Editor 'Preview' reuses the same engine.
 let cineCfg = { on:false, path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn', audio:'', shots2:[] };
+function _resShot(s){ return { path:Array.isArray(s.path)?s.path.map(q=> q.length>=6 ? [+q[0]||0,+q[1]||0,+q[2]||0,+q[3]||0,+q[4]||0,+q[5]||0] : [+q[0]||0,+q[1]||0,+q[2]||0]):[], lensFrom:+s.lensFrom||35, lensTo:+s.lensTo||+s.lensFrom||35, focusOn:!!s.focusOn, focusFrom:+s.focusFrom||8, focusTo:+s.focusTo||+s.focusFrom||8, dur:+s.dur||6, look:(s.look==='path')?'path':'spawn' }; }
 function _applyCine(lc){
   if(lc){ cineCfg.on=!!lc.on; cineCfg.path=Array.isArray(lc.path)?lc.path.map(q=> q.length>=6 ? [+q[0]||0,+q[1]||0,+q[2]||0,+q[3]||0,+q[4]||0,+q[5]||0] : [+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lensFrom=+lc.lensFrom||+lc.lens||35; cineCfg.lensTo=+lc.lensTo||+lc.lens||cineCfg.lensFrom; cineCfg.focusOn=!!lc.focusOn; cineCfg.focusFrom=+lc.focusFrom||8; cineCfg.focusTo=+lc.focusTo||cineCfg.focusFrom; cineCfg.dur=+lc.dur||6; cineCfg.look=(lc.look==='path')?'path':'spawn'; cineCfg.audio=(typeof lc.audio==='string')?lc.audio:'';
-    cineCfg.shots2 = Array.isArray(lc.shots2) ? lc.shots2.map(s=>({ path:Array.isArray(s.path)?s.path.map(q=> q.length>=6 ? [+q[0]||0,+q[1]||0,+q[2]||0,+q[3]||0,+q[4]||0,+q[5]||0] : [+q[0]||0,+q[1]||0,+q[2]||0]):[], lensFrom:+s.lensFrom||35, lensTo:+s.lensTo||+s.lensFrom||35, focusOn:!!s.focusOn, focusFrom:+s.focusFrom||8, focusTo:+s.focusTo||+s.focusFrom||8, dur:+s.dur||6, look:(s.look==='path')?'path':'spawn' })) : []; }
-  else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; cineCfg.audio=''; cineCfg.shots2=[]; }
+    cineCfg.shots2 = Array.isArray(lc.shots2) ? lc.shots2.map(_resShot) : [];
+    cineCfg.name = (typeof lc.name==='string' && lc.name) ? lc.name : 'Intro';
+    cineCfg.others = Array.isArray(lc.others) ? lc.others.map(o=>{ const c=_resShot(o); c.name=(typeof o.name==='string'&&o.name)?o.name:'Cutscene'; c.audio=(typeof o.audio==='string')?o.audio:''; c.shots2=Array.isArray(o.shots2)?o.shots2.map(_resShot):[]; return c; }) : []; }
+  else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; cineCfg.audio=''; cineCfg.shots2=[]; cineCfg.name='Intro'; cineCfg.others=[]; }
 }
 _applyCine(savedLevel && savedLevel.cine);   // restore a saved cinematic on page reload (boot path doesn't go through restoreLevel)
 // Multi-shot cutscenes (build 350): cineCfg's flat fields ARE shot 1; extra shots live in cineCfg.shots2.
 // Shots play back to back with hard cuts; one audio track spans the whole sequence.
 let _cineShotSel = 0;   // editor: which shot the cinematic controls are bound to
-function cineAllShots(){ if(!Array.isArray(cineCfg.shots2)) cineCfg.shots2=[]; return [cineCfg, ...cineCfg.shots2]; }
+// Named cutscenes (build 356): cineCfg IS cutscene #1 (default name 'Intro'; only it can play on deploy).
+// Extras live in cineCfg.others, each with its own shots and audio, playable by name from signals.
+let _cineCSel = 0;       // editor: which cutscene the panel is bound to
+function allCutscenes(){ if(!Array.isArray(cineCfg.others)) cineCfg.others=[]; return [cineCfg, ...cineCfg.others]; }
+function _curCutscene(){ const a=allCutscenes(); if(_cineCSel>=a.length) _cineCSel=a.length-1; return a[_cineCSel]; }
+function cutsceneByName(n){ const a=allCutscenes(); if(!n) return a[0]; for(const c of a){ if((c===cineCfg ? (c.name||'Intro') : c.name)===n) return c; } return null; }
+function cineShotsOf(cc){ if(!Array.isArray(cc.shots2)) cc.shots2=[]; return [cc, ...cc.shots2]; }
+function _ccHasData(cc){ return !!(cc && cineShotsOf(cc).some(s=>s.path && s.path.length>=1)); }
+function _newCutscene(){ const n=allCutscenes().length+1; return { name:'Cutscene '+n, path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn', audio:'', shots2:[] }; }
+function cineAllShots(){ return cineShotsOf(_curCutscene()); }   // shots of the EDITOR-selected cutscene
 function _newCineShot(){ return { path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn' }; }
 let _cineActive=false, _cineT=0, _cineData=null, _cineReturn=null, _cineEditorPreview=false, _cinePreviewGroup=null, _cineIntroPending=false, _cineShots=null, _cineShotIdx=0;   // intro deferred until the level loader reveals
 let _interActive=false, _interTimer=null, _interKeyGo=null;   // campaign transition card (declared here so the render loop's freeze-check precedes it without a TDZ)
@@ -12302,16 +12385,16 @@ function _cineShowBars(show){
   else { el._top.style.height='0'; el._bot.style.height='0'; el.style.opacity='0'; }
 }
 function lensToFov(mm){ const f=Math.max(8, +mm||35), sensorH=24; return 2*Math.atan((sensorH/2)/f)*180/Math.PI; }   // vertical FOV, full-frame sensor
-function cineHasData(){ return !!(cineCfg && cineAllShots().some(s=>s.path && s.path.length>=1)); }
+function cineHasData(){ return _ccHasData(_curCutscene()); }
 // A one-shot cutscene track: decoded like custom music, but routed straight to the master bus so it's
 // independent of the world music/SFX volumes (master volume + mute still apply). Starts with the shot,
 // stops when the shot ends or is skipped. Async-loaded; a token guards against a stale play if the shot
 // ends before the file decodes.
-let _cineAudioSrc=null, _cineAudioGain=null, _cineAudioTok=0;
+let _cineAudioSrc=null, _cineAudioGain=null, _cineAudioTok=0, _cineAudioUrl='';
 function _stopCineAudio(){ _cineAudioTok++; if(_cineAudioSrc){ try{ _cineAudioSrc.stop(); }catch(e){} _cineAudioSrc=null; } if(_cineAudioGain){ try{ _cineAudioGain.disconnect(); }catch(e){} _cineAudioGain=null; } }
 function _startCineAudio(){
   _stopCineAudio();
-  const url=cineCfg.audio; if(!url) return;
+  const url=(typeof _cineAudioUrl==='string' && _cineAudioUrl!=='') ? _cineAudioUrl : cineCfg.audio; if(!url) return;
   if(typeof initAudio==='function') initAudio();
   if(!actx || !masterBus) return;
   const tok=++_cineAudioTok;
@@ -12341,6 +12424,7 @@ function startCinematic(data, editorPreview){
   _cineShots = raw.filter(s=>s && s.path && s.path.length).map(_normCineShot);
   if(!_cineShots.length) return false;
   _cineShotIdx = 0; _cineData = _cineShots[0];
+  _cineAudioUrl = (typeof data.audio==='string') ? data.audio : cineCfg.audio;   // each cutscene carries its own track
   _cineActive=true; _cineT=0; _cineEditorPreview=!!editorPreview;
   _cineReturn={ x:camera.position.x, y:camera.position.y, z:camera.position.z, q:camera.quaternion.clone(), fov:camera.fov, dofEn:dofEnabled, dofF:dofFocus };
   if(_cineData.focusOn && !IS_COARSE) dofEnabled=true;   // rack focus needs DoF (skipped on mobile where DoF is off)
@@ -12405,7 +12489,7 @@ function _startIntroWhenSettled(){
   requestAnimationFrame(tick);
 }
 function maybeStartIntroCine(){ if(typeof editorOpen!=='undefined' && editorOpen) return;   // entering/being in the editor is authoring, not a deploy
-  if(cineCfg.on && cineHasData()) startCinematic({ shots: cineAllShots() }, false); }
+  if(cineCfg.on && _ccHasData(cineCfg)) startCinematic({ shots: cineShotsOf(cineCfg), audio: cineCfg.audio }, false); }   // the deploy intro is always cutscene #1
 function _dashPts(v, dash, gap){
   const out=[], step=dash+gap;
   for(let i=0;i<v.length-1;i++){ const a=v[i], b=v[i+1], len=a.distanceTo(b); if(len<1e-4) continue;
@@ -12451,11 +12535,26 @@ function refreshCinePreview(){
   }catch(e){ /* path preview is cosmetic; never let it break the editor */ }
 }
 addEventListener('pointerdown', ()=>{ if(_cineActive) endCinematic(); });
+let _shadowDirtyFrames = 2;
+let _adaptLast = 0;
+function _dirtyShadows(n){ _shadowDirtyFrames = Math.max(_shadowDirtyFrames, n||2); }   // call whenever something the sun casts moves/spawns/breaks
+let _tabHidden = false;
+addEventListener('visibilitychange', ()=>{
+  _tabHidden = (document.visibilityState === 'hidden');
+  if(_tabHidden){ try{ if(typeof _suspendAudioForHide==='function') _suspendAudioForHide(); }catch(e){} }
+  else { try{ clock.getDelta(); }catch(e){} _dirtyShadows(2); _adaptLast=0; _adaptNext=0; }   // returning: drop the huge dt (don't let it trip the scaler) + refresh shadows
+});
 function loop(){
   requestAnimationFrame(loop);
+  if(_tabHidden) return;   // backgrounded: stop rendering AND stepping physics — a hidden tab simulating is what gets the page killed on mobile
+  if(_shadowDirtyFrames>0){ renderer.shadowMap.needsUpdate = true; _shadowDirtyFrames--; }
+  else renderer.shadowMap.needsUpdate = false;
   const rawDt = Math.min(clock.getDelta(), 0.05);
   let dt = rawDt;
+  { const _anow=_pnow(); if(_adaptLast) _adaptResTick(_anow-_adaptLast, _anow); _adaptLast=_anow; }   // adaptive resolution: its own always-on timer
   updatePerfHud();   // measure real frame time every frame (before any early-out)
+  if(editorOpen || _cineActive) _dirtyShadows(1);   // authoring + camera moves: keep shadows current
+  else { for(const o of propModels){ const a=o&&o.userData&&o.userData.xa; if(a&&a.on&&a.ph>0&&a.ph<1){ _dirtyShadows(1); break; } } }   // a platform/door mid-travel
   if(typeof updateAudioZones==='function') updateAudioZones();   // ambient audio zones: proximity-based volume (silent unless in live play)
   if(_pathPreviewGroup && !editorOpen){ scene.remove(_pathPreviewGroup); try{ _pathPreviewGroup.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); }catch(e){} _pathPreviewGroup=null; }   // editor waypoint markers never linger into play
   if(_cinePreviewGroup && !editorOpen){ scene.remove(_cinePreviewGroup); try{ _cinePreviewGroup.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); }catch(e){} _cinePreviewGroup=null; }   // cine path preview is editor-only
@@ -12464,7 +12563,7 @@ function loop(){
     if(v!==_pbShow){ _pbShow=v; const pb=document.getElementById('pauseBtn'); if(pb) pb.style.display = v?'flex':'none'; } }
   if(hitStop > 0){ hitStop -= rawDt; dt = rawDt * 0.12; }   // impact freeze: slow the sim briefly (real-time countdown)
   if(_levelLoaderActive){ pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }   // hold the world frozen behind the level loading screen until assets finish loading — checked BEFORE the cutscene so the intro cinematic can't advance while loading
-  if(_cineActive){ updateCinematic(rawDt); renderScene(scene,camera); return; }   // intro/preview flythrough owns the camera; freeze the sim
+  if(_cineActive){ updateCinematic(rawDt); if(mixers.length){ for(const m of mixers) m.update(rawDt); } renderScene(scene,camera); return; }   // keep prop/GLB animations alive on camera (raw time — no hitstop during a cutscene)   // intro/preview flythrough owns the camera; freeze the sim
   if(_interActive){ pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }   // campaign transition card owns the screen; hold the won level frozen behind it
   if(!gameOn) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }
   if((shopOpen || choosingUpgrade || (paused && NET.mode==='off')) && !(duelDead && pvpMode())) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }  // freeze world while shopping / picking an upgrade / paused (solo) — but never while waiting to respawn
@@ -13518,7 +13617,7 @@ function propEntry(o){
   const m=propMaterialDesc(o); if(m) e.mat=m;
   if(o.userData.lockId){ e.lk=o.userData.lockId; if(o.userData.lockConsume) e.lkc=1; }
   if(o.userData.tag) e.tg=o.userData.tag;
-  if(o.userData.signals && o.userData.signals.length) e.sg=o.userData.signals.map(s=>{ const x={ w:s.when, d:s.do, t:s.target }; if(s.clip) x.c=s.clip; return x; });
+  if(o.userData.signals && o.userData.signals.length) e.sg=o.userData.signals.map(s=>{ const x={ w:s.when, d:s.do, t:s.target }; if(s.clip) x.c=s.clip; if(s.cs) x.n=s.cs; return x; });
   if(o.userData.sigNeed>1) e.snd=o.userData.sigNeed;
   if(o.userData.attribution) e.att=o.userData.attribution;
   if(o.userData.nid) e.nid=o.userData.nid;
@@ -13560,7 +13659,7 @@ function serializeLevel(){
     extract: extractSpot ? { x: +extractSpot.x.toFixed(3), z: +extractSpot.z.toFixed(3) } : null,
     grenade: { model: GRENADE.model, scale: GRENADE.scale, radius: GRENADE.radius, damage: GRENADE.damage, fuse: GRENADE.fuse, throwForce: GRENADE.throwForce },
     audio:   { musicUrl: (audioSettings.musicUrl||''), sounds: _sanitizeSounds(audioSettings.sounds) },   // music track + custom SFX travel with the level (volumes/mute stay per-device)
-    cine:    { on: cineCfg.on, path: cineCfg.path.map(q=>q.slice()), lensFrom: cineCfg.lensFrom, lensTo: cineCfg.lensTo, focusOn: cineCfg.focusOn, focusFrom: cineCfg.focusFrom, focusTo: cineCfg.focusTo, dur: cineCfg.dur, look: cineCfg.look, audio: cineCfg.audio||'' , shots2: (cineCfg.shots2||[]).map(s=>({ path:(s.path||[]).map(q=>q.slice()), lensFrom:s.lensFrom, lensTo:s.lensTo, focusOn:s.focusOn, focusFrom:s.focusFrom, focusTo:s.focusTo, dur:s.dur, look:s.look })) },
+    cine:    { on: cineCfg.on, path: cineCfg.path.map(q=>q.slice()), lensFrom: cineCfg.lensFrom, lensTo: cineCfg.lensTo, focusOn: cineCfg.focusOn, focusFrom: cineCfg.focusFrom, focusTo: cineCfg.focusTo, dur: cineCfg.dur, look: cineCfg.look, audio: cineCfg.audio||'' , shots2: (cineCfg.shots2||[]).map(s=>({ path:(s.path||[]).map(q=>q.slice()), lensFrom:s.lensFrom, lensTo:s.lensTo, focusOn:s.focusOn, focusFrom:s.focusFrom, focusTo:s.focusTo, dur:s.dur, look:s.look })), name: cineCfg.name||'Intro', others: (cineCfg.others||[]).map(o=>({ name:o.name, audio:o.audio||'', path:(o.path||[]).map(q=>q.slice()), lensFrom:o.lensFrom, lensTo:o.lensTo, focusOn:o.focusOn, focusFrom:o.focusFrom, focusTo:o.focusTo, dur:o.dur, look:o.look, shots2:(o.shots2||[]).map(s=>({ path:(s.path||[]).map(q=>q.slice()), lensFrom:s.lensFrom, lensTo:s.lensTo, focusOn:s.focusOn, focusFrom:s.focusFrom, focusTo:s.focusTo, dur:s.dur, look:s.look })) })) },
   };
 }
 function saveLevel(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(serializeLevel())); return true; } catch(e){ return false; } }
@@ -13783,7 +13882,7 @@ function restoreLevel(level){
   propModels.length = 0;
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }catch(e){ console.warn('prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('prop '+i+' failed to load', e); } });
+    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; if(s.n) x.cs=s.n; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }catch(e){ console.warn('prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('prop '+i+' failed to load', e); } });
   }
   // lights
   for(let i=lightModels.length-1;i>=0;i--) removeLight(i);
@@ -14334,14 +14433,21 @@ function levelIssues(){
     for(const k of keys) if(!locks.has(k)) issues.push('A '+keyDisplayName(k)+' pad is placed, but nothing is locked with it.');
     if(!pickupsOn && pickupSpots.length) issues.push('Pickups are turned off, but '+pickupSpots.length+' pickup spot'+(pickupSpots.length>1?'s are':' is')+' placed.');
     audioZones.forEach((z,i)=>{ if(!(z.url||'').trim()) issues.push('Audio zone '+(i+1)+' has no sound URL.'); });
-    if(cineCfg && cineCfg.on){ const _sh=[cineCfg, ...((cineCfg.shots2&&Array.isArray(cineCfg.shots2))?cineCfg.shots2:[])];
-      _sh.forEach((s,i)=>{ if(!(s.path && s.path.length>=2)) issues.push('Cinematic shot '+(i+1)+' has fewer than 2 camera path points.'); }); }
+    { const _ccs=[cineCfg, ...((cineCfg&&Array.isArray(cineCfg.others))?cineCfg.others:[])];
+      _ccs.forEach((cc,ci)=>{ if(!cc) return; const used = (ci===0) ? !!cc.on : true;   // #1 matters when it plays on deploy; extras exist to be played
+        if(!used) return; if(!(cc.path && cc.path.length)) { if(ci>0) issues.push("Cutscene '"+(cc.name||('#'+(ci+1)))+"' has no camera path yet."); return; }
+        const _sh=[cc, ...((Array.isArray(cc.shots2))?cc.shots2:[])];
+        _sh.forEach((s,i)=>{ if(!(s.path && s.path.length>=2)) issues.push((ci===0?'Cinematic':"Cutscene '"+(cc.name||('#'+(ci+1)))+"'")+' shot '+(i+1)+' has fewer than 2 camera path points.'); }); }); }
     const tags=new Set(); for(const o of propModels){ if(o && o.userData && o.userData.tag) tags.add(o.userData.tag); }
     for(const o of propModels){ if(!o || !o.userData || !o.userData.signals) continue;
       for(const s of o.userData.signals){
         if(s.target && !tags.has(s.target)) issues.push("A signal targets tag '"+s.target+"', but no prop carries that tag.");
         if(!s.target && s.do!=='win' && s.do!=='cutscene') issues.push('A signal has no target tag (only Win level and Play cutscene work without one).');
-        if(s.do==='cutscene'){ const _ok=[cineCfg, ...((cineCfg&&Array.isArray(cineCfg.shots2))?cineCfg.shots2:[])].some(x=>x && x.path && x.path.length>=2); if(!_ok) issues.push('A signal plays the cutscene, but no cinematic shot has 2+ path points \u2014 it will play nothing.'); } } }
+        if(s.do==='cutscene'){
+          const _all=[cineCfg, ...((cineCfg&&Array.isArray(cineCfg.others))?cineCfg.others:[])];
+          const _cc = !s.cs ? _all[0] : _all.find(c=>c && ((c===cineCfg?(c.name||'Intro'):c.name)===s.cs));
+          if(!_cc) issues.push("A signal plays cutscene '"+s.cs+"', but no cutscene has that name.");
+          else { const _ok=[_cc, ...((Array.isArray(_cc.shots2))?_cc.shots2:[])].some(x=>x && x.path && x.path.length>=2); if(!_ok) issues.push("A signal plays cutscene '"+(s.cs||_cc.name||'#1')+"', but none of its shots has 2+ path points \u2014 it will play nothing."); } } } }
     for(const o of propModels){ const a=o && o.userData && o.userData.xa; if(!a || !a.on || a.trig!=='signal') continue;
       const tg=o.userData.tag; let wired=false;
       if(tg){ for(const p of propModels){ const ss=p && p.userData && p.userData.signals; if(!ss) continue;
@@ -14501,7 +14607,22 @@ function renderEditorFields(){
       { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 6px;cursor:pointer;';
         const c=document.createElement('input'); c.type='checkbox'; c.checked=!!cineCfg.on; c.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
         c.onchange=()=>{ pushUndoSnapshot(); cineCfg.on=c.checked; };
-        const sp=document.createElement('span'); sp.innerHTML='<b>Play intro flythrough on deploy</b>'; r.appendChild(c); r.appendChild(sp); b.appendChild(r); }
+        const sp=document.createElement('span'); sp.innerHTML='<b>Play intro flythrough on deploy</b>'; r.appendChild(c); r.appendChild(sp); if(_cineCSel===0) b.appendChild(r); }
+      // ---- cutscene selector: #1 is the deploy intro; extras are signal-only, played by name ----
+      { const cr=document.createElement('div'); cr.style.cssText='display:flex;gap:5px;align-items:center;margin:0 0 5px;font-size:11px;color:#9fe6cf;';
+        const mkC=(txt,fn,dis)=>{ const e=document.createElement('button'); e.textContent=txt; e.style.cssText='padding:2px 8px;font-size:11px;'; e.disabled=!!dis; e.onclick=fn; return e; };
+        const NC=allCutscenes().length;
+        cr.appendChild(mkC('\u25c2', ()=>{ _cineCSel=Math.max(0,_cineCSel-1); _cineShotSel=0; refreshCinePreview(); renderEditorFields(); }, _cineCSel===0));
+        const nameIn=document.createElement('input'); nameIn.type='text'; nameIn.value=(_cineCSel===0 ? (cineCfg.name||'Intro') : _curCutscene().name||'');
+        nameIn.title='Cutscene name \u2014 signals play it by this name'; nameIn.style.cssText='flex:1;min-width:60px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 6px;font-size:11px;';
+        nameIn.onchange=()=>{ pushUndoSnapshot(); const v=nameIn.value.trim()||(_cineCSel===0?'Intro':'Cutscene'); _curCutscene().name=v; nameIn.value=v; };
+        cr.appendChild(nameIn);
+        const cl=document.createElement('span'); cl.textContent=(_cineCSel+1)+'/'+NC; cl.style.cssText='font-size:10px;opacity:0.75;'; cr.appendChild(cl);
+        cr.appendChild(mkC('\u25b8', ()=>{ _cineCSel=Math.min(allCutscenes().length-1,_cineCSel+1); _cineShotSel=0; refreshCinePreview(); renderEditorFields(); }, _cineCSel>=NC-1));
+        cr.appendChild(mkC('+', ()=>{ pushUndoSnapshot(); allCutscenes(); cineCfg.others.push(_newCutscene()); _cineCSel=allCutscenes().length-1; _cineShotSel=0; refreshCinePreview(); renderEditorFields(); }));
+        cr.appendChild(mkC('\u2715', ()=>{ if(_cineCSel===0) return; pushUndoSnapshot(); cineCfg.others.splice(_cineCSel-1,1); _cineCSel=Math.min(_cineCSel, allCutscenes().length-1); _cineShotSel=0; refreshCinePreview(); renderEditorFields(); }, _cineCSel===0));
+        b.appendChild(cr); }
+      const CC = _curCutscene();   // shot list, audio, and every control below belong to this cutscene
       // ---- shot selector: the controls below edit ONE shot; shots play back to back with hard cuts ----
       if(_cineShotSel >= cineAllShots().length) _cineShotSel = cineAllShots().length-1;
       { const sr=document.createElement('div'); sr.style.cssText='display:flex;gap:5px;align-items:center;margin:0 0 6px;font-size:11px;color:#9fe6cf;';
@@ -14510,10 +14631,10 @@ function renderEditorFields(){
         sr.appendChild(mkB('\u25c2', ()=>{ _cineShotSel=Math.max(0,_cineShotSel-1); refreshCinePreview(); renderEditorFields(); }, _cineShotSel===0));
         const lbl=document.createElement('span'); lbl.innerHTML='<b>Shot '+(_cineShotSel+1)+' / '+N+'</b>'; lbl.style.cssText='min-width:74px;text-align:center;'; sr.appendChild(lbl);
         sr.appendChild(mkB('\u25b8', ()=>{ _cineShotSel=Math.min(cineAllShots().length-1,_cineShotSel+1); refreshCinePreview(); renderEditorFields(); }, _cineShotSel>=N-1));
-        sr.appendChild(mkB('+ Add shot', ()=>{ pushUndoSnapshot(); cineAllShots(); cineCfg.shots2.push(_newCineShot()); _cineShotSel=cineAllShots().length-1; refreshCinePreview(); renderEditorFields(); }));
+        sr.appendChild(mkB('+ Add shot', ()=>{ pushUndoSnapshot(); cineAllShots(); CC.shots2.push(_newCineShot()); _cineShotSel=cineAllShots().length-1; refreshCinePreview(); renderEditorFields(); }));
         sr.appendChild(mkB('\u2715', ()=>{ if(cineAllShots().length<=1) return; pushUndoSnapshot();
-          if(_cineShotSel===0){ const nx=cineCfg.shots2.shift(); cineCfg.path=nx.path; cineCfg.lensFrom=nx.lensFrom; cineCfg.lensTo=nx.lensTo; cineCfg.focusOn=nx.focusOn; cineCfg.focusFrom=nx.focusFrom; cineCfg.focusTo=nx.focusTo; cineCfg.dur=nx.dur; cineCfg.look=nx.look; }
-          else cineCfg.shots2.splice(_cineShotSel-1,1);
+          if(_cineShotSel===0){ const nx=CC.shots2.shift(); CC.path=nx.path; CC.lensFrom=nx.lensFrom; CC.lensTo=nx.lensTo; CC.focusOn=nx.focusOn; CC.focusFrom=nx.focusFrom; CC.focusTo=nx.focusTo; CC.dur=nx.dur; CC.look=nx.look; }
+          else CC.shots2.splice(_cineShotSel-1,1);
           _cineShotSel=Math.min(_cineShotSel, cineAllShots().length-1); refreshCinePreview(); renderEditorFields(); }, N<=1));
         const tot=document.createElement('span'); tot.style.cssText='flex:1;text-align:right;font-size:10px;opacity:0.75;';
         tot.textContent='total '+cineAllShots().reduce((s,x)=>s+(+x.dur||0),0).toFixed(1)+'s'; sr.appendChild(tot);
@@ -14560,14 +14681,14 @@ function renderEditorFields(){
       { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent='Framing'; sp.style.minWidth='56px'; const sel=document.createElement('select'); sel.style.cssText='flex:1;font-size:11px;'; [['spawn','Aim at player start'],['path','Look along path']].forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(CS.look===o[0]) op.selected=true; sel.appendChild(op); }); sel.onchange=()=>{ CS.look=sel.value; }; r.appendChild(sp); r.appendChild(sel); b.appendChild(r); }
       { const r=document.createElement('label'); r.style.cssText='display:flex;flex-direction:column;gap:3px;font-size:11px;color:#9fe6cf;margin:6px 0 2px;';
         const sp=document.createElement('span'); sp.innerHTML='<b>Cutscene audio</b> (plays at the start, separate from world audio)';
-        const inp=document.createElement('input'); inp.type='text'; inp.value=cineCfg.audio||''; inp.placeholder='https://…/intro.mp3 or .ogg/.wav'; inp.style.cssText='width:100%;box-sizing:border-box;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:5px 7px;font-size:11px;';
-        inp.onchange=()=>{ pushUndoSnapshot(); cineCfg.audio=inp.value.trim(); };
+        const inp=document.createElement('input'); inp.type='text'; inp.value=CC.audio||''; inp.placeholder='https://…/intro.mp3 or .ogg/.wav'; inp.style.cssText='width:100%;box-sizing:border-box;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:5px 7px;font-size:11px;';
+        inp.onchange=()=>{ pushUndoSnapshot(); CC.audio=inp.value.trim(); };
         r.appendChild(sp); r.appendChild(inp); b.appendChild(r); }
       { const fsHold=document.createElement('div'); const fsBtn=document.createElement('button'); fsBtn.textContent='Search Freesound'; fsBtn.title='Find a free CC sound and use it as the cutscene track'; fsBtn.style.cssText='padding:2px 9px;font-size:11px;margin:1px 0 2px;'; let fsBox=null;
-        fsBtn.onclick=()=>{ if(fsBox){ fsBox.remove(); fsBox=null; fsBtn.textContent='Search Freesound'; return; } fsBox=renderFreesoundBrowser(fsHold, ()=>renderEditorFields(), { label:'Cutscene audio', set:v=>{ pushUndoSnapshot(); cineCfg.audio=(v||'').trim(); } }); fsHold.appendChild(fsBox); fsBtn.textContent='Hide Freesound'; };
+        fsBtn.onclick=()=>{ if(fsBox){ fsBox.remove(); fsBox=null; fsBtn.textContent='Search Freesound'; return; } fsBox=renderFreesoundBrowser(fsHold, ()=>renderEditorFields(), { label:'Cutscene audio', set:v=>{ pushUndoSnapshot(); CC.audio=(v||'').trim(); } }); fsHold.appendChild(fsBox); fsBtn.textContent='Hide Freesound'; };
         fsHold.appendChild(fsBtn); b.appendChild(fsHold); }
       hint(b,'A one-shot track (voiceover, music sting) that fires when the cutscene begins and stops when it ends or is skipped. The file must allow cross-origin loading (CORS), same as custom music.','0 0 4px');
-      { const prev=document.createElement('button'); prev.textContent='▶ Preview'; prev.style.cssText='width:100%;padding:6px 8px;font-size:12px;cursor:pointer;margin-top:4px;'; prev.disabled=!cineHasData(); prev.onclick=()=>{ startCinematic({ shots: cineAllShots() }, true); }; b.appendChild(prev); }
+      { const prev=document.createElement('button'); prev.textContent='▶ Preview'; prev.style.cssText='width:100%;padding:6px 8px;font-size:12px;cursor:pointer;margin-top:4px;'; prev.disabled=!cineHasData(); prev.onclick=()=>{ const _cc=_curCutscene(); startCinematic({ shots: cineShotsOf(_cc), audio: _cc.audio }, true); }; b.appendChild(prev); }
       if(typeof refreshCinePreview==='function') refreshCinePreview(); }
     { const b=subSec('Walls','walls',true);
       { const vr=document.createElement('label'); vr.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 6px;cursor:pointer;';
@@ -15128,6 +15249,13 @@ function renderEditorFields(){
           const del=document.createElement('button'); del.textContent='\u00d7'; del.style.cssText='padding:1px 7px;font-size:12px;';
           del.onclick=()=>{ pushUndoSnapshot(); sigs.splice(si,1); renderEditorFields(); };
           r.appendChild(ti); r.appendChild(del); sgBody.appendChild(r);
+          if(s.do==='cutscene'){   // which named cutscene; blank = cutscene #1 (the intro)
+            const nr2=document.createElement('div'); nr2.style.cssText='display:flex;gap:4px;align-items:center;margin:-1px 0 4px;padding-left:8px;';
+            const ni2=document.createElement('input'); ni2.type='text'; ni2.placeholder='cutscene name (blank = #1)'; ni2.value=s.cs||'';
+            ni2.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#9fe6cf;border-radius:4px;padding:2px 5px;font-size:10px;';
+            ni2.onchange=()=>{ pushUndoSnapshot(); const v=ni2.value.trim(); if(v) s.cs=v; else delete s.cs; };
+            nr2.appendChild(ni2); sgBody.appendChild(nr2);
+          }
           if(s.do==='anim'){   // optional: name one clip from the target's GLB; blank = play them all
             const cr2=document.createElement('div'); cr2.style.cssText='display:flex;gap:4px;align-items:center;margin:-1px 0 4px;padding-left:8px;';
             const ci=document.createElement('input'); ci.type='text'; ci.placeholder='clip name (blank = all clips)'; ci.value=s.clip||'';
