@@ -6284,17 +6284,32 @@ function playModelAnimations(root, gltf, mode){
   mode = (mode === 'trigger') ? 'trigger' : 'loop';
   const mixer = new THREE.AnimationMixer(root);
   const actions = [];
+  root.userData.animClipNames = (gltf.animations||[]).map(c=>c.name||'');   // names for the editor picker
+  const chosen = root.userData.animClip || '';   // '' = play all (legacy behavior); else only the named clip
   for(const clip of gltf.animations){
     const action = mixer.clipAction(clip);
+    action.userData = action.userData || {}; action.userData.clipName = clip.name||'';
     actions.push(action);
+    const usethis = !chosen || (clip.name === chosen);   // when a clip is chosen, only it plays
     if(mode === 'trigger'){ action.loop = THREE.LoopOnce; action.clampWhenFinished = true; /* not played yet */ }
-    else { action.loop = THREE.LoopRepeat; action.play(); }
+    else if(usethis){ action.loop = THREE.LoopRepeat; action.play(); }
   }
   mixers.push(mixer);
   root.userData.mixer = mixer;          // track for cleanup on delete/swap
   root.userData.animActions = actions;  // for trigger playback + live mode switching
   root.userData.animMode = mode;
   return mixer;
+}
+// Switch which clip an already-loaded LOOP prop plays, live (no reload). '' = all clips.
+function setPropAnimClip(obj, clipName){
+  if(!obj || !obj.userData.animActions) return;
+  obj.userData.animClip = clipName || '';
+  if((obj.userData.animMode||'loop') !== 'loop') return;   // trigger props play on E, not continuously
+  for(const a of obj.userData.animActions){
+    const nm = (a.userData && a.userData.clipName) || '';
+    if(!clipName || nm === clipName){ a.reset(); a.loop = THREE.LoopRepeat; a.enabled = true; a.setEffectiveWeight(1); a.play(); }
+    else { a.stop(); }
+  }
 }
 // --- animated gun viewmodels: idle loops; shoot/reload are one-shots triggered by gameplay -------------
 // Clips resolve by name (override per weapon via WEAPONS[k].clips). If a model has animations but none
@@ -6424,8 +6439,13 @@ function setPropAnimMode(obj, mode){
   mode = (mode === 'trigger') ? 'trigger' : 'loop';
   obj.userData.animMode = mode;
   const acts = obj.userData.animActions; if(!acts || !acts.length) return;
+  const chosen = obj.userData.animClip || '';
   for(const a of acts){
-    if(mode === 'loop'){ a.loop = THREE.LoopRepeat; a.clampWhenFinished = false; a.reset(); a.play(); }
+    const nm = (a.userData && a.userData.clipName) || '';
+    if(mode === 'loop'){
+      if(!chosen || nm === chosen){ a.loop = THREE.LoopRepeat; a.clampWhenFinished = false; a.reset(); a.play(); }   // only the chosen clip loops
+      else { a.stop(); }
+    }
     else { a.loop = THREE.LoopOnce; a.clampWhenFinished = true; a.stop(); }   // hold at start until activated
   }
 }
@@ -7152,7 +7172,7 @@ function _propFootR(o){
   try{ const b=new THREE.Box3().setFromObject(o); if(isFinite(b.min.x) && !b.isEmpty()) return 0.5*Math.hypot(b.max.x-b.min.x, b.max.z-b.min.z); }catch(e){}
   return 1.0;
 }
-function finalizeProp(obj, src, t, gltf, slot, animMode, mat, nid){
+function finalizeProp(obj, src, t, gltf, slot, animMode, mat, nid, animClip){
   obj.position.set(t[0], t[1], t[2]);   // provisional; the terrain lift is applied below once the footprint is known
   obj.rotation.set(t[3], t[4], t[5]);
   if(t.length >= 9) obj.scale.set(t[6], t[7], t[8]);   // non-uniform (e.g. cover crates)
@@ -7169,7 +7189,7 @@ function finalizeProp(obj, src, t, gltf, slot, animMode, mat, nid){
   colliders.push(obj);
   if(slot != null) propModels[slot] = obj;   // keep saved order even with async GLB loads
   else propModels.push(obj);
-  if(gltf) playModelAnimations(obj, gltf, obj.userData.animMode);
+  if(gltf){ obj.userData.animClip = animClip || ''; playModelAnimations(obj, gltf, obj.userData.animMode); }
   if(mat && isShapePrimitive(src)) applyStoredMaterial(obj, mat);   // color / texture / emissive
   return obj;
 }
@@ -7194,14 +7214,14 @@ const PLAYER_CAP_R = 0.45;   // capsule radius for KCC world collision (narrower
 let physAccum = 0;
 // Spawn one scene object from a descriptor; onReady(obj) fires once it's in the world.
 // mat (optional) = { col, tex, texRepeat:[u,v], emit:{c,i} } for primitive material settings.
-function spawnProp(src, t, onReady, slot, animMode, mat, onError, nid){
+function spawnProp(src, t, onReady, slot, animMode, mat, onError, nid, animClip){
   if(isPrimitive(src)){
-    const obj = finalizeProp(PRIMITIVE_BUILDERS[src](), src, t, null, slot, animMode, mat, nid);
+    const obj = finalizeProp(PRIMITIVE_BUILDERS[src](), src, t, null, slot, animMode, mat, nid, animClip);
     if(onReady) onReady(obj);
     return;
   }
   loadGLTFCached(src,
-    (gltf)=>{ const obj = finalizeProp(THREE.cloneSkinned(gltf.scene), src, t, gltf, slot, animMode, mat, nid); if(onReady) onReady(obj); },
+    (gltf)=>{ const obj = finalizeProp(THREE.cloneSkinned(gltf.scene), src, t, gltf, slot, animMode, mat, nid, animClip); if(onReady) onReady(obj); },
     (err)=>{ console.warn('Prop load failed for', src, '-', err && err.message); if(onError) onError(err); }
   );
 }
@@ -7217,7 +7237,7 @@ function removeProp(idx){
 function loadHostedProps(){
   const list = (savedLevel && Array.isArray(savedLevel.props)) ? savedLevel.props : SCENE_PROPS;
   propModels.length = list.length;   // reserve slots so async GLB loads can't clobber later push-spawned props
-  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; if(s.n) x.cs=s.n; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid));   // slot=i preserves order
+  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; if(s.n) x.cs=s.n; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid, p.animClip));   // slot=i preserves order
 }
 loadHostedProps();
 
@@ -9078,7 +9098,7 @@ function loadLevelFromNet(level){
   // rebuild from the host's data
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; if(s.n) x.cs=s.n; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }catch(e){ console.warn('net prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('net prop '+i+' failed', e); } });
+    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; if(s.n) x.cs=s.n; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }catch(e){ console.warn('net prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid, p.animClip); }catch(e){ console.warn('net prop '+i+' failed', e); } });
   }
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
@@ -10697,7 +10717,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 395 · 2026-06-12';
+const BUILD_VERSION = 'build 396 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13872,6 +13892,7 @@ function propMaterialDesc(o){
 function propEntry(o){
   const e={ src:o.userData.src||PROP_MODEL_URL, t:[ (o.userData.physHome?o.userData.physHome.x:o.position.x), (o.userData.physHome?o.userData.physHome.y:o.position.y), (o.userData.physHome?o.userData.physHome.z:o.position.z), o.rotation.x,o.rotation.y,o.rotation.z,o.scale.x,o.scale.y,o.scale.z] };
   if(o.userData.animMode==='trigger') e.anim='trigger';
+  if(o.userData.animClip) e.animClip = o.userData.animClip;
   if(o.userData.xa && o.userData.xa.on){ const a=o.userData.xa; e.xa={ mode:a.mode||'loop', trig:a.trig||'auto', mx:a.mx||0, my:a.my||0, mz:a.mz||0, rx:a.rx||0, ry:a.ry||0, rz:a.rz||0, dur:a.dur||2 }; if(a.path && a.path.length>=2) e.xa.path = a.path.map(q=>[+q[0],+q[1],+q[2]]); }
   if(o.userData.phys){ e.dyn=true; if(o.userData.mass!=null) e.mass=o.userData.mass;
     if(o.userData.noGrab) e.ng=true;
@@ -14151,7 +14172,7 @@ function restoreLevel(level){
   propModels.length = 0;
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; if(s.n) x.cs=s.n; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }catch(e){ console.warn('prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid); }catch(e){ console.warn('prop '+i+' failed to load', e); } });
+    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; if(s.n) x.cs=s.n; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }catch(e){ console.warn('prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid, p.animClip); }catch(e){ console.warn('prop '+i+' failed to load', e); } });
   }
   // lights
   for(let i=lightModels.length-1;i>=0;i--) removeLight(i);
@@ -15482,6 +15503,19 @@ function renderEditorFields(){
         pair('Selected prop (has animation):', sel.userData.animMode||'loop',
           ()=>{ setPropAnimMode(sel,'loop'); renderEditorFields(); },
           ()=>{ setPropAnimMode(sel,'trigger'); renderEditorFields(); });
+        // clip picker: list every animation the model ships with; choose one, or "all" for the legacy overlay
+        const names = sel.userData.animClipNames || [];
+        if(names.length){
+          const cr=document.createElement('div'); cr.style.cssText='display:flex;gap:6px;align-items:center;margin:6px 0 2px;font-size:11px;color:#9fe6cf;';
+          const cl=document.createElement('span'); cl.innerHTML='<b>Animation</b>'; cl.style.minWidth='56px';
+          const csel=document.createElement('select'); csel.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:11px;';
+          const optAll=document.createElement('option'); optAll.value=''; optAll.textContent='(all clips at once)'; csel.appendChild(optAll);
+          for(const nm of names){ if(!nm) continue; const o=document.createElement('option'); o.value=nm; o.textContent=nm; csel.appendChild(o); }
+          csel.value = sel.userData.animClip || '';
+          csel.onchange=()=>{ setPropAnimClip(sel, csel.value); if(sel.userData.animMode==='trigger') sel.userData.animClip=csel.value; };   // live for loop props; stored for trigger props
+          cr.appendChild(cl); cr.appendChild(csel); animHost.appendChild(cr);
+          const ch=document.createElement('div'); ch.className='hint'; ch.style.cssText='font-size:10px;opacity:0.7;margin:1px 0 0;'; ch.textContent=names.filter(Boolean).length+' animation(s) in this model. Pick one to play it on its own.'; animHost.appendChild(ch);
+        }
       }
       // ---- Lock: this prop's E-activation (triggered animation or mechanism) needs a key ----
       if(sel){
