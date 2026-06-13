@@ -7683,6 +7683,7 @@ let sliding=false, slideT=0, slideCD=0, _prevCrouchHeld=false; const slideDir=ne
 let _stepT=0;   // footstep cadence timer
 const CROUCH_DIP = 0.8;     // how far the camera lowers when fully crouched
 const keys = {};
+const GAME_KEYS = { Space:1, ShiftLeft:1, ShiftRight:1, ControlLeft:1, ControlRight:1, KeyW:1, KeyA:1, KeyS:1, KeyD:1, KeyC:1, KeyE:1, KeyF:1, KeyG:1, KeyR:1, KeyV:1, KeyQ:1, Digit1:1, Digit2:1, Digit3:1, Digit4:1, Digit5:1 };   // keys the game owns: preventDefault so the browser doesn't intercept them (esp. Space during Shift combos)
 // ---- Touch / mobile input ----
 let isTouch = (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches);   // primary input is a touchscreen
 // Control mode override: 'auto' trusts detection (+ touch promotion below); 'touch'/'desktop' force it.
@@ -7713,6 +7714,9 @@ addEventListener('keydown', e=>{
   if(typingInField(e)) return;
   if(_cineActive){ endCinematic(); return; }   // any key skips the intro flythrough
   keys[e.code]=true;
+  // Claim the keys the game drives so the browser never swallows them — Space in particular gets eaten
+  // (page scroll / button activation) during modifier combos like Shift+Space, which broke jump-while-running.
+  if(GAME_KEYS[e.code]){ e.preventDefault(); }
   if(e.code==='Tab'){ if(!e.repeat) openRadial(); e.preventDefault(); return; }   // radial deploy menu
   if(e.code==='KeyT' && NET.mode!=='off' && gameOn && !gameOver && !editorOpen && !shopOpen && !choosingUpgrade && !radialOpen){ openChat(); e.preventDefault(); return; }   // T: open multiplayer text chat
   // Crouch is Ctrl, so crouch+WASD lands on browser shortcuts: Ctrl+S (save page), Ctrl+D (bookmark),
@@ -10453,7 +10457,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 365 · 2026-06-12';
+const BUILD_VERSION = 'build 366 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
