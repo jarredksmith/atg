@@ -9158,19 +9158,21 @@ function _findHandBone(root){
   for(const test of tiers){ const hit=bones.find(test); if(hit) return hit; }
   return null;
 }
-function _applyGunGrip(gun){
+function _applyGunGrip(gun, weaponKey){
   if(!gun) return;
-  gun.position.set(tpGunX, tpGunY, tpGunZ);
-  gun.rotation.set(tpGunPitch, tpGunYaw, tpGunRoll);
-  gun.scale.setScalar(tpGunScale||1);
+  const gr = tpGunGrip(weaponKey);
+  gun.position.set(gr.x, gr.y, gr.z);
+  gun.rotation.set(gr.pitch, gr.yaw, gr.roll);
+  gun.scale.setScalar(gr.scale||1);
 }
 // place the gun on a hand bone: the grip offset becomes a SMALL local nudge in the hand's space, and we undo
 // the bone's world scale so the gun isn't distorted by the skeleton's scaling.
-function _applyGunGripToHand(gun, bone){
+function _applyGunGripToHand(gun, bone, weaponKey){
   if(!gun) return;
-  gun.position.set(tpGunX, tpGunY, tpGunZ);
-  gun.rotation.set(tpGunPitch, tpGunYaw, tpGunRoll);
-  let s = tpGunScale||1;
+  const gr = tpGunGrip(weaponKey);
+  gun.position.set(gr.x, gr.y, gr.z);
+  gun.rotation.set(gr.pitch, gr.yaw, gr.roll);
+  let s = gr.scale||1;
   bone.updateWorldMatrix(true,false);
   const bs=new THREE.Vector3(); bone.matrixWorld.decompose(new THREE.Vector3(), new THREE.Quaternion(), bs);
   const avg=(bs.x+bs.y+bs.z)/3; if(avg>1e-4) s/=avg;   // counter the bone's world scale so the gun keeps its size
@@ -9193,8 +9195,8 @@ function attachAvatarGun(g, weaponKey){
       const gun = THREE.cloneSkinned(gltf.scene);
       gun.traverse(o=>{ if(o.isMesh){ o.castShadow=true; o.raycast=()=>{}; } });   // gun never blocks shots/picks
       const hand = _findHandBone(g.userData.visual);
-      if(hand){ hand.add(gun); g.userData.gunBone=hand; _applyGunGripToHand(gun, hand); }   // follows the hand animation
-      else { g.add(gun); g.userData.gunBone=null; _applyGunGrip(gun); }                        // no usable bone -> fixed body grip
+      if(hand){ hand.add(gun); g.userData.gunBone=hand; _applyGunGripToHand(gun, hand, weaponKey); }   // follows the hand animation
+      else { g.add(gun); g.userData.gunBone=null; _applyGunGrip(gun, weaponKey); }                        // no usable bone -> fixed body grip
       g.userData.gun = gun;
     },
     (err)=>{ console.warn('TP gun model load failed:', err && err.message); }
@@ -9202,7 +9204,7 @@ function attachAvatarGun(g, weaponKey){
 }
 // Re-apply the grip offset live to every avatar currently holding a gun (used while tuning the sliders).
 function refreshAvatarGunGrips(){
-  const reapply=(grp)=>{ if(grp && grp.userData.gun){ if(grp.userData.gunBone) _applyGunGripToHand(grp.userData.gun, grp.userData.gunBone); else _applyGunGrip(grp.userData.gun); } };
+  const reapply=(grp)=>{ if(grp && grp.userData.gun){ const wk=grp.userData.gunKey; if(grp.userData.gunBone) _applyGunGripToHand(grp.userData.gun, grp.userData.gunBone, wk); else _applyGunGrip(grp.userData.gun, wk); } };
   if(typeof _ownAvatar!=='undefined') reapply(_ownAvatar);
   for(const id in NET.players){ const rp=NET.players[id]; if(rp) reapply(rp.mesh); }
   if(typeof previewAvatar!=='undefined') reapply(previewAvatar);
@@ -9289,10 +9291,19 @@ try{ const u=parseFloat(localStorage.getItem('breach_tp_muz_up')); if(!isNaN(u))
 try{ const fw=parseFloat(localStorage.getItem('breach_tp_muz_fwd')); if(!isNaN(fw)) tpMuzFwd=Math.max(-1,Math.min(3,fw)); }catch(e){}
 // Third-person GUN grip: where the held weapon model sits on the character (offset from the body origin) +
 // its orientation and scale. Tunable because models vary; one grip works for any body since we don't rely on bones.
-let tpGunX=0.28, tpGunY=1.15, tpGunZ=-0.42, tpGunYaw=0, tpGunPitch=0, tpGunRoll=0, tpGunScale=1;
-try{ const v=localStorage.getItem('breach_tp_gun'); if(v){ const o=JSON.parse(v);
-  if(o){ if(o.x!=null)tpGunX=+o.x; if(o.y!=null)tpGunY=+o.y; if(o.z!=null)tpGunZ=+o.z; if(o.yaw!=null)tpGunYaw=+o.yaw; if(o.pitch!=null)tpGunPitch=+o.pitch; if(o.roll!=null)tpGunRoll=+o.roll; if(o.scale!=null)tpGunScale=+o.scale; } } }catch(e){}
-function _saveTpGun(){ try{ localStorage.setItem('breach_tp_gun', JSON.stringify({x:tpGunX,y:tpGunY,z:tpGunZ,yaw:tpGunYaw,pitch:tpGunPitch,roll:tpGunRoll,scale:tpGunScale})); }catch(e){} }
+// Per-WEAPON third-person grip: each weapon model has its own size/origin, so each gets its own placement.
+// Map of weaponKey -> { x,y,z, yaw,pitch,roll, scale }. A default seeds any weapon not yet tuned.
+const TP_GUN_DEFAULT = { x:0.28, y:1.15, z:-0.42, yaw:0, pitch:0, roll:0, scale:1 };
+let tpGunGrips = {};
+try{ const v=localStorage.getItem('breach_tp_gun_grips'); if(v){ const o=JSON.parse(v); if(o && typeof o==='object') tpGunGrips=o; } }catch(e){}
+// migrate the old single global grip (breach_tp_gun) into the rifle slot the first time
+try{ if(!Object.keys(tpGunGrips).length){ const old=localStorage.getItem('breach_tp_gun'); if(old){ const o=JSON.parse(old); if(o){ tpGunGrips.rifle=Object.assign({}, TP_GUN_DEFAULT, o); } } } }catch(e){}
+function tpGunGrip(weaponKey){
+  const k = weaponKey || (typeof curWep!=='undefined'?curWep:'rifle');
+  if(!tpGunGrips[k]) tpGunGrips[k] = Object.assign({}, TP_GUN_DEFAULT);
+  return tpGunGrips[k];
+}
+function _saveTpGun(){ try{ localStorage.setItem('breach_tp_gun_grips', JSON.stringify(tpGunGrips)); }catch(e){} }
 let _ownAvatar=null, _ownAvatarKey='', _tpCaster=null, _ownPrevX=0, _ownPrevZ=0, _ownSpeed=0;
 const _tpBack=new THREE.Vector3(), _tpEye=new THREE.Vector3(), _tpLookAt=new THREE.Vector3();
 function ensureOwnAvatar(){
@@ -10686,7 +10697,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 394 · 2026-06-12';
+const BUILD_VERSION = 'build 395 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15868,7 +15879,17 @@ function renderEditorFields(){
         mkSlider('Up', ()=>tpMuzUp, v=>tpMuzUp=v, -2, 2, 0.05, v=> v===0?'level':(v>0?'+':'')+v.toFixed(2), 'breach_tp_muz_up');
         mkSlider('Forward', ()=>tpMuzFwd, v=>tpMuzFwd=v, -1, 3, 0.05, v=>v.toFixed(2), 'breach_tp_muz_fwd');
         const muzHint=document.createElement('div'); muzHint.className='hint'; muzHint.style.cssText='font-size:10px;opacity:0.7;margin:2px 0 0;'; muzHint.textContent='Where the bullet streak STARTS in third-person, so it lines up with the character\'s gun (the shot itself still goes through the crosshair).'; urlHost.appendChild(tpHint);
-        const gripHdr=document.createElement('div'); gripHdr.className='hint'; gripHdr.innerHTML='<b>Held gun grip (third-person)</b>'; gripHdr.style.margin='7px 0 2px'; urlHost.appendChild(gripHdr);
+        const gripHdr=document.createElement('div'); gripHdr.className='hint'; gripHdr.innerHTML='<b>Held gun grip (third-person)</b> &mdash; per weapon'; gripHdr.style.margin='7px 0 2px'; urlHost.appendChild(gripHdr);
+        // weapon picker: each weapon keeps its OWN grip. Clicking one rebinds the sliders to that weapon's grip
+        // (and equips it so the preview shows the right model).
+        const gwRow=document.createElement('div'); gwRow.className='row2'; gwRow.style.cssText='display:flex;flex-wrap:wrap;gap:4px;margin-bottom:5px;';
+        for(const wk of Object.keys(WEAPONS)){
+          const wb=document.createElement('button'); wb.textContent=WEAPONS[wk].name||wk; wb.style.cssText='flex:1 0 auto;font-size:10px;padding:3px 6px;';
+          if(wk===curWep){ wb.style.background='rgba(56,245,181,0.28)'; wb.style.color='#eafff7'; }
+          wb.onclick=()=>{ if(wk!==curWep){ if(!owned.includes(wk)) owned.push(wk); curWep=wk; if(typeof showWeaponModel==='function') showWeaponModel(wk); if(typeof updateHUD==='function') updateHUD(); renderEditorFields(); } };
+          gwRow.appendChild(wb);
+        }
+        urlHost.appendChild(gwRow);
         // slider for quick adjustment + an editable number box with NO ceiling (type any value), since models
         // arrive at wildly different scales. The slider auto-expands its range to fit whatever you enter.
         const _grip=(label,get,set,softLo,softHi,step,key)=>{
@@ -15884,14 +15905,14 @@ function renderEditorFields(){
           sync();
           row.appendChild(sp); row.appendChild(rng); row.appendChild(num); urlHost.appendChild(row);
         };
-        _grip('Pos X', ()=>tpGunX, v=>tpGunX=v, -8, 8, 0.01, 'breach_tp_gun_x');
-        _grip('Pos Y', ()=>tpGunY, v=>tpGunY=v, -8, 8, 0.01, 'breach_tp_gun_y');
-        _grip('Pos Z', ()=>tpGunZ, v=>tpGunZ=v, -8, 8, 0.01, 'breach_tp_gun_z');
-        _grip('Yaw', ()=>tpGunYaw, v=>tpGunYaw=v, -Math.PI, Math.PI, 0.02, 'breach_tp_gun_yaw');
-        _grip('Pitch', ()=>tpGunPitch, v=>tpGunPitch=v, -Math.PI, Math.PI, 0.02, 'breach_tp_gun_pitch');
-        _grip('Roll', ()=>tpGunRoll, v=>tpGunRoll=v, -Math.PI, Math.PI, 0.02, 'breach_tp_gun_roll');
-        _grip('Scale', ()=>tpGunScale, v=>tpGunScale=v, 0.05, 5, 0.01, 'breach_tp_gun_scale');
-        const gripHint=document.createElement('div'); gripHint.className='hint'; gripHint.style.cssText='font-size:10px;opacity:0.7;margin:2px 0 0;'; gripHint.textContent='Positions the held weapon model on the character. Drag the slider or type any number in the box (no limit \u2014 type a bigger value for oversized models). Tune it in third-person with a model loaded.'; urlHost.appendChild(gripHint);
+        _grip('Pos X', ()=>tpGunGrip().x, v=>tpGunGrip().x=v, -8, 8, 0.01, 'breach_tp_gun_x');
+        _grip('Pos Y', ()=>tpGunGrip().y, v=>tpGunGrip().y=v, -8, 8, 0.01, 'breach_tp_gun_y');
+        _grip('Pos Z', ()=>tpGunGrip().z, v=>tpGunGrip().z=v, -8, 8, 0.01, 'breach_tp_gun_z');
+        _grip('Yaw', ()=>tpGunGrip().yaw, v=>tpGunGrip().yaw=v, -Math.PI, Math.PI, 0.02, 'breach_tp_gun_yaw');
+        _grip('Pitch', ()=>tpGunGrip().pitch, v=>tpGunGrip().pitch=v, -Math.PI, Math.PI, 0.02, 'breach_tp_gun_pitch');
+        _grip('Roll', ()=>tpGunGrip().roll, v=>tpGunGrip().roll=v, -Math.PI, Math.PI, 0.02, 'breach_tp_gun_roll');
+        _grip('Scale', ()=>tpGunGrip().scale, v=>tpGunGrip().scale=v, 0.05, 5, 0.01, 'breach_tp_gun_scale');
+        const gripHint=document.createElement('div'); gripHint.className='hint'; gripHint.style.cssText='font-size:10px;opacity:0.7;margin:2px 0 0;'; gripHint.textContent='Each weapon stores its OWN grip \u2014 pick a weapon above, then position its model. Drag the slider or type any number (no limit). Tune it in third-person with a model loaded.'; urlHost.appendChild(gripHint);
       }
       const pHint=document.createElement('div'); pHint.className='hint'; pHint.style.margin='3px 0 0'; pHint.textContent='The teal arrow points the character’s FORWARD (where it runs/aims). If your model faces the opposite way, set Facing to 180 (under Transform) to flip it. Tap a state to test its clip.';
       urlHost.appendChild(pHint);
