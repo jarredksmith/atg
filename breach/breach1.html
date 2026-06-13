@@ -5887,10 +5887,11 @@ scene.fog = SCENE_FOG;
 
 const camera = new THREE.PerspectiveCamera(78, innerWidth/innerHeight, 0.1, 400);
 const IS_COARSE = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches);   // touch/mobile -> trade visual polish for frame rate
-const renderer = new THREE.WebGLRenderer({ antialias: true });   // smooth edges everywhere (modern mobile GPUs handle MSAA fine)
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });   // smooth edges + ask dual-GPU laptops for the discrete card
 renderer.setSize(innerWidth, innerHeight, false);
 renderer.setPixelRatio(Math.min(devicePixelRatio, IS_COARSE ? 2.0 : 1.5));   // render closer to native res on hi-DPI phones (1x looked low-res/jagged); still capped for FPS
 renderer.shadowMap.enabled = true;
+renderer.shadowMap.autoUpdate = false; renderer.shadowMap.needsUpdate = true;   // static by default; _dirtyShadows() requests a refresh
 renderer.shadowMap.type = IS_COARSE ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 
@@ -10400,7 +10401,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 357 · 2026-06-12';
+const BUILD_VERSION = 'build 358 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12488,11 +12489,24 @@ function refreshCinePreview(){
   }catch(e){ /* path preview is cosmetic; never let it break the editor */ }
 }
 addEventListener('pointerdown', ()=>{ if(_cineActive) endCinematic(); });
+let _shadowDirtyFrames = 2;
+function _dirtyShadows(n){ _shadowDirtyFrames = Math.max(_shadowDirtyFrames, n||2); }   // call whenever something the sun casts moves/spawns/breaks
+let _tabHidden = false;
+addEventListener('visibilitychange', ()=>{
+  _tabHidden = (document.visibilityState === 'hidden');
+  if(_tabHidden){ try{ if(typeof _suspendAudioForHide==='function') _suspendAudioForHide(); }catch(e){} }
+  else { try{ clock.getDelta(); }catch(e){} _dirtyShadows(2); }   // returning: drop the huge accumulated dt, refresh shadows
+});
 function loop(){
   requestAnimationFrame(loop);
+  if(_tabHidden) return;   // backgrounded: stop rendering AND stepping physics — a hidden tab simulating is what gets the page killed on mobile
+  if(_shadowDirtyFrames>0){ renderer.shadowMap.needsUpdate = true; _shadowDirtyFrames--; }
+  else renderer.shadowMap.needsUpdate = false;
   const rawDt = Math.min(clock.getDelta(), 0.05);
   let dt = rawDt;
   updatePerfHud();   // measure real frame time every frame (before any early-out)
+  if(editorOpen || _cineActive) _dirtyShadows(1);   // authoring + camera moves: keep shadows current
+  else { for(const o of propModels){ const a=o&&o.userData&&o.userData.xa; if(a&&a.on&&a.ph>0&&a.ph<1){ _dirtyShadows(1); break; } } }   // a platform/door mid-travel
   if(typeof updateAudioZones==='function') updateAudioZones();   // ambient audio zones: proximity-based volume (silent unless in live play)
   if(_pathPreviewGroup && !editorOpen){ scene.remove(_pathPreviewGroup); try{ _pathPreviewGroup.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); }catch(e){} _pathPreviewGroup=null; }   // editor waypoint markers never linger into play
   if(_cinePreviewGroup && !editorOpen){ scene.remove(_cinePreviewGroup); try{ _cinePreviewGroup.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); }catch(e){} _cinePreviewGroup=null; }   // cine path preview is editor-only
