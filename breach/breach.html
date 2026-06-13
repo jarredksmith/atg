@@ -8213,7 +8213,7 @@ function _ensurePreviewOriginMarker(){
   const post=new THREE.Mesh(new THREE.CylinderGeometry(0.012,0.012,1.7,6), new THREE.MeshBasicMaterial({ color:0x38f5b5, transparent:true, opacity:0.45, depthWrite:false }));
   post.position.y=0.85; post.raycast=()=>{}; mk.add(post);   // the vertical column so you can judge height
   const dot=new THREE.Mesh(new THREE.SphereGeometry(0.05,10,10), new THREE.MeshBasicMaterial({ color:0xffd166 })); dot.raycast=()=>{}; mk.add(dot);   // the exact (0,0,0) pivot
-  const _fArr=new THREE.ArrowHelper(new THREE.Vector3(0,0,1), new THREE.Vector3(0,0.05,0), 2.2, 0x38f5b5, 0.6, 0.34);   // FORWARD: the avatar faces +Z in preview, so authors can orient a custom model
+  const _fArr=new THREE.ArrowHelper(new THREE.Vector3(0,0,-1), new THREE.Vector3(0,0.05,0), 2.2, 0x38f5b5, 0.6, 0.34);   // FORWARD = -Z (the engine's forward at yaw 0). Orient your model so it points the SAME way as this arrow.
   _fArr.line.material.depthTest=false; _fArr.cone.material.depthTest=false; _fArr.line.renderOrder=997; _fArr.cone.renderOrder=997; _fArr.line.raycast=()=>{}; _fArr.cone.raycast=()=>{}; mk.add(_fArr);
   previewAvatar.add(mk); previewAvatar.userData.originMarker=mk;
 }
@@ -10525,7 +10525,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 382 · 2026-06-12';
+const BUILD_VERSION = 'build 383 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15694,7 +15694,7 @@ function renderEditorFields(){
         mkSlider('Forward', ()=>tpMuzFwd, v=>tpMuzFwd=v, -1, 3, 0.05, v=>v.toFixed(2), 'breach_tp_muz_fwd');
         const muzHint=document.createElement('div'); muzHint.className='hint'; muzHint.style.cssText='font-size:10px;opacity:0.7;margin:2px 0 0;'; muzHint.textContent='Where the bullet streak STARTS in third-person, so it lines up with the character\'s gun (the shot itself still goes through the crosshair).'; urlHost.appendChild(tpHint);
       }
-      const pHint=document.createElement('div'); pHint.className='hint'; pHint.style.margin='3px 0 0'; pHint.textContent='Preview avatar is in front of you. Tap a state to test its clip; in-game it switches automatically with movement.';
+      const pHint=document.createElement('div'); pHint.className='hint'; pHint.style.margin='3px 0 0'; pHint.textContent='The teal arrow points the character’s FORWARD (where it runs/aims). If your model faces the opposite way, set Facing to 180 (under Transform) to flip it. Tap a state to test its clip.';
       urlHost.appendChild(pHint);
     }
   }
