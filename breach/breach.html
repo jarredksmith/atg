@@ -10686,7 +10686,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 392 · 2026-06-12';
+const BUILD_VERSION = 'build 393 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15870,9 +15870,9 @@ function renderEditorFields(){
         const muzHint=document.createElement('div'); muzHint.className='hint'; muzHint.style.cssText='font-size:10px;opacity:0.7;margin:2px 0 0;'; muzHint.textContent='Where the bullet streak STARTS in third-person, so it lines up with the character\'s gun (the shot itself still goes through the crosshair).'; urlHost.appendChild(tpHint);
         const gripHdr=document.createElement('div'); gripHdr.className='hint'; gripHdr.innerHTML='<b>Held gun grip (third-person)</b>'; gripHdr.style.margin='7px 0 2px'; urlHost.appendChild(gripHdr);
         const _grip=(label,get,set,mn,mx,st,fmt,key)=>mkSlider(label,get,(v)=>{ set(v); _saveTpGun(); refreshAvatarGunGrips(); },mn,mx,st,fmt,key);
-        _grip('Pos X', ()=>tpGunX, v=>tpGunX=v, -1.5, 1.5, 0.01, v=>v.toFixed(2), 'breach_tp_gun_x');
-        _grip('Pos Y', ()=>tpGunY, v=>tpGunY=v, 0, 2.5, 0.01, v=>v.toFixed(2), 'breach_tp_gun_y');
-        _grip('Pos Z', ()=>tpGunZ, v=>tpGunZ=v, -1.5, 1.5, 0.01, v=>v.toFixed(2), 'breach_tp_gun_z');
+        _grip('Pos X', ()=>tpGunX, v=>tpGunX=v, -8, 8, 0.01, v=>v.toFixed(2), 'breach_tp_gun_x');
+        _grip('Pos Y', ()=>tpGunY, v=>tpGunY=v, -8, 8, 0.01, v=>v.toFixed(2), 'breach_tp_gun_y');
+        _grip('Pos Z', ()=>tpGunZ, v=>tpGunZ=v, -8, 8, 0.01, v=>v.toFixed(2), 'breach_tp_gun_z');
         _grip('Yaw', ()=>tpGunYaw, v=>tpGunYaw=v, -Math.PI, Math.PI, 0.02, v=>Math.round(v*180/Math.PI)+'\u00b0', 'breach_tp_gun_yaw');
         _grip('Pitch', ()=>tpGunPitch, v=>tpGunPitch=v, -Math.PI, Math.PI, 0.02, v=>Math.round(v*180/Math.PI)+'\u00b0', 'breach_tp_gun_pitch');
         _grip('Roll', ()=>tpGunRoll, v=>tpGunRoll=v, -Math.PI, Math.PI, 0.02, v=>Math.round(v*180/Math.PI)+'\u00b0', 'breach_tp_gun_roll');
