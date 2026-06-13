@@ -9041,7 +9041,7 @@ const remoteBodyGeo = new THREE.CapsuleGeometry(0.5, 1.2, 4, 8);
 // ---- Player avatar (what teammates / duel opponents see). Default = blue capsule; swappable for a GLB. ----
 const PLAYER_MODEL0 = { url:'', scale:1, face:0, rx:0, rz:0, yoff:0, xoff:0, zoff:0, thumb:'', clips:{ idle:'', walk:'', run:'', attack:'' } };   // thumb = Poly Pizza/Sketchfab preview image; face/rx/rz in radians
 let playerModelCfg = Object.assign({}, PLAYER_MODEL0, { clips:{ idle:'', walk:'', run:'', attack:'' }, clipSpeed:{}, clipHold:{} });
-function _sanitizeCharCfg(c){ c=c||{}; return { name:(typeof c.name==='string'&&c.name)||'Character', url:c.url||'', scale:+c.scale||1, face:+c.face||0, rx:+c.rx||0, rz:+c.rz||0, xoff:+c.xoff||0, yoff:+c.yoff||0, zoff:+c.zoff||0, thumb:(typeof c.thumb==='string'?c.thumb:''), clips:Object.assign({idle:'',walk:'',run:'',attack:''}, (c.clips&&typeof c.clips==='object')?c.clips:{}) }; }
+function _sanitizeCharCfg(c){ c=c||{}; return { name:(typeof c.name==='string'&&c.name)||'Character', url:c.url||'', scale:+c.scale||1, face:+c.face||0, rx:+c.rx||0, rz:+c.rz||0, xoff:+c.xoff||0, yoff:+c.yoff||0, zoff:+c.zoff||0, thumb:(typeof c.thumb==='string'?c.thumb:''), clips:Object.assign({idle:'',walk:'',run:'',attack:''}, (c.clips&&typeof c.clips==='object')?c.clips:{}), clipSpeed:Object.assign({}, (c.clipSpeed&&typeof c.clipSpeed==='object')?c.clipSpeed:{}), clipHold:Object.assign({}, (c.clipHold&&typeof c.clipHold==='object')?c.clipHold:{}) }; }
 let charRoster = (savedLevel && Array.isArray(savedLevel.roster)) ? savedLevel.roster.map(_sanitizeCharCfg) : [];   // authored multiplayer character models
 let myRosterIdx = -1;   // which roster character the local player picked (-1 = default player model)
 const CHARACTERS = [
@@ -10525,7 +10525,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 383 · 2026-06-12';
+const BUILD_VERSION = 'build 384 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13173,7 +13173,7 @@ function prsTransform(min,max,perAxisScale){
 function applyPlayerLevel(pl){ if(!pl) return; if(pl.state) Object.assign(editorTargets.player.state, pl.state);
   playerModelCfg.url=(pl.url||'').trim(); playerModelCfg.thumb=(pl.thumb||''); const s=editorTargets.player.state;
   playerModelCfg.scale=s.s||1; playerModelCfg.face=(s.face||0)*RAD; playerModelCfg.yoff=s.yoff||0; playerModelCfg.xoff=s.xoff||0; playerModelCfg.zoff=s.zoff||0;
-  playerModelCfg.clips=Object.assign({ idle:'', walk:'', run:'', attack:'' }, pl.clips||{}); rebuildAvatars(); }
+  playerModelCfg.clips=Object.assign({ idle:'', walk:'', run:'', attack:'' }, pl.clips||{}); playerModelCfg.clipSpeed=Object.assign({}, pl.clipSpeed||{}); playerModelCfg.clipHold=Object.assign({}, pl.clipHold||{}); rebuildAvatars(); }
 const editorTargets = {
   gun: {
     label: 'Gun',
@@ -13728,7 +13728,7 @@ function serializeLevel(){
     aim:     { state: Object.assign({}, editorTargets.aim.state) },
     aimWep:  JSON.parse(JSON.stringify(aimByWep)),
     station: { url: stationModelUrl, state: Object.assign({}, editorTargets.station.state) },
-    player:  { url: playerModelCfg.url, thumb: playerModelCfg.thumb||'', state: Object.assign({}, editorTargets.player.state), clips: Object.assign({}, playerModelCfg.clips) },
+    player:  { url: playerModelCfg.url, thumb: playerModelCfg.thumb||'', state: Object.assign({}, editorTargets.player.state), clips: Object.assign({}, playerModelCfg.clips), clipSpeed: Object.assign({}, playerModelCfg.clipSpeed||{}), clipHold: Object.assign({}, playerModelCfg.clipHold||{}) },
     world:   Object.assign({}, worldCfg),
     chest:   { url: chestModelUrl, scale: chestModelScale },
     coin:    { url: coinCfg.url, scale: coinCfg.scale, on: coinCfg.on !== false },
@@ -13741,7 +13741,7 @@ function serializeLevel(){
     audioZones: audioZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, url:z.url||'', vol:+z.vol, loop:!!z.loop })),
     fx: Object.assign({}, fxCfg),
     tracer: Object.assign({}, tracerCfg),
-    roster: charRoster.map(c=>({ name:c.name, url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, thumb:c.thumb||'', clips:Object.assign({},c.clips||{}) })),
+    roster: charRoster.map(c=>({ name:c.name, url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, thumb:c.thumb||'', clips:Object.assign({},c.clips||{}), clipSpeed:Object.assign({},c.clipSpeed||{}), clipHold:Object.assign({},c.clipHold||{}) })),
     pickupModels: Object.keys(pickupModels).reduce((a,k)=>{ const m=pickupModels[k]; if(m&&m.url){ a[k]={ url:m.url, scale:m.scale||1 }; } return a; }, {}),
     keyNames: Object.keys(keyNames).reduce((a,k)=>{ const n=(keyNames[k]||'').trim(); if(n) a[k]=n; return a; }, {}),
     game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave, noRespawn: !!gameCfg.noRespawn },
@@ -13831,8 +13831,8 @@ function showCampaignInterstitial(fromName, clearedNum, toIdx, total, onContinue
   _interTimer=setTimeout(tick,1000);
 }
 function _restoreLoadout(c){ if(!c) return; owned.length=0; for(const k of c.owned) owned.push(k); for(const k in c.ammo){ if(WEAPONS[k]){ WEAPONS[k].mag=c.ammo[k].mag; WEAPONS[k].reserve=c.ammo[k].reserve; } } curWep=(c.wep && owned.includes(c.wep))?c.wep:owned[0]; player.hp=Math.max(1, c.hp||player.hp); if(typeof switchWeapon==='function') switchWeapon(curWep); if(typeof updateHUD==='function') updateHUD(); }
-function _snapshotPlayerCharCfg(name){ const c=playerModelCfg; return _sanitizeCharCfg({ name:name||'Character', url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, thumb:c.thumb, clips:Object.assign({},c.clips||{}) }); }
-function _loadCharIntoEditor(i){ const c=charRoster[i]; if(!c) return; pushUndoSnapshot(); Object.assign(playerModelCfg, { url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, clips:Object.assign({},c.clips||{}) }); editorActive='player'; if(typeof ensurePlayerPreview==='function') ensurePlayerPreview(true); if(typeof previewAvatar!=='undefined' && previewAvatar && typeof buildAvatarVisual==='function') buildAvatarVisual(previewAvatar); if(typeof renderEditorFields==='function') renderEditorFields(); if(typeof flashToast==='function') flashToast('Loaded "'+(c.name||'Character')+'" onto the Player tab'); }
+function _snapshotPlayerCharCfg(name){ const c=playerModelCfg; return _sanitizeCharCfg({ name:name||'Character', url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, thumb:c.thumb, clips:Object.assign({},c.clips||{}), clipSpeed:Object.assign({},c.clipSpeed||{}), clipHold:Object.assign({},c.clipHold||{}) }); }
+function _loadCharIntoEditor(i){ const c=charRoster[i]; if(!c) return; pushUndoSnapshot(); Object.assign(playerModelCfg, { url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, clips:Object.assign({},c.clips||{}), clipSpeed:Object.assign({},c.clipSpeed||{}), clipHold:Object.assign({},c.clipHold||{}) }); editorActive='player'; if(typeof ensurePlayerPreview==='function') ensurePlayerPreview(true); if(typeof previewAvatar!=='undefined' && previewAvatar && typeof buildAvatarVisual==='function') buildAvatarVisual(previewAvatar); if(typeof renderEditorFields==='function') renderEditorFields(); if(typeof flashToast==='function') flashToast('Loaded "'+(c.name||'Character')+'" onto the Player tab'); }
 function renderCharRosterPanel(){
   const host = editorEl && editorEl.querySelector('#edCharRoster'); if(!host) return;
   host.innerHTML='';
