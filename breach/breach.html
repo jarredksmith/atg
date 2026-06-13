@@ -8736,7 +8736,10 @@ function spawnBots(n){
     if(teamMode()){ let c0=(NET.team===0?1:0), c1=(NET.team===1?1:0); for(const b of bots){ if(b.team===0)c0++; else if(b.team===1)c1++; } team=(c0<=c1)?0:1; }
     const nm=BOT_NAMES[i%BOT_NAMES.length]+(i>=BOT_NAMES.length?(' '+(i+1)):'');
     const sp=randomSpawn(); const mesh=makeBot(team, nm); mesh.userData.botId=id; mesh.position.set(sp.x,0,sp.z); mesh.rotation.y=sp.yaw;
-    bots.push({ id, team, name:nm, mesh, pos:new THREE.Vector3(sp.x,0,sp.z), yaw:sp.yaw, hp:D.hp, maxHp:D.hp, dead:false, respawnT:0, fireCd:Math.random()*0.6, strafe:Math.random()<0.5?1:-1, retargetT:0, target:null, vy:0, evx:0, evz:0, grounded:true });
+    bots.push({ id, team, name:nm, mesh, pos:new THREE.Vector3(sp.x,0,sp.z), yaw:sp.yaw, hp:D.hp, maxHp:D.hp, dead:false, respawnT:0, fireCd:Math.random()*0.6, strafe:Math.random()<0.5?1:-1, retargetT:0, target:null, vy:0, evx:0, evz:0, grounded:true,
+      aiState:'engage', aiT:0, lkp:null, lkpFresh:0, sawTgt:false, flankSide:Math.random()<0.5?1:-1,
+      // personality: aggression (push vs hold), bravery (low hp before retreat), preferred engage distance
+      aggr:0.4+Math.random()*0.6, bravery:0.18+Math.random()*0.22, prefRange:6+Math.random()*9 });
     if(teamMode()) NET.teams[id]=team;
     NET.duelScore[id]=0;
   }
@@ -8763,16 +8766,60 @@ function updateBots(dt){
   if(NET.mode!=='host' || !pvpMode() || !gameOn || !bots.length) return;
   const D=botDiff(), koth = NET.gameMode==='cp', lim=ARENA-2, spd=SPEED*D.spd;
   for(const b of bots){
-    if(b.dead){ b.respawnT-=dt; if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,0,sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; if(b.mesh){ b.mesh.visible=true; b.mesh.position.set(sp.x,0,sp.z); } } continue; }
+    if(b.dead){ b.respawnT-=dt; if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,0,sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; b.aiState='engage'; b.aiT=0; b.lkp=null; b.sawTgt=false; if(b.mesh){ b.mesh.visible=true; b.mesh.position.set(sp.x,0,sp.z); } } continue; }
     b.retargetT-=dt;
     if(b.retargetT<=0 || !_botTargetAlive(b.target)){ b.target=_botAcquire(b); b.retargetT=0.4+Math.random()*0.3; }
     const tgt=b.target;
-    let destX, destZ;
-    if(koth && !cpOwnedBy(b.team)){ destX=CP_POS.x; destZ=CP_POS.z; }
-    else if(tgt){ destX=tgt.pos.x; destZ=tgt.pos.z; }
+    b.aiT-=dt;
+    // ---- perception: can this bot currently SEE its target? track last-known position (lkp) ----
+    const hasLOS = !!(tgt && _botLOS(b.pos.x,b.pos.z, tgt.pos.x,tgt.pos.z));
+    const tgtDist = tgt ? Math.hypot(tgt.pos.x-b.pos.x, tgt.pos.z-b.pos.z) : Infinity;
+    if(hasLOS && tgt){ b.lkp = b.lkp||{x:0,z:0}; b.lkp.x=tgt.pos.x; b.lkp.z=tgt.pos.z; b.lkpFresh=2.5; b.sawTgt=true; }   // refresh while visible
+    else { b.lkpFresh=Math.max(0, b.lkpFresh-dt); }
+    const hpFrac = b.hp/(b.maxHp||1);
+
+    // ---- state machine: engage / hunt / flank / retreat ----
+    if(!(koth && !cpOwnedBy(b.team))){   // objective push (capturing an unowned point) overrides personal combat
+      if(hpFrac < b.bravery && hasLOS && tgtDist < 16){
+        b.aiState='retreat';                                   // hurt + exposed -> back off to recover
+      } else if(b.aiState==='retreat' && (hpFrac > b.bravery+0.18 || !hasLOS)){
+        b.aiState='engage'; b.aiT=0;                           // recovered or safe -> re-engage
+      } else if(!hasLOS && b.lkpFresh>0 && b.aiState!=='retreat'){
+        if(b.aiState!=='hunt' && b.aiState!=='flank'){ b.aiState = (Math.random()<b.aggr?'flank':'hunt'); b.aiT=1.2+Math.random()*1.5; }   // lost sight -> hunt the last spot, sometimes flank to it
+      } else if(hasLOS && b.aiState!=='retreat'){
+        if(b.aiState==='hunt' || b.aiState==='flank' || b.aiState==='search'){ b.aiState='engage'; b.aiT=0; }   // reacquired
+      } else if(b.lkpFresh<=0 && b.aiState!=='retreat' && b.aiState!=='search'){
+        b.aiState='search'; b.aiT=2+Math.random()*2;           // lost the trail entirely -> wander/search
+      }
+      if(b.aiT<=0 && (b.aiState==='hunt'||b.aiState==='flank'||b.aiState==='search')){ b.aiState='engage'; }   // give up stale pursuit
+    } else { b.aiState='engage'; }
+
+    // ---- destination from state ----
+    let destX, destZ, wantFire = hasLOS;
+    if(koth && !cpOwnedBy(b.team)){ destX=CP_POS.x; destZ=CP_POS.z; wantFire=hasLOS; }
+    else if(b.aiState==='retreat' && tgt){
+      destX = b.pos.x - (tgt.pos.x-b.pos.x); destZ = b.pos.z - (tgt.pos.z-b.pos.z);   // move directly away
+      destX=Math.max(-lim,Math.min(lim,destX)); destZ=Math.max(-lim,Math.min(lim,destZ));
+      wantFire = hasLOS && Math.random()<0.5;   // suppressing fire while backing off
+    }
+    else if((b.aiState==='hunt'||b.aiState==='flank') && b.lkp){
+      if(b.aiState==='flank'){ const a=Math.atan2(b.lkp.z-b.pos.z, b.lkp.x-b.pos.x)+b.flankSide*0.7; destX=b.lkp.x+Math.cos(a)*5; destZ=b.lkp.z+Math.sin(a)*5; }   // approach the last spot from an angle
+      else { destX=b.lkp.x; destZ=b.lkp.z; }
+      wantFire=false;   // can't see it; don't fire blind
+    }
+    else if(b.aiState==='search'){
+      if(!b._wander || b.aiT<=0){ b._wander={ x:b.pos.x+(Math.random()*2-1)*16, z:b.pos.z+(Math.random()*2-1)*16 }; }
+      destX=Math.max(-lim,Math.min(lim,b._wander.x)); destZ=Math.max(-lim,Math.min(lim,b._wander.z)); wantFire=false;
+    }
+    else if(tgt){ destX=tgt.pos.x; destZ=tgt.pos.z; }   // engage
     else { destX=CP_POS.x; destZ=CP_POS.z; }
     let dx=destX-b.pos.x, dz=destZ-b.pos.z; const dist=Math.hypot(dx,dz)||1; let mvx,mvz;
-    if(tgt && dist<9 && !(koth && !cpOwnedBy(b.team))){ mvx=(-dz/dist)*b.strafe; mvz=(dx/dist)*b.strafe; if(Math.random()<0.012) b.strafe*=-1; }
+    if(b.aiState==='engage' && tgt && hasLOS && dist<Math.max(9,b.prefRange+3) && !(koth && !cpOwnedBy(b.team))){
+      const radial = dist < b.prefRange-1 ? -0.5 : (dist > b.prefRange+1 ? 0.5 : 0);
+      mvx=((-dz/dist)*b.strafe) + (dx/dist)*radial; mvz=((dx/dist)*b.strafe) + (dz/dist)*radial;
+      const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml;
+      if(Math.random()<0.012) b.strafe*=-1;
+    }
     else { mvx=dx/dist; mvz=dz/dist; }
     const ox=b.pos.x, oz=b.pos.z;
     if(b.grounded!==false){   // walk only with feet on a surface; while airborne, momentum carries it
@@ -8789,7 +8836,7 @@ function updateBots(dt){
       if(b.pos.y>groundY+0.04 || (b.vy||0)>0){ b.vy=(b.vy||0)-GRAV*dt; b.pos.y+=b.vy*dt; if(b.vy<=0 && b.pos.y<=groundY){ b.pos.y=groundY; b.vy=0; b.grounded=true; } else b.grounded=false; }
       else { b.pos.y=groundY; b.vy=0; b.grounded=true; }
     }
-    b.yaw = tgt ? Math.atan2(-(tgt.pos.x-b.pos.x), -(tgt.pos.z-b.pos.z)) : Math.atan2(-mvx,-mvz);   // player-yaw convention (rotation.y = atan2(-dx,-dz)); plain atan2(dx,dz) faced bots 180 the wrong way
+    b.yaw = (tgt && hasLOS) ? Math.atan2(-(tgt.pos.x-b.pos.x), -(tgt.pos.z-b.pos.z)) : Math.atan2(-mvx,-mvz);   // face the target only while it's visible; otherwise face where we're moving (no x-ray tracking)
     if(b.mesh){ b.mesh.position.set(b.pos.x,b.pos.y,b.pos.z); if(b.grounded===false){ b._spin=(b._spin||0)+(Math.hypot(b.evx||0,b.evz||0)+Math.abs(b.vy||0))*dt*0.5; b.mesh.rotation.set(b._spin, b.yaw, b._spin*0.5); } else { b._spin=0; b.mesh.rotation.set(0, b.yaw, 0); }
       if(b.mesh.userData.hasModel && b.mesh.userData.visual && b.mesh.userData.visual.userData.stateActions){
         const md=Math.hypot(b.pos.x-ox, b.pos.z-oz);
@@ -8798,7 +8845,7 @@ function updateBots(dt){
         setEnemyAnimState(b.mesh, st);
       } }
     b.fireCd-=dt;
-    if(tgt && b.fireCd<=0){
+    if(tgt && wantFire && b.fireCd<=0){
       const ty=(tgt.pos.y!=null?Math.min(1.5,tgt.pos.y):1.4);
       const fdist=Math.hypot(tgt.pos.x-b.pos.x, ty-1.4, tgt.pos.z-b.pos.z);
       if(fdist<D.range && _botLOS(b.pos.x,b.pos.z, tgt.pos.x,tgt.pos.z)){
@@ -10525,7 +10572,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 386 · 2026-06-12';
+const BUILD_VERSION = 'build 387 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
