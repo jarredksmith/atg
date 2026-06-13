@@ -8280,7 +8280,7 @@ function autoFitEnemyScale(){
   const b = new THREE.Box3().setFromObject(v), h = b.max.y - b.min.y;
   if(!isFinite(h) || h <= 0.02) return false;
   const mc = enemyModelCfg(previewEnemy.userData.enemyType);
-  mc.scale = Math.max(0.05, Math.min(50, (mc.scale||1) * (2.6/h)));
+  mc.scale = Math.max(0.001, Math.min(50, (mc.scale||1) * (2.6/h)));
   refreshEnemyVisuals();
   return true;
 }
@@ -10525,7 +10525,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 385 · 2026-06-12';
+const BUILD_VERSION = 'build 386 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14826,9 +14826,17 @@ function renderEditorFields(){
     renderModelSearch(enPsHost, (m, st)=>{ eUrl.value=m.glb; pushUndoSnapshot(); swapEnemyModel(m.glb, editorEnemyType); refreshEnemyVisuals(); if(st) st.textContent='Using "'+m.title+'" — credit: '+(m.attribution||''); }, { placeholder:'e.g. zombie, alien, drone' });
     const eScaleRow=document.createElement('label'); eScaleRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 2px;';
     const esSp=document.createElement('span'); esSp.textContent='Model scale'; esSp.style.minWidth='86px';
-    const esNum=document.createElement('input'); esNum.type='number'; esNum.min='0.05'; esNum.max='50'; esNum.step='0.05'; esNum.value=mc.scale; esNum.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
-    esNum.onchange=()=>{ mc.scale=Math.max(0.05,Math.min(50,parseFloat(esNum.value)||1)); refreshEnemyVisuals(); };
-    eScaleRow.appendChild(esSp); eScaleRow.appendChild(esNum); eHost.appendChild(eScaleRow);
+    // Scale spans a huge range (0.001 .. 50), so the slider is LOGARITHMIC — small values get real precision
+    // instead of being crammed into the first pixel. The number box stays for exact entry.
+    const ES_MIN=0.001, ES_MAX=50, ES_LMIN=Math.log(ES_MIN), ES_LSPAN=Math.log(ES_MAX)-ES_LMIN;
+    const es2slider=v=>Math.round(((Math.log(Math.max(ES_MIN,v))-ES_LMIN)/ES_LSPAN)*1000);
+    const slider2es=p=>Math.exp(ES_LMIN + (p/1000)*ES_LSPAN);
+    const esRng=document.createElement('input'); esRng.type='range'; esRng.min='0'; esRng.max='1000'; esRng.step='1'; esRng.value=String(es2slider(mc.scale||1)); esRng.style.cssText='flex:1;accent-color:#ff8a5b;';
+    const esNum=document.createElement('input'); esNum.type='number'; esNum.min='0.001'; esNum.max='50'; esNum.step='0.001'; esNum.value=mc.scale; esNum.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+    const esApply=(v, fromSlider)=>{ const s=Math.max(ES_MIN,Math.min(ES_MAX, v||1)); mc.scale=s; esNum.value=(s<0.1?s.toFixed(3):s.toFixed(2)); if(!fromSlider) esRng.value=String(es2slider(s)); refreshEnemyVisuals(); };
+    esRng.oninput=()=>{ esApply(slider2es(parseFloat(esRng.value)), true); };
+    esNum.onchange=()=>{ esApply(parseFloat(esNum.value), false); };
+    eScaleRow.appendChild(esSp); eScaleRow.appendChild(esRng); eScaleRow.appendChild(esNum); eHost.appendChild(eScaleRow);
     const eFaceRow=document.createElement('label'); eFaceRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
     const efSp=document.createElement('span'); efSp.textContent='Facing'; efSp.style.minWidth='86px';
     const efSel=document.createElement('select'); efSel.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
