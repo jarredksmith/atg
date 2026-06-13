@@ -233,7 +233,7 @@
   body.touch #ammoPanel { top: calc(52px + env(safe-area-inset-top)); left: calc(82px + env(safe-area-inset-left)); right:auto; bottom:auto; text-align:left; min-width:0; }
   body.touch #ammoPanel .big { font-size:18px; }
   body.touch #score { top: calc(12px + env(safe-area-inset-top)); right: calc(58px + env(safe-area-inset-right)); }
-  body.touch #pauseBtn { top: calc(10px + env(safe-area-inset-top)); right: calc(10px + env(safe-area-inset-right)); width:38px; height:38px; }
+  body.touch #pauseBtn { top: calc(12px + env(safe-area-inset-top)); right: calc(162px + env(safe-area-inset-right)); width:38px; height:38px; }
   body.touch #scoreVal { font-size:15px; }
   body.touch #creditsVal { font-size:15px; }
   body.touch #score .label { font-size:9px; }
@@ -383,7 +383,7 @@
   }
   body.touch #bossBar { top:158px; width:62vw; }
   #pauseBtn {
-    position:fixed; top:14px; right:14px; z-index:45; width:42px; height:42px;
+    position:fixed; top:26px; right:140px; z-index:45; width:42px; height:42px;   /* left of the Score panel (top-right) so they never overlap */
 
     display:flex; align-items:center; justify-content:center; cursor:pointer;
     background:rgba(5,10,12,.66); color:#9fe6cf; border:1px solid rgba(56,245,181,.4);
@@ -10453,7 +10453,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 364 · 2026-06-12';
+const BUILD_VERSION = 'build 365 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
