@@ -6414,7 +6414,9 @@ function setEnemyAnimState(body, state){
   const _holdDefault = (state === 'die');
   const _hold = (_cfg && _cfg.clipHold && _cfg.clipHold[state] != null) ? !!_cfg.clipHold[state] : _holdDefault;
   if(_hold){ next.loop = THREE.LoopOnce; next.clampWhenFinished = true; } else { next.loop = THREE.LoopRepeat; next.clampWhenFinished = false; }
-  next.enabled = true; next.setEffectiveTimeScale(_spd); next.setEffectiveWeight(1); next.time = 0; next.play();
+  // reset() clears a finished/clamped LoopOnce state — without it, re-entering a held state (e.g. aim, then
+  // release, then aim again) would stay frozen at the last frame instead of replaying from the start.
+  next.reset(); next.enabled = true; next.setEffectiveTimeScale(_spd); next.setEffectiveWeight(1); next.time = 0; next.play();
   if(cur && cur !== next) cur.crossFadeTo(next, 0.18, false);
   v.userData.animState = key;
 }
@@ -9103,7 +9105,7 @@ function buildAvatarVisual(g, cfg){
     (err)=>{ console.warn('Player model load failed, using capsule:', err && err.message); }
   );
 }
-function rebuildAvatars(){ for(const id in NET.players){ const rp=NET.players[id]; if(rp && rp.mesh) buildAvatarVisual(rp.mesh, rp.modelCfg); } if(typeof previewAvatar!=='undefined' && previewAvatar) buildAvatarVisual(previewAvatar); _scheduleCharBroadcast(); }
+function rebuildAvatars(){ for(const id in NET.players){ const rp=NET.players[id]; if(rp && rp.mesh) buildAvatarVisual(rp.mesh, rp.modelCfg); } if(typeof previewAvatar!=='undefined' && previewAvatar) buildAvatarVisual(previewAvatar); if(typeof _ownAvatar!=='undefined' && _ownAvatar){ _ownAvatarKey=''; if(typeof ensureOwnAvatar==='function') ensureOwnAvatar(); }   /* refresh the live third-person body too */ _scheduleCharBroadcast(); }
 // ---- Third-person chase camera (toggle in the pause menu) ----
 let tpMode = (()=>{ try{ return localStorage.getItem('breach_tp')==='1'; }catch(e){ return false; } })();
 const TP_DIST = 4.2, TP_HEIGHT = 0.55, TP_MIN = 1.1;   // chase distance back / lift / closest pull-in past walls
@@ -9136,7 +9138,7 @@ try{ const fw=parseFloat(localStorage.getItem('breach_tp_muz_fwd')); if(!isNaN(f
 let _ownAvatar=null, _ownAvatarKey='', _tpCaster=null, _ownPrevX=0, _ownPrevZ=0, _ownSpeed=0;
 const _tpBack=new THREE.Vector3(), _tpEye=new THREE.Vector3(), _tpLookAt=new THREE.Vector3();
 function ensureOwnAvatar(){
-  const cfg=myCharCfg(); const key=[cfg.url||'', cfg.tint==null?'x':cfg.tint, cfg.scale||1, cfg.face||0, cfg.rx||0, cfg.rz||0, cfg.xoff||0, cfg.yoff||0, cfg.zoff||0].join('|');
+  const cfg=myCharCfg(); const key=[cfg.url||'', cfg.tint==null?'x':cfg.tint, cfg.scale||1, cfg.face||0, cfg.rx||0, cfg.rz||0, cfg.xoff||0, cfg.yoff||0, cfg.zoff||0, JSON.stringify(cfg.clips||{}), JSON.stringify(cfg.clipSpeed||{}), JSON.stringify(cfg.clipHold||{})].join('|');   // anim config is part of the key so changing a clip / speed / hold rebuilds the live avatar
   if(_ownAvatar && _ownAvatarKey===key) return _ownAvatar;
   if(!_ownAvatar){ _ownAvatar=new THREE.Group(); _ownAvatar.userData.noHit=true; scene.add(_ownAvatar); }   // noHit: never let the player's own body intercept their shots/picks
   buildAvatarVisual(_ownAvatar, cfg); _ownAvatarKey=key;
@@ -10523,7 +10525,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 380 · 2026-06-12';
+const BUILD_VERSION = 'build 382 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
