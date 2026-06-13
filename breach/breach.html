@@ -8229,7 +8229,7 @@ function refreshPlayerClipOptions(){
   const names = playerModelClips.slice();
   if(!playerModelCfg.clips) playerModelCfg.clips = { idle:'', walk:'', run:'', attack:'' };
   for(const e of Object.values(playerModelCfg.clips)){ if(e && names.indexOf(e)<0) names.push(e); }
-  for(const st of ['idle','walk','run','attack']){
+  for(const st of ['idle','walk','run','attack','jump','slide','die']){
     const sel = document.getElementById('edPlayerClip_'+st); if(!sel) continue;
     sel.innerHTML='';
     const auto=document.createElement('option'); auto.value=''; auto.textContent = names.length ? ('Auto — '+st+' by name') : 'Auto — set a model first'; if(!playerModelCfg.clips[st]) auto.selected=true; sel.appendChild(auto);
@@ -10495,7 +10495,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 374 · 2026-06-12';
+const BUILD_VERSION = 'build 375 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15601,7 +15601,7 @@ function renderEditorFields(){
     if(tgt===editorTargets.player){   // avatar animation states (mirror the enemy state machine)
       const acHead=document.createElement('div'); acHead.className='hint'; acHead.style.margin='10px 0 2px'; acHead.innerHTML='<b>Animation states</b> — auto-matched by clip name; override per state. Walk/run switch with the avatar\u2019s movement in-game.';
       urlHost.appendChild(acHead);
-      for(const [stKey, stLabel] of [['idle','Idle'],['walk','Walk'],['run','Run'],['attack','Attack']]){
+      for(const [stKey, stLabel] of [['idle','Idle'],['walk','Walk'],['run','Run'],['attack','Attack'],['jump','Jump'],['slide','Slide'],['die','Death']]){
         const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
         const sp=document.createElement('span'); sp.textContent=stLabel; sp.style.minWidth='86px';
         const sel=document.createElement('select'); sel.id='edPlayerClip_'+stKey; sel.dataset.state=stKey; sel.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
@@ -15610,7 +15610,7 @@ function renderEditorFields(){
       }
       refreshPlayerClipOptions();
       const pbRow=document.createElement('div'); pbRow.className='row2'; pbRow.style.marginTop='4px'; pbRow.style.flexWrap='wrap';
-      for(const st of ['idle','walk','run','attack']){
+      for(const st of ['idle','walk','run','attack','jump','slide','die']){
         const b=document.createElement('button'); b.textContent=st; b.style.fontSize='11px';
         b.onclick=()=>{ if(previewAvatar) setEnemyAnimState(previewAvatar, st); };
         pbRow.appendChild(b);
