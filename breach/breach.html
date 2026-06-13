@@ -694,6 +694,7 @@
     <button id="pauseEditHud" class="pBtnGhost" style="display:none">✿ Customize controls</button>
     <button id="pauseMoveMode" class="pBtnGhost">Movement: Classic</button>
     <button id="pauseCamMode" class="pBtnGhost">Camera: First person</button>
+    <button id="pauseSprintMode" class="pBtnGhost">Sprint: Hold</button>
     <div class="pauseAudio">
       <label class="paLbl"><input type="checkbox" id="muteCb"> Mute all</label>
       <label class="paLbl">🔊 Master<input type="range" id="volMaster" min="0" max="100" value="80"></label>
@@ -7717,6 +7718,7 @@ addEventListener('keydown', e=>{
   // Claim the keys the game drives so the browser never swallows them — Space in particular gets eaten
   // (page scroll / button activation) during modifier combos like Shift+Space, which broke jump-while-running.
   if(GAME_KEYS[e.code]){ e.preventDefault(); }
+  if(_sprintMode==='toggle' && (e.code==='ShiftLeft'||e.code==='ShiftRight') && !e.repeat){ _sprintToggled = !_sprintToggled; }   // tap toggles run (no need to HOLD Shift while pressing W+Space)
   if(e.code==='Tab'){ if(!e.repeat) openRadial(); e.preventDefault(); return; }   // radial deploy menu
   if(e.code==='KeyT' && NET.mode!=='off' && gameOn && !gameOver && !editorOpen && !shopOpen && !choosingUpgrade && !radialOpen){ openChat(); e.preventDefault(); return; }   // T: open multiplayer text chat
   // Crouch is Ctrl, so crouch+WASD lands on browser shortcuts: Ctrl+S (save page), Ctrl+D (bookmark),
@@ -7783,6 +7785,7 @@ addEventListener('keyup', e=>{ keys[e.code]=false; if(e.code==='Tab' && radialOp
 // before its pointer-release fires), leaving a key/stick stuck so the next round auto-walks. Call this when
 // a wave or round starts. (Gamepad axes re-poll every frame, so they self-correct and aren't cleared here.)
 function clearMovementInput(){
+  _sprintToggled=false;
   for(const k in keys) keys[k]=false;
   touchMoveX=0; touchMoveZ=0; touchSprint=false; touchFiring=false; touchAds=false; touchJump=false; touchLookDX=0; touchLookDY=0;
   sliding=false; firing=false;
@@ -9084,6 +9087,10 @@ function rebuildAvatars(){ for(const id in NET.players){ const rp=NET.players[id
 // ---- Third-person chase camera (toggle in the pause menu) ----
 let tpMode = (()=>{ try{ return localStorage.getItem('breach_tp')==='1'; }catch(e){ return false; } })();
 const TP_DIST = 4.2, TP_HEIGHT = 0.55, TP_MIN = 1.1;   // chase distance back / lift / closest pull-in past walls
+let _sprintMode = 'hold';   // 'hold' = press Shift to run; 'toggle' = tap Shift to lock running (helps keyboards that ghost W+Shift+Space)
+try{ const v=localStorage.getItem('breach_sprint_mode'); if(v==='toggle'||v==='hold') _sprintMode=v; }catch(e){}
+let _sprintToggled = false;
+function sprinting(){ if(padSprint || touchSprint) return true; if(_sprintMode==='toggle') return _sprintToggled; return !!keys['ShiftLeft']; }
 let tpShoulder = 0;   // third-person over-the-shoulder offset: + right, - left, 0 centered
 try{ const _ts=parseFloat(localStorage.getItem('breach_tp_shoulder')); if(!isNaN(_ts)) tpShoulder=Math.max(-3,Math.min(3,_ts)); }catch(e){}
 let _ownAvatar=null, _ownAvatarKey='', _tpCaster=null, _ownPrevX=0, _ownPrevZ=0, _ownSpeed=0;
@@ -10467,7 +10474,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 368 · 2026-06-12';
+const BUILD_VERSION = 'build 369 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12651,14 +12658,14 @@ function loop(){
   }
   crouching = gameOn && !shopOpen && !editorOpen && _wantCrouch;
   crouchT += ((crouching?1:0) - crouchT) * Math.min(1, dt*12);
-  let speedBase = (keys['ShiftLeft']||padSprint||touchSprint) ? SPEED*SPRINT : SPEED;
+  let speedBase = sprinting() ? SPEED*SPRINT : SPEED;
   if(crouching) speedBase = CROUCH_SPEED;          // crouch overrides sprint
   const sp = speedBase * (buffs.speed>0?1.4:1) * moveScale * run.speedMul;
   player.vel.x = wish.x * sp;
   player.vel.z = wish.z * sp;
 
   // --- slide: tap crouch while sprinting + running on the ground ---
-  const _sprinting = (keys['ShiftLeft']||padSprint||touchSprint);
+  const _sprinting = sprinting();
   const _crouchHeld = (keys['ControlLeft']||keys['ControlRight']||keys['KeyC']||padCrouch);
   if(slideCD>0) slideCD -= dt;
   const _slideEdge = _crouchHeld && !_prevCrouchHeld; _prevCrouchHeld = _crouchHeld;
@@ -16922,6 +16929,7 @@ function bindPauseMenu(){
   const r=document.getElementById('pauseResume'); if(r) r.onclick=resumeGame;
   const eh=document.getElementById('pauseEditHud'); if(eh) eh.onclick=()=>{ const pm=document.getElementById('pauseMenu'); if(pm) pm.classList.add('hidden'); enterTouchEdit(); };
   const mm=document.getElementById('pauseMoveMode'); if(mm){ const upd=()=>{ mm.textContent='Movement: '+(playerPhysMode?'Physics (beta)':'Classic'); }; upd(); mm.onclick=()=>{ playerPhysMode=!playerPhysMode; _kccBroken=false; try{ localStorage.setItem('breach_player_phys', playerPhysMode?'1':'0'); }catch(e){} upd(); }; }
+  const smb=document.getElementById('pauseSprintMode'); if(smb){ const upds=()=>{ smb.textContent='Sprint: '+(_sprintMode==='toggle'?'Toggle':'Hold'); }; upds(); smb.onclick=()=>{ _sprintMode = _sprintMode==='toggle'?'hold':'toggle'; _sprintToggled=false; try{ localStorage.setItem('breach_sprint_mode', _sprintMode); }catch(e){} upds(); }; }
   const cmb=document.getElementById('pauseCamMode'); if(cmb){ const updc=()=>{ cmb.textContent='Camera: '+(tpMode?'Third person':'First person'); }; updc(); cmb.onclick=()=>{ tpMode=!tpMode; try{ localStorage.setItem('breach_tp', tpMode?'1':'0'); }catch(e){} updc(); }; }
   const x=document.getElementById('pauseExit'); if(x) x.onclick=exitToMenu;
   const mc=document.getElementById('muteCb'); if(mc){ mc.checked=audioSettings.muted; mc.onchange=()=>{ audioSettings.muted=mc.checked; applyAudioSettings(); saveAudioSettings(); }; }
