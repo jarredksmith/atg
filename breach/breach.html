@@ -6389,6 +6389,15 @@ function _stateActionKey(acts, state){
   if(state==='die')  return acts.idle ? 'idle' : Object.keys(acts)[0];
   return acts.idle ? 'idle' : Object.keys(acts)[0];
 }
+// Re-apply a clip-speed change to any avatar currently PLAYING that state, so the editor slider updates
+// live (the preview avatar + the local player) without rebuilding the model.
+function applyAnimSpeedLive(state, spd){
+  spd = Math.max(0.1, Math.min(4, +spd || 1));
+  const apply = v=>{ if(!v || !v.userData) return; const acts=v.userData.stateActions; if(!acts) return;
+    const key=_stateActionKey(acts, state); if(key && acts[key]) acts[key].setEffectiveTimeScale(spd); };
+  if(typeof previewAvatar!=='undefined' && previewAvatar) apply(previewAvatar.userData.visual || previewAvatar);
+  if(typeof _ownAvatar!=='undefined' && _ownAvatar) apply(_ownAvatar.userData.visual || _ownAvatar);
+}
 function setEnemyAnimState(body, state){
   const v = body.userData.visual; if(!v) return;
   const acts = v.userData.stateActions; if(!acts) return;
@@ -6396,7 +6405,9 @@ function setEnemyAnimState(body, state){
   if(v.userData.animState === key) return;   // already there
   const cur = v.userData.animState ? acts[v.userData.animState] : null;
   const next = acts[key];
-  next.enabled = true; next.setEffectiveTimeScale(1); next.setEffectiveWeight(1); next.time = 0; next.play();
+  const _cfg = v.userData.animCfg || (body.userData && body.userData.animCfg);
+  const _spd = (_cfg && _cfg.clipSpeed && _cfg.clipSpeed[state] != null) ? Math.max(0.1, Math.min(4, +_cfg.clipSpeed[state])) : 1;
+  next.enabled = true; next.setEffectiveTimeScale(_spd); next.setEffectiveWeight(1); next.time = 0; next.play();
   if(cur && cur !== next) cur.crossFadeTo(next, 0.18, false);
   v.userData.animState = key;
 }
@@ -8174,7 +8185,7 @@ function buildEnemyVisual(body){
       body.userData.hasModel = true; body.userData.faceOff = mc.face;   // per-enemy facing nudge, read by the lookAt code
       model.userData.seat = { p:model.position.clone(), q:model.quaternion.clone(), s:model.scale.clone() };   // locked each frame so animation root-motion/scale tracks can't fling or shrink the model
       const _clipMap = Object.assign({}, mc.clips); if(mc.clip && !_clipMap.idle) _clipMap.idle = mc.clip;   // legacy single-clip -> idle
-      const mx = playEnemyStates(model, gltf, _clipMap);   // idle/walk/run/attack, crossfaded by movement + attacks
+      const mx = playEnemyStates(model, gltf, _clipMap); model.userData.animCfg = mc;   // idle/walk/run/attack, crossfaded by movement + attacks
       if(mx) body.userData.mixer = mx;
       if(body===previewEnemy && typeof refreshEnemyClipOptions==='function') refreshEnemyClipOptions();   // populate the editor dropdown now clips are known
     },
@@ -9020,7 +9031,7 @@ function makeNameSprite(text, team){
 const remoteBodyGeo = new THREE.CapsuleGeometry(0.5, 1.2, 4, 8);
 // ---- Player avatar (what teammates / duel opponents see). Default = blue capsule; swappable for a GLB. ----
 const PLAYER_MODEL0 = { url:'', scale:1, face:0, rx:0, rz:0, yoff:0, xoff:0, zoff:0, thumb:'', clips:{ idle:'', walk:'', run:'', attack:'' } };   // thumb = Poly Pizza/Sketchfab preview image; face/rx/rz in radians
-let playerModelCfg = Object.assign({}, PLAYER_MODEL0, { clips:{ idle:'', walk:'', run:'', attack:'' } });
+let playerModelCfg = Object.assign({}, PLAYER_MODEL0, { clips:{ idle:'', walk:'', run:'', attack:'' }, clipSpeed:{} });
 function _sanitizeCharCfg(c){ c=c||{}; return { name:(typeof c.name==='string'&&c.name)||'Character', url:c.url||'', scale:+c.scale||1, face:+c.face||0, rx:+c.rx||0, rz:+c.rz||0, xoff:+c.xoff||0, yoff:+c.yoff||0, zoff:+c.zoff||0, thumb:(typeof c.thumb==='string'?c.thumb:''), clips:Object.assign({idle:'',walk:'',run:'',attack:''}, (c.clips&&typeof c.clips==='object')?c.clips:{}) }; }
 let charRoster = (savedLevel && Array.isArray(savedLevel.roster)) ? savedLevel.roster.map(_sanitizeCharCfg) : [];   // authored multiplayer character models
 let myRosterIdx = -1;   // which roster character the local player picked (-1 = default player model)
@@ -9079,7 +9090,7 @@ function buildAvatarVisual(g, cfg){
       const hb=h*0.82; const px=new THREE.Mesh(new THREE.CylinderGeometry(fr,fr,hb,10), _ENEMY_PROXY_MAT); px.position.y=hb/2; g.add(px); g.userData.hitProxy=px; if(g.userData.noHit) px.raycast=()=>{};
       const rs=Math.min(Math.max(fr*0.7,0.26),0.45); const hpx=_mkHeadProxy(h-rs, rs); g.add(hpx); g.userData.headProxy=hpx; if(g.userData.noHit) hpx.raycast=()=>{};
       if(mc===playerModelCfg){ playerModelClips = (gltf.animations||[]).map(a=>a.name||''); if(typeof refreshPlayerClipOptions==='function') refreshPlayerClipOptions(); }   // clip names feed the editor for the local model only
-      const mx=playEnemyStates(model, gltf, mc.clips);   // idle/walk/run, crossfaded by the avatar's movement
+      const mx=playEnemyStates(model, gltf, mc.clips); model.userData.animCfg = mc;   // idle/walk/run, crossfaded by the avatar's movement
       if(mx) g.userData.mixer=mx;
     },
     (err)=>{ console.warn('Player model load failed, using capsule:', err && err.message); }
@@ -9171,7 +9182,7 @@ function tpCameraPushback(){
   if(side || height){ _tpLookAt.set(camx + fx, camy + fy, camz + fz); camera.lookAt(_tpLookAt); }
 }
 // ---- per-player characters: each player owns + broadcasts their avatar config; others build from it ----
-function myCharCfg(){ const c=(myRosterIdx>=0 && charRoster[myRosterIdx]) ? charRoster[myRosterIdx] : playerModelCfg; return { url:c.url||'', scale:c.scale||1, face:c.face||0, rx:c.rx||0, rz:c.rz||0, xoff:c.xoff||0, yoff:c.yoff||0, zoff:c.zoff||0, thumb:c.thumb||'', clips:Object.assign({}, c.clips||{}), tint:(CHARACTERS[myCharIdx]?CHARACTERS[myCharIdx].color:null) }; }
+function myCharCfg(){ const c=(myRosterIdx>=0 && charRoster[myRosterIdx]) ? charRoster[myRosterIdx] : playerModelCfg; return { url:c.url||'', scale:c.scale||1, face:c.face||0, rx:c.rx||0, rz:c.rz||0, xoff:c.xoff||0, yoff:c.yoff||0, zoff:c.zoff||0, thumb:c.thumb||'', clips:Object.assign({}, c.clips||{}), clipSpeed:Object.assign({}, c.clipSpeed||{}), tint:(CHARACTERS[myCharIdx]?CHARACTERS[myCharIdx].color:null) }; }
 function applyRemoteChar(id, cfg){ if(cfg==null || +id===NET.myId) return; NET.charById[id]=cfg; const rp=NET.players[id]; if(rp){ rp.modelCfg=cfg; if(rp.mesh){ buildAvatarVisual(rp.mesh, cfg); if(teamMode() && NET.teams[id]!=null) tintAvatar(rp.mesh, NET.teams[id]); } } }
 function broadcastMyChar(){ const cfg=myCharCfg(); if(NET.mode==='host'){ NET.charById[0]=cfg; for(const id in NET.conns){ try{ NET.conns[id].send({t:'char', from:0, cfg}); }catch(e){} } } else if(NET.mode==='client' && NET.conn){ try{ NET.conn.send({t:'char', cfg}); }catch(e){} } }
 let _charBcT=null;
@@ -10495,7 +10506,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 375 · 2026-06-12';
+const BUILD_VERSION = 'build 376 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15606,7 +15617,11 @@ function renderEditorFields(){
         const sp=document.createElement('span'); sp.textContent=stLabel; sp.style.minWidth='86px';
         const sel=document.createElement('select'); sel.id='edPlayerClip_'+stKey; sel.dataset.state=stKey; sel.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
         sel.onchange=()=>{ playerModelCfg.clips[stKey]=sel.value; rebuildAvatars(); };
-        row.appendChild(sp); row.appendChild(sel); urlHost.appendChild(row);
+        const spd=document.createElement('input'); spd.type='number'; spd.min='0.1'; spd.max='4'; spd.step='0.05'; spd.title='Playback speed (1 = normal)';
+        spd.value=String((playerModelCfg.clipSpeed && playerModelCfg.clipSpeed[stKey]!=null) ? playerModelCfg.clipSpeed[stKey] : 1);
+        spd.style.cssText='flex:0 0 52px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 4px;font-size:11px;';
+        spd.onchange=()=>{ if(!playerModelCfg.clipSpeed) playerModelCfg.clipSpeed={}; const v=Math.max(0.1,Math.min(4,parseFloat(spd.value)||1)); playerModelCfg.clipSpeed[stKey]=v; spd.value=String(v); applyAnimSpeedLive(stKey, v); };
+        row.appendChild(sp); row.appendChild(sel); row.appendChild(spd); urlHost.appendChild(row);
       }
       refreshPlayerClipOptions();
       const pbRow=document.createElement('div'); pbRow.className='row2'; pbRow.style.marginTop='4px'; pbRow.style.flexWrap='wrap';
