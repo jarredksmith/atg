@@ -9120,6 +9120,12 @@ let tpAimHeight = 0;
 try{ const s=parseFloat(localStorage.getItem('breach_tp_aim_side')); if(!isNaN(s)) tpAimSide=Math.max(-3,Math.min(3,s)); }catch(e){}
 try{ const d=parseFloat(localStorage.getItem('breach_tp_aim_dist')); if(!isNaN(d)) tpAimDist=Math.max(1.5,Math.min(10,d)); }catch(e){}
 try{ const h=parseFloat(localStorage.getItem('breach_tp_aim_height')); if(!isNaN(h)) tpAimHeight=Math.max(-2,Math.min(3,h)); }catch(e){}
+// Third-person tracer origin offset (camera-local): where the gunfire streak STARTS on screen, so it lines
+// up with the character's gun instead of the first-person muzzle. side +=right, up +=higher, fwd +=ahead.
+let tpMuzSide = 0.5, tpMuzUp = -0.2, tpMuzFwd = 0.6;
+try{ const s=parseFloat(localStorage.getItem('breach_tp_muz_side')); if(!isNaN(s)) tpMuzSide=Math.max(-3,Math.min(3,s)); }catch(e){}
+try{ const u=parseFloat(localStorage.getItem('breach_tp_muz_up')); if(!isNaN(u)) tpMuzUp=Math.max(-2,Math.min(2,u)); }catch(e){}
+try{ const fw=parseFloat(localStorage.getItem('breach_tp_muz_fwd')); if(!isNaN(fw)) tpMuzFwd=Math.max(-1,Math.min(3,fw)); }catch(e){}
 let _ownAvatar=null, _ownAvatarKey='', _tpCaster=null, _ownPrevX=0, _ownPrevZ=0, _ownSpeed=0;
 const _tpBack=new THREE.Vector3(), _tpEye=new THREE.Vector3(), _tpLookAt=new THREE.Vector3();
 function ensureOwnAvatar(){
@@ -10508,7 +10514,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 378 · 2026-06-12';
+const BUILD_VERSION = 'build 379 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11683,10 +11689,23 @@ function shoot(){
   // The gun is drawn in the viewmodel overlay, so find where its barrel appears on screen and map that to a
   // world point a couple metres ahead — the world-space tracer then visibly emanates from the weapon.
   const muzzleWorld = new THREE.Vector3();
-  vmMuzzle.getWorldPosition(muzzleWorld); muzzleWorld.project(vmCam);
-  _muzNdc.set(muzzleWorld.x, muzzleWorld.y);
-  raycaster.setFromCamera(_muzNdc, camera);
-  raycaster.ray.at(2.2, muzzleWorld);
+  if(tpMode){
+    // third-person: start the streak from the character's gun, not the FPS viewmodel. Build a camera-local
+    // offset (right/up/forward) anchored on the player so it visually matches where the body holds the gun.
+    const _cy=Math.cos(player.yaw), _sy=Math.sin(player.yaw), _cp=Math.cos(player.pitch), _sp=Math.sin(player.pitch);
+    const _fx=-_cp*_sy, _fy=_sp, _fz=-_cp*_cy;     // view forward
+    const _rx=_cy, _rz=-_sy;                        // view-right (level)
+    muzzleWorld.set(
+      player.pos.x + _rx*tpMuzSide + _fx*tpMuzFwd,
+      (player.pos.y - 0.2) + tpMuzUp + _fy*tpMuzFwd,
+      player.pos.z + _rz*tpMuzSide + _fz*tpMuzFwd
+    );
+  } else {
+    vmMuzzle.getWorldPosition(muzzleWorld); muzzleWorld.project(vmCam);
+    _muzNdc.set(muzzleWorld.x, muzzleWorld.y);
+    raycaster.setFromCamera(_muzNdc, camera);
+    raycaster.ray.at(2.2, muzzleWorld);
+  }
   const spread = w.spread * (1 - adsBlend*0.8);   // aiming tightens spread up to 80%
 
   for(let p=0; p<w.pellets; p++){
@@ -15653,6 +15672,11 @@ function renderEditorFields(){
         mkSlider('Distance', ()=>tpAimDist, v=>tpAimDist=v, 1.5, 10, 0.1, v=>v.toFixed(1)+'m', 'breach_tp_aim_dist');
         mkSlider('Height', ()=>tpAimHeight, v=>tpAimHeight=v, -2, 3, 0.1, v=> v===0?'level':(v>0?'+':'')+v.toFixed(1), 'breach_tp_aim_height');
         const tpHint=document.createElement('div'); tpHint.className='hint'; tpHint.style.cssText='font-size:10px;opacity:0.7;margin:2px 0 0;'; tpHint.textContent='Third-person framing (toggle Camera in the pause menu). The top set is your normal view; the bottom set is what the camera eases to while you hold right-click to aim.'; urlHost.appendChild(tpHint);
+        const muzHdr=document.createElement('div'); muzHdr.className='hint'; muzHdr.innerHTML='<b>Gunfire origin (third-person)</b>'; muzHdr.style.margin='7px 0 2px'; urlHost.appendChild(muzHdr);
+        mkSlider('Side', ()=>tpMuzSide, v=>tpMuzSide=v, -3, 3, 0.05, v=> v===0?'center':(v>0?'right ':'left ')+Math.abs(v).toFixed(2), 'breach_tp_muz_side');
+        mkSlider('Up', ()=>tpMuzUp, v=>tpMuzUp=v, -2, 2, 0.05, v=> v===0?'level':(v>0?'+':'')+v.toFixed(2), 'breach_tp_muz_up');
+        mkSlider('Forward', ()=>tpMuzFwd, v=>tpMuzFwd=v, -1, 3, 0.05, v=>v.toFixed(2), 'breach_tp_muz_fwd');
+        const muzHint=document.createElement('div'); muzHint.className='hint'; muzHint.style.cssText='font-size:10px;opacity:0.7;margin:2px 0 0;'; muzHint.textContent='Where the bullet streak STARTS in third-person, so it lines up with the character\'s gun (the shot itself still goes through the crosshair).'; urlHost.appendChild(tpHint);
       }
       const pHint=document.createElement('div'); pHint.className='hint'; pHint.style.margin='3px 0 0'; pHint.textContent='Preview avatar is in front of you. Tap a state to test its clip; in-game it switches automatically with movement.';
       urlHost.appendChild(pHint);
