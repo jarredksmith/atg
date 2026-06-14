@@ -6279,35 +6279,42 @@ const mixers = [];
 // Build a mixer for any baked clips. mode 'loop' = ambient auto-loop (default); 'trigger' = stay paused
 // at the start until the player activates the object with E (see interact()). Actions are kept on
 // userData.animActions so the trigger / live mode-switch can drive them.
+// Map a prop's chosen playback style to a THREE loop mode. 'loop'=repeat, 'pingpong'=back-and-forth, 'once'=play once + hold last frame.
+function _propLoopMode(play){ return play==='pingpong' ? THREE.LoopPingPong : (play==='once' ? THREE.LoopOnce : THREE.LoopRepeat); }
 function playModelAnimations(root, gltf, mode){
   if(!gltf || !gltf.animations || !gltf.animations.length) return null;
-  mode = (mode === 'trigger') ? 'trigger' : 'loop';
+  // back-compat: legacy `mode` was 'loop' (auto+repeat) or 'trigger' (E+once). New props carry animTrigger+animPlay.
+  if(root.userData.animTrigger == null){ root.userData.animTrigger = (mode==='trigger') ? 'interact' : 'auto'; }
+  if(root.userData.animPlay == null){ root.userData.animPlay = (mode==='trigger') ? 'once' : 'loop'; }
+  const trig = root.userData.animTrigger, play = root.userData.animPlay;
   const mixer = new THREE.AnimationMixer(root);
   const actions = [];
   root.userData.animClipNames = (gltf.animations||[]).map(c=>c.name||'');   // names for the editor picker
-  const chosen = root.userData.animClip || '';   // '' = play all (legacy behavior); else only the named clip
+  const chosen = root.userData.animClip || '';   // '' = play all; else only the named clip
+  const lm = _propLoopMode(play);
   for(const clip of gltf.animations){
     const action = mixer.clipAction(clip);
     action.userData = action.userData || {}; action.userData.clipName = clip.name||'';
+    action.loop = lm; action.clampWhenFinished = (play==='once');
     actions.push(action);
-    const usethis = !chosen || (clip.name === chosen);   // when a clip is chosen, only it plays
-    if(mode === 'trigger'){ action.loop = THREE.LoopOnce; action.clampWhenFinished = true; /* not played yet */ }
-    else if(usethis){ action.loop = THREE.LoopRepeat; action.play(); }
+    const usethis = !chosen || (clip.name === chosen);
+    if(trig==='auto' && usethis){ action.play(); }   // auto: start now. interact/signal: wait to be fired.
   }
   mixers.push(mixer);
-  root.userData.mixer = mixer;          // track for cleanup on delete/swap
-  root.userData.animActions = actions;  // for trigger playback + live mode switching
-  root.userData.animMode = mode;
+  root.userData.mixer = mixer;
+  root.userData.animActions = actions;
+  root.userData.animMode = (trig==='auto') ? 'loop' : 'trigger';   // legacy field kept in sync
   return mixer;
 }
 // Switch which clip an already-loaded LOOP prop plays, live (no reload). '' = all clips.
 function setPropAnimClip(obj, clipName){
   if(!obj || !obj.userData.animActions) return;
   obj.userData.animClip = clipName || '';
-  if((obj.userData.animMode||'loop') !== 'loop') return;   // trigger props play on E, not continuously
+  if((obj.userData.animTrigger||'auto') !== 'auto') return;   // interact/signal props play when fired, not now
+  const lm = _propLoopMode(obj.userData.animPlay||'loop');
   for(const a of obj.userData.animActions){
     const nm = (a.userData && a.userData.clipName) || '';
-    if(!clipName || nm === clipName){ a.reset(); a.loop = THREE.LoopRepeat; a.enabled = true; a.setEffectiveWeight(1); a.play(); }
+    if(!clipName || nm === clipName){ a.reset(); a.loop = lm; a.clampWhenFinished=(obj.userData.animPlay==='once'); a.enabled = true; a.setEffectiveWeight(1); a.play(); }
     else { a.stop(); }
   }
 }
@@ -6435,29 +6442,42 @@ function setEnemyAnimState(body, state){
   if(cur && cur !== next) cur.crossFadeTo(next, 0.18, false);
   v.userData.animState = key;
 }
-function setPropAnimMode(obj, mode){
-  mode = (mode === 'trigger') ? 'trigger' : 'loop';
-  obj.userData.animMode = mode;
+// Set WHEN the prop animates: 'auto' (on spawn) / 'interact' (E) / 'signal' (only via a signal).
+function setPropAnimTrigger(obj, trig){
+  trig = (trig==='interact'||trig==='signal') ? trig : 'auto';
+  obj.userData.animTrigger = trig;
+  obj.userData.animMode = (trig==='auto') ? 'loop' : 'trigger';   // keep legacy field in sync
   const acts = obj.userData.animActions; if(!acts || !acts.length) return;
   const chosen = obj.userData.animClip || '';
+  if(trig==='auto'){
+    for(const a of acts){ const nm=(a.userData&&a.userData.clipName)||''; if(!chosen||nm===chosen){ a.reset(); a.play(); } else a.stop(); }
+  } else {
+    for(const a of acts){ a.stop(); }   // interact/signal: hold until fired
+  }
+}
+// Set HOW the prop animates: 'loop' / 'pingpong' / 'once'. Applies live.
+function setPropAnimPlay(obj, play){
+  play = (play==='pingpong'||play==='once') ? play : 'loop';
+  obj.userData.animPlay = play;
+  const acts = obj.userData.animActions; if(!acts || !acts.length) return;
+  const lm = _propLoopMode(play), wasPlaying = (obj.userData.animTrigger||'auto')==='auto';
+  const chosen = obj.userData.animClip || '';
   for(const a of acts){
-    const nm = (a.userData && a.userData.clipName) || '';
-    if(mode === 'loop'){
-      if(!chosen || nm === chosen){ a.loop = THREE.LoopRepeat; a.clampWhenFinished = false; a.reset(); a.play(); }   // only the chosen clip loops
-      else { a.stop(); }
-    }
-    else { a.loop = THREE.LoopOnce; a.clampWhenFinished = true; a.stop(); }   // hold at start until activated
+    a.loop = lm; a.clampWhenFinished = (play==='once');
+    const nm=(a.userData&&a.userData.clipName)||'';
+    if(wasPlaying && (!chosen||nm===chosen)){ a.reset(); a.play(); }   // auto props restart with the new style
   }
 }
 // Play a trigger-mode prop's animation once from the start (E-key activation).
 function playPropAnimationOnce(obj, clip){
   const acts = obj && obj.userData.animActions; if(!acts || !acts.length) return;
-  const want = clip || obj.userData.animClip || '';   // E-key: fall back to the clip chosen in the editor
+  const want = clip || obj.userData.animClip || '';   // fall back to the clip chosen in the editor
+  const lm = _propLoopMode(obj.userData.animPlay||'once'), once = (obj.userData.animPlay==='once');
   let list = acts;
   if(want){ const m = acts.filter(a=>{ try{ return a.getClip().name===want; }catch(e){ return false; } });
     if(m.length) list = m;   // exact clip match; an unknown name falls back to all clips rather than silence
   }
-  for(const a of list){ a.reset(); a.play(); }
+  for(const a of list){ a.loop = lm; a.clampWhenFinished = once; a.reset(); a.play(); }
   if(SFX && SFX.swap) SFX.swap();   // small mechanical click for feedback
 }
 // Tell peers to play prop #i's trigger animation (so a trigger one player fires is seen by everyone).
@@ -7181,7 +7201,8 @@ function finalizeProp(obj, src, t, gltf, slot, animMode, mat, nid, animClip){
   obj.traverse(o=>{ if(o.isMesh){ o.castShadow = true; o.receiveShadow = true; } });
   obj.userData.src = src;
   obj.userData.nid = nid || genNid();   // assign once; load/net paths pass an existing id to keep peers aligned
-  obj.userData.animMode = (animMode === 'trigger') ? 'trigger' : 'loop';
+  if(animMode && typeof animMode==='object'){ obj.userData.animTrigger = animMode.trig||'auto'; obj.userData.animPlay = animMode.play||'loop'; obj.userData.animMode = (obj.userData.animTrigger==='auto')?'loop':'trigger'; }
+  else obj.userData.animMode = (animMode === 'trigger') ? 'trigger' : 'loop';
   scene.add(obj);
   obj.updateMatrixWorld(true);
   obj.userData.footR = _propFootR(obj);
@@ -7238,7 +7259,7 @@ function removeProp(idx){
 function loadHostedProps(){
   const list = (savedLevel && Array.isArray(savedLevel.props)) ? savedLevel.props : SCENE_PROPS;
   propModels.length = list.length;   // reserve slots so async GLB loads can't clobber later push-spawned props
-  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; if(s.n) x.cs=s.n; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid, p.animClip));   // slot=i preserves order
+  list.forEach((p, i)=> spawnProp(p.src, p.t, (obj)=>{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; if(s.n) x.cs=s.n; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }, i, {trig:(p.animTrig||(p.anim==='trigger'?'interact':'auto')), play:(p.animPlay||(p.anim==='trigger'?'once':'loop'))}, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid, p.animClip));   // slot=i preserves order
 }
 loadHostedProps();
 
@@ -9099,7 +9120,7 @@ function loadLevelFromNet(level){
   // rebuild from the host's data
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; if(s.n) x.cs=s.n; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }catch(e){ console.warn('net prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid, p.animClip); }catch(e){ console.warn('net prop '+i+' failed', e); } });
+    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; if(s.n) x.cs=s.n; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }catch(e){ console.warn('net prop '+i+' apply failed', e); } }, i, {trig:(p.animTrig||(p.anim==='trigger'?'interact':'auto')), play:(p.animPlay||(p.anim==='trigger'?'once':'loop'))}, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid, p.animClip); }catch(e){ console.warn('net prop '+i+' failed', e); } });
   }
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
@@ -10440,7 +10461,7 @@ function checkProximity(){
   if(!nearTarget){
     let best=null, bd=2.2;
     for(const o of propModels){
-      if(!o || o.userData.animMode!=='trigger' || !(o.userData.animActions && o.userData.animActions.length)) continue;
+      if(!o || (o.userData.animTrigger||(o.userData.animMode==='trigger'?'interact':'auto'))!=='interact' || !(o.userData.animActions && o.userData.animActions.length)) continue;
       let d;
       const b = o.userData.box;
       if(b){
@@ -10718,7 +10739,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 398 · 2026-06-12';
+const BUILD_VERSION = 'build 399 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13893,6 +13914,8 @@ function propMaterialDesc(o){
 function propEntry(o){
   const e={ src:o.userData.src||PROP_MODEL_URL, t:[ (o.userData.physHome?o.userData.physHome.x:o.position.x), (o.userData.physHome?o.userData.physHome.y:o.position.y), (o.userData.physHome?o.userData.physHome.z:o.position.z), o.rotation.x,o.rotation.y,o.rotation.z,o.scale.x,o.scale.y,o.scale.z] };
   if(o.userData.animMode==='trigger') e.anim='trigger';
+  if(o.userData.animTrigger && o.userData.animTrigger!=='auto') e.animTrig=o.userData.animTrigger;
+  if(o.userData.animPlay && o.userData.animPlay!=='loop') e.animPlay=o.userData.animPlay;
   if(o.userData.animClip) e.animClip = o.userData.animClip;
   if(o.userData.xa && o.userData.xa.on){ const a=o.userData.xa; e.xa={ mode:a.mode||'loop', trig:a.trig||'auto', mx:a.mx||0, my:a.my||0, mz:a.mz||0, rx:a.rx||0, ry:a.ry||0, rz:a.rz||0, dur:a.dur||2 }; if(a.path && a.path.length>=2) e.xa.path = a.path.map(q=>[+q[0],+q[1],+q[2]]); }
   if(o.userData.phys){ e.dyn=true; if(o.userData.mass!=null) e.mass=o.userData.mass;
@@ -14173,7 +14196,7 @@ function restoreLevel(level){
   propModels.length = 0;
   if(Array.isArray(level.props)){
     propModels.length = level.props.length;
-    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; if(s.n) x.cs=s.n; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }catch(e){ console.warn('prop '+i+' apply failed', e); } }, i, p.anim, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid, p.animClip); }catch(e){ console.warn('prop '+i+' failed to load', e); } });
+    level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; if(s.n) x.cs=s.n; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); }catch(e){ console.warn('prop '+i+' apply failed', e); } }, i, {trig:(p.animTrig||(p.anim==='trigger'?'interact':'auto')), play:(p.animPlay||(p.anim==='trigger'?'once':'loop'))}, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid, p.animClip); }catch(e){ console.warn('prop '+i+' failed to load', e); } });
   }
   // lights
   for(let i=lightModels.length-1;i>=0;i--) removeLight(i);
@@ -15507,9 +15530,14 @@ function renderEditorFields(){
         ()=>{ newPropAnimMode='trigger'; renderEditorFields(); });
       const sel = propModels[tgt.idx];
       if(sel && sel.userData.animActions && sel.userData.animActions.length){
-        pair('Selected prop (has animation):', sel.userData.animMode||'loop',
-          ()=>{ setPropAnimMode(sel,'loop'); renderEditorFields(); },
-          ()=>{ setPropAnimMode(sel,'trigger'); renderEditorFields(); });
+        const curTrig = sel.userData.animTrigger || (sel.userData.animMode==='trigger'?'interact':'auto');
+        const curPlay = sel.userData.animPlay || 'loop';
+        const mseg=(label,opts,cur,on)=>{ const h=document.createElement('div'); h.className='hint'; h.style.margin='6px 0 2px'; h.innerHTML=label; animHost.appendChild(h);
+          const row=document.createElement('div'); row.className='row2';
+          opts.forEach(o=>{ const b=document.createElement('button'); b.textContent=o[1]; b.style.cssText='flex:1 0 auto;font-size:11px;padding:3px 6px;'; if(cur===o[0]){ b.style.background='rgba(56,245,181,0.28)'; b.style.color='#eafff7'; } b.onclick=()=>{ on(o[0]); renderEditorFields(); }; row.appendChild(b); });
+          animHost.appendChild(row); };
+        mseg('Animation \u2014 when it plays:', [['auto','Auto'],['interact','E Activate'],['signal','Signals only']], curTrig, v=>setPropAnimTrigger(sel, v));
+        mseg('Animation \u2014 how it plays:', [['loop','\u27f3 Loop'],['pingpong','\u21c4 Ping-pong'],['once','\u2192 Once']], curPlay, v=>setPropAnimPlay(sel, v));
         // clip picker: list every animation the model ships with; choose one, or "all" for the legacy overlay
         const names = sel.userData.animClipNames || [];
         if(names.length){
@@ -15519,7 +15547,7 @@ function renderEditorFields(){
           const optAll=document.createElement('option'); optAll.value=''; optAll.textContent='(all clips at once)'; csel.appendChild(optAll);
           for(const nm of names){ if(!nm) continue; const o=document.createElement('option'); o.value=nm; o.textContent=nm; csel.appendChild(o); }
           csel.value = sel.userData.animClip || '';
-          csel.onchange=()=>{ setPropAnimClip(sel, csel.value); if(sel.userData.animMode==='trigger') sel.userData.animClip=csel.value; };   // live for loop props; stored for trigger props
+          csel.onchange=()=>{ setPropAnimClip(sel, csel.value); sel.userData.animClip=csel.value; };   // live for auto props; stored for interact/signal
           cr.appendChild(cl); cr.appendChild(csel); animHost.appendChild(cr);
           const ch=document.createElement('div'); ch.className='hint'; ch.style.cssText='font-size:10px;opacity:0.7;margin:1px 0 0;'; ch.textContent=names.filter(Boolean).length+' animation(s) in this model. Pick one to play it on its own.'; animHost.appendChild(ch);
         }
