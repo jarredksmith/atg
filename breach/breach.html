@@ -9190,7 +9190,7 @@ function makeNameSprite(text, team){
   x.font='bold 30px sans-serif'; x.textAlign='center'; x.textBaseline='middle';
   x.fillStyle='rgba(0,0,0,0.45)'; x.fillRect(0,0,256,64);
   x.fillStyle = team===0 ? '#ff8a93' : (team===1 ? '#9fd0ff' : '#9fd8ff'); x.fillText(String(text).slice(0,14),128,34);
-  const spr=new THREE.Sprite(new THREE.SpriteMaterial({ map:new THREE.CanvasTexture(c), depthTest:false, transparent:true }));
+  const spr=new THREE.Sprite(new THREE.SpriteMaterial({ map:new THREE.CanvasTexture(c), depthTest:true, depthWrite:false, transparent:true }));   // depthTest so walls/props hide the tag (no see-through wallhack); depthWrite off so it doesn't occlude other transparents
   spr.scale.set(2.4,0.6,1);
   return spr;
 }
@@ -10775,7 +10775,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 404 · 2026-06-12';
+const BUILD_VERSION = 'build 405 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
