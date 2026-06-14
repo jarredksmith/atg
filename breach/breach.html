@@ -8725,6 +8725,7 @@ function refreshSpawnRegionMarker(){
   if(spawnRegionMarker){ scene.remove(spawnRegionMarker); spawnRegionMarker.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); spawnRegionMarker=null; }
   if(!sr || !sr.on) return;
   const g=new THREE.Group();
+  const WALL_H = 8;   // visual-only height so the spawn area reads as a tall space (like the extraction pillar)
   if(sr.shape==='poly'){
     const pts=sr.poly||[];
     if(pts.length){
@@ -8735,15 +8736,31 @@ function refreshSpawnRegionMarker(){
       if(verts.length>=2){ const lg=new THREE.BufferGeometry().setFromPoints(verts); const line=new THREE.Line(lg, new THREE.LineBasicMaterial({ color:0x9b7bff, transparent:true, opacity:0.9 })); line.renderOrder=9000; g.add(line); }
       // vertex dots so you can see each clicked point
       for(const p of pts){ const d=new THREE.Mesh(new THREE.SphereGeometry(0.5,12,8), new THREE.MeshBasicMaterial({ color:0x9b7bff, transparent:true, opacity:0.9, depthTest:false })); d.position.set(p.x, _maxTerrainOver(p.x,p.z,0)+y, p.z); d.renderOrder=9001; g.add(d); }
-      // translucent fill (fan triangulation from the centroid — fine for the simple convex-ish arenas this targets)
-      if(pts.length>=3){ const c=_polyCentroid(pts); const fy=_maxTerrainOver(c.x,c.z,0)+0.06; const pos=[]; for(let i=0;i<pts.length;i++){ const a=pts[i], b=pts[(i+1)%pts.length]; pos.push(c.x,fy,c.z, a.x,fy,a.z, b.x,fy,b.z); } const fg=new THREE.BufferGeometry(); fg.setAttribute('position', new THREE.Float32BufferAttribute(pos,3)); const fill=new THREE.Mesh(fg, new THREE.MeshBasicMaterial({ color:0x9b7bff, transparent:true, opacity:0.10, side:THREE.DoubleSide, depthWrite:false })); g.add(fill); }
+      if(pts.length>=3){
+        const c=_polyCentroid(pts); const fy=_maxTerrainOver(c.x,c.z,0)+0.06;
+        // translucent floor fill (fan from the centroid)
+        { const pos=[]; for(let i=0;i<pts.length;i++){ const a=pts[i], b=pts[(i+1)%pts.length]; pos.push(c.x,fy,c.z, a.x,fy,a.z, b.x,fy,b.z); } const fg=new THREE.BufferGeometry(); fg.setAttribute('position', new THREE.Float32BufferAttribute(pos,3)); const fill=new THREE.Mesh(fg, new THREE.MeshBasicMaterial({ color:0x9b7bff, transparent:true, opacity:0.10, side:THREE.DoubleSide, depthWrite:false })); g.add(fill); }
+        // tall walls extruded up from each edge (the "tall area" volume)
+        const wpos=[]; for(let i=0;i<pts.length;i++){ const a=pts[i], b=pts[(i+1)%pts.length]; const ay=_maxTerrainOver(a.x,a.z,0), by=_maxTerrainOver(b.x,b.z,0);
+          wpos.push(a.x,ay,a.z, b.x,by,b.z, a.x,ay+WALL_H,a.z,   b.x,by,b.z, b.x,by+WALL_H,b.z, a.x,ay+WALL_H,a.z); }
+        const wg=new THREE.BufferGeometry(); wg.setAttribute('position', new THREE.Float32BufferAttribute(wpos,3)); wg.computeVertexNormals();
+        const walls=new THREE.Mesh(wg, new THREE.MeshBasicMaterial({ color:0x9b7bff, transparent:true, opacity:0.07, side:THREE.DoubleSide, depthWrite:false })); g.add(walls);
+        // top outline so the ceiling of the volume is visible
+        const tv=[]; for(const p of pts){ tv.push(new THREE.Vector3(p.x, _maxTerrainOver(p.x,p.z,0)+WALL_H, p.z)); } tv.push(tv[0].clone());
+        const tl=new THREE.Line(new THREE.BufferGeometry().setFromPoints(tv), new THREE.LineBasicMaterial({ color:0x9b7bff, transparent:true, opacity:0.4 })); g.add(tl);
+      }
     }
   } else {
-    const r=Math.max(1,+sr.r||30);
+    const r=Math.max(1,+sr.r||30); const cx=+sr.x||0, cz=+sr.z||0, by=_maxTerrainOver(cx,cz,r);
     const ring=new THREE.Mesh(new THREE.RingGeometry(Math.max(0.5,r-0.5), r, 64), new THREE.MeshBasicMaterial({ color:0x9b7bff, transparent:true, opacity:0.6, side:THREE.DoubleSide, depthWrite:false }));
-    ring.rotation.x=-Math.PI/2; ring.position.set(+sr.x||0, _maxTerrainOver(+sr.x||0,+sr.z||0,r)+0.08, +sr.z||0); g.add(ring);
+    ring.rotation.x=-Math.PI/2; ring.position.set(cx, by+0.08, cz); g.add(ring);
     const fill=new THREE.Mesh(new THREE.CircleGeometry(r,56), new THREE.MeshBasicMaterial({ color:0x9b7bff, transparent:true, opacity:0.08, side:THREE.DoubleSide, depthWrite:false }));
-    fill.rotation.x=-Math.PI/2; fill.position.set(+sr.x||0, _maxTerrainOver(+sr.x||0,+sr.z||0,r)+0.06, +sr.z||0); g.add(fill);
+    fill.rotation.x=-Math.PI/2; fill.position.set(cx, by+0.06, cz); g.add(fill);
+    // tall pillar wall (like the extraction beacon) so the area reads as a space
+    const wall=new THREE.Mesh(new THREE.CylinderGeometry(r, r, WALL_H, 48, 1, true), new THREE.MeshBasicMaterial({ color:0x9b7bff, transparent:true, opacity:0.07, side:THREE.DoubleSide, depthWrite:false }));
+    wall.position.set(cx, by+WALL_H/2, cz); g.add(wall);
+    const topRing=new THREE.Mesh(new THREE.RingGeometry(Math.max(0.5,r-0.5), r, 64), new THREE.MeshBasicMaterial({ color:0x9b7bff, transparent:true, opacity:0.35, side:THREE.DoubleSide, depthWrite:false }));
+    topRing.rotation.x=-Math.PI/2; topRing.position.set(cx, by+WALL_H, cz); g.add(topRing);
   }
   g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.spawnRegionMarker=true;
   scene.add(g); spawnRegionMarker=g;
@@ -11119,7 +11136,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 427 · 2026-06-12';
+const BUILD_VERSION = 'build 428 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
