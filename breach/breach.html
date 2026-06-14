@@ -11119,7 +11119,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 426 · 2026-06-12';
+const BUILD_VERSION = 'build 427 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -16861,6 +16861,18 @@ function groundPointUnderPointer(e){
   const r = renderer.domElement.getBoundingClientRect();
   const nx = ((e.clientX - r.left)/r.width)*2 - 1, ny = -((e.clientY - r.top)/r.height)*2 + 1;
   raycaster.setFromCamera(new THREE.Vector2(nx, ny), activeCam());
+  // Hit the ACTUAL surface under the cursor (arena prop, placed props, walls, terrain, floor) so the clicked
+  // XZ matches what's visible — projecting onto a flat y=0 plane parallax-shifts points off an elevated arena.
+  const targets = [];
+  if(typeof propModels!=='undefined'){ for(const p of propModels){ if(p) targets.push(p); } }
+  if(typeof dynamicProps!=='undefined'){ for(const o of dynamicProps){ if(o) targets.push(o); } }
+  if(typeof colliders!=='undefined' && colliders){ for(const c of colliders){ if(c) targets.push(c); } }
+  if(typeof floor!=='undefined' && floor) targets.push(floor);
+  if(targets.length){
+    const hits = raycaster.intersectObjects(targets, true);
+    if(hits.length) return hits[0].point.clone();   // nearest real surface -> its true x,z (and y)
+  }
+  // fallback: the flat ground plane (nothing solid under the cursor)
   const p = new THREE.Vector3();
   return raycaster.ray.intersectPlane(_groundPlane, p) ? p : null;
 }
