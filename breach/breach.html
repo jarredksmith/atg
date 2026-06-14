@@ -10759,7 +10759,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 402 · 2026-06-12';
+const BUILD_VERSION = 'build 403 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12091,6 +12091,21 @@ function drawMinimap(){
   if((objectiveActive()==='extraction'||objectiveActive()==='defend') && extractZone && extractZone.visible) blip(extractPos.x, extractPos.z, '#38f5b5', 4.2);
   if(objectiveActive()==='destroy'){ for(const m of _destroyMarkers){ const o=m.userData.prop; if(o && !o.userData._shattered && o.parent) blip(o.position.x, o.position.z, '#ff5b6b', 3.6); } }
   if(objectiveActive()==='escort'){ if(extractZone && extractZone.visible) blip(extractPos.x, extractPos.z, '#38f5b5', 4.2); if(escortMarker && escortMarker.visible) blip(escortPos.x, escortPos.z, '#2fd0e0', 4.4); }
+
+  // multiplayer: other players + bots. Team modes color by team (red/blue); FFA shows everyone as foes.
+  if(typeof NET!=='undefined' && NET.mode){
+    const team = (n)=> (n===0?'#ff6b78':'#5ab0ff');
+    const myTeam = (NET.teams && NET.myId!=null) ? NET.teams[NET.myId] : undefined;
+    const isTeam = (typeof teamMode==='function') && teamMode();
+    const foe = '#ff4d5e', friend = '#46e0a4';
+    const colorFor = (tm)=> isTeam ? (tm===myTeam ? friend : foe) : foe;
+    if(NET.players){ for(const id in NET.players){ const rp=NET.players[id];
+      if(!rp || !rp.mesh || (rp.hp!=null && rp.hp<=0)) continue;
+      const tm = (NET.teams && NET.teams[id]!=null) ? NET.teams[id] : undefined;
+      blip(rp.mesh.position.x, rp.mesh.position.z, isTeam?colorFor(tm):'#ff4d5e', 3); } }
+    if(typeof bots!=='undefined' && bots){ for(const b of bots){ if(!b || b.dead) continue;
+      blip(b.pos.x, b.pos.z, isTeam?colorFor(b.team):'#ff4d5e', 2.8); } }
+  }
 
   ctx.restore();
 
