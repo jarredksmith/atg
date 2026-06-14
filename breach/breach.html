@@ -8697,14 +8697,22 @@ function refreshDeathZoneMarkers(){
   const vis=(typeof editorOpen!=='undefined' && editorOpen);
   for(let i=0;i<deathZones.length;i++){
     const z=deathZones[i]; const r=Math.max(1,+z.r||6);
+    const baseY=(+z.y||0), h=Math.max(0.5, z.h!=null?+z.h:3);   // the lethal band: baseY .. baseY+h
     const grp=new THREE.Group();
     const sel=(i===selDeathZone);
-    const ring=new THREE.Mesh(new THREE.RingGeometry(Math.max(0.3,r-0.4), r, 56), new THREE.MeshBasicMaterial({ color:0xff3b30, transparent:true, opacity:sel?0.8:0.5, side:THREE.DoubleSide, depthWrite:false }));
-    ring.rotation.x=-Math.PI/2; ring.position.y=0.07; grp.add(ring);
+    // base ring + fill (the footprint, at the band floor)
+    const ring=new THREE.Mesh(new THREE.RingGeometry(Math.max(0.3,r-0.4), r, 56), new THREE.MeshBasicMaterial({ color:0xff3b30, transparent:true, opacity:sel?0.85:0.55, side:THREE.DoubleSide, depthWrite:false }));
+    ring.rotation.x=-Math.PI/2; ring.position.y=baseY+0.07; grp.add(ring);
     const fill=new THREE.Mesh(new THREE.CircleGeometry(r, 48), new THREE.MeshBasicMaterial({ color:0xff3b30, transparent:true, opacity:0.12, side:THREE.DoubleSide, depthWrite:false }));
-    fill.rotation.x=-Math.PI/2; fill.position.y=0.05; grp.add(fill);
+    fill.rotation.x=-Math.PI/2; fill.position.y=baseY+0.05; grp.add(fill);
+    // height: a translucent wall spanning the lethal band (like the extraction pillar), so the kill height is visible
+    const wall=new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 40, 1, true), new THREE.MeshBasicMaterial({ color:0xff3b30, transparent:true, opacity:sel?0.16:0.10, side:THREE.DoubleSide, depthWrite:false }));
+    wall.position.y=baseY+h/2; grp.add(wall);
+    // top ring marking the lethal ceiling (above this height you're safe)
+    const topRing=new THREE.Mesh(new THREE.RingGeometry(Math.max(0.3,r-0.3), r, 56), new THREE.MeshBasicMaterial({ color:0xff7a73, transparent:true, opacity:sel?0.8:0.5, side:THREE.DoubleSide, depthWrite:false }));
+    topRing.rotation.x=-Math.PI/2; topRing.position.y=baseY+h; grp.add(topRing);
     const dot=new THREE.Mesh(new THREE.SphereGeometry(sel?0.7:0.55,14,10), new THREE.MeshBasicMaterial({ color:0xff3b30, transparent:true, opacity:0.9, depthWrite:false }));
-    dot.position.y=0.8; grp.add(dot);
+    dot.position.y=baseY+0.8; grp.add(dot);
     grp.position.set(+z.x||0, _maxTerrainOver(+z.x||0,+z.z||0,0), +z.z||0); grp.visible=vis; grp.userData.deathZoneMarker=true;
     scene.add(grp); deathZoneMarkers.push(grp);
   }
@@ -11111,7 +11119,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 425 · 2026-06-12';
+const BUILD_VERSION = 'build 426 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
