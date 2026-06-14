@@ -7330,6 +7330,23 @@ function spawnProp(src, t, onReady, slot, animMode, mat, onError, nid, animClip)
     (err)=>{ console.warn('Prop load failed for', src, '-', err && err.message); if(onError) onError(err); }
   );
 }
+// Delete EVERYTHING placed in the editor — a fresh scene. Uses the per-item removers so physics bodies,
+// emitter lights, and markers are cleaned up properly. Keeps world/terrain/sky/gameplay settings intact.
+function wipeScene(){
+  pushUndoSnapshot();
+  for(let i=propModels.length-1;i>=0;i--) removeProp(i);
+  if(typeof removeLight==='function') for(let i=lightModels.length-1;i>=0;i--) removeLight(i);
+  if(typeof removeSpawnMarker==='function') for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
+  pickupSpots.length=0; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
+  lootSpots.length=0; selLoot=-1; if(typeof refreshLootMarkers==='function') refreshLootMarkers();
+  if(typeof stopAudioZones==='function') stopAudioZones(); audioZones.length=0; if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers();
+  deathZones.length=0; selDeathZone=-1; if(typeof refreshDeathZoneMarkers==='function') refreshDeathZoneMarkers();
+  // clear selections so the editor doesn't point at a deleted object
+  selProps.length=0; selLights.length=0; selSpawns=[]; selPickup=-1;
+  if(editorTargets.props) editorTargets.props.idx=-1; if(editorTargets.lights) editorTargets.lights.idx=-1; if(editorTargets.spawns) editorTargets.spawns.idx=-1;
+  if(typeof updateSelectionHighlight==='function') updateSelectionHighlight();
+  if(typeof renderEditorFields==='function') renderEditorFields();
+}
 function removeProp(idx){
   const obj = propModels[idx]; if(!obj) return;
   if(obj.userData.emitLight && typeof unregisterEmitterLight==='function') unregisterEmitterLight(obj.userData.emitLight);
@@ -7542,12 +7559,23 @@ function buildPlayerSpawnMarker(){
   pole.position.y = 0.9; pole.renderOrder = 9000; g.add(pole);
   const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.6, 10), new THREE.MeshBasicMaterial({ color:0xffffff, depthTest:false }));
   arrow.rotation.x = Math.PI/2; arrow.position.set(0, 0.18, -1.1); arrow.renderOrder = 9001; g.add(arrow);   // points to the spawn facing (-Z forward)
-  g.userData.isPlayerStart = true; g.userData.post = pole;
+  // Height aids (only meaningful when raised): a vertical drop-line down to the surface + a shadow disc where
+  // the player will land, so it's easy to judge how high the start floats above a prop/platform.
+  const dropLine = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1, 6), new THREE.MeshBasicMaterial({ color:0x38bdf8, transparent:true, opacity:0.5, depthTest:false }));
+  dropLine.renderOrder = 8998; dropLine.visible=false; g.add(dropLine);
+  const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.7, 24), new THREE.MeshBasicMaterial({ color:0x38bdf8, transparent:true, opacity:0.25, side:THREE.DoubleSide, depthTest:false }));
+  shadow.rotation.x = -Math.PI/2; shadow.renderOrder = 8998; shadow.visible=false; g.add(shadow);
+  g.userData.isPlayerStart = true; g.userData.post = pole; g.userData.dropLine = dropLine; g.userData.shadow = shadow;
   g.position.set(playerSpawn.x, ((typeof terrainHeightAt==='function')?terrainHeightAt(playerSpawn.x,playerSpawn.z):0)+(playerSpawn.y||0), playerSpawn.z); g.rotation.y = playerSpawn.yaw;
   g.visible = false; scene.add(g);
   return g;
 }
-function refreshPlayerSpawnMarker(){ if(playerSpawnMarker){ playerSpawnMarker.position.set(playerSpawn.x, ((typeof terrainHeightAt==='function')?terrainHeightAt(playerSpawn.x,playerSpawn.z):0)+(playerSpawn.y||0), playerSpawn.z); playerSpawnMarker.rotation.y = playerSpawn.yaw; } }
+function refreshPlayerSpawnMarker(){ if(playerSpawnMarker){ const gx=playerSpawn.x, gz=playerSpawn.z, gy=((typeof terrainHeightAt==='function')?terrainHeightAt(gx,gz):0)+(playerSpawn.y||0); playerSpawnMarker.position.set(gx, gy, gz); playerSpawnMarker.rotation.y = playerSpawn.yaw;
+  // height aids: drop a line from the marker to the surface directly beneath, and a shadow disc where it lands
+  const dl=playerSpawnMarker.userData.dropLine, sh=playerSpawnMarker.userData.shadow;
+  if(dl && sh){ let surf=(typeof surfaceTopAt==='function')?surfaceTopAt(gx,gz):-Infinity; const terr=(typeof terrainHeightAt==='function')?terrainHeightAt(gx,gz):0; if(surf===-Infinity || surf>gy+0.01) surf=terr; const h=Math.max(0, gy-surf);
+    if(h>0.15){ dl.visible=true; sh.visible=true; dl.scale.set(1,h,1); dl.position.y=-h/2; sh.position.y=-h+0.04; }
+    else { dl.visible=false; sh.visible=false; } } } }
 playerSpawnMarker = buildPlayerSpawnMarker();
 
 // ---------- Player / controls ----------
@@ -11012,7 +11040,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 421 · 2026-06-12';
+const BUILD_VERSION = 'build 422 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12781,6 +12809,19 @@ function surfaceTopAt(x, z){
     }
   }
   return top;
+}
+// Highest surface DIRECTLY BELOW a prop's base (terrain or another prop), ignoring the prop itself. Used by the
+// editor's "snap to ground" so a prop drops onto whatever is under it. Returns terrain height if nothing else.
+function surfaceTopBelow(obj){
+  const box = new THREE.Box3().setFromObject(obj);
+  const cx=(box.min.x+box.max.x)/2, cz=(box.min.z+box.max.z)/2, bottom=box.min.y;
+  const terr=(typeof terrainHeightAt==='function')?terrainHeightAt(cx,cz):0;
+  _downOrigin.set(cx, bottom+0.02, cz); _downRay.set(_downOrigin, _downDir); _downRay.far=600;   // start just under the base, look down
+  let top=-Infinity;
+  const others=colliders.filter(c=>c!==obj && !(obj.children&&obj.children.indexOf(c)>=0));
+  for(const h of _downRay.intersectObjects(others, true)){ if(h.point.y>top) top=h.point.y; }
+  if(dynamicProps.length){ for(const h of _downRay.intersectObjects(dynamicProps.filter(o=>o!==obj), true)){ if(h.point.y>top) top=h.point.y; } }
+  return (top===-Infinity) ? terr : Math.max(terr, top);
 }
 // Surface height of one specific prop directly under (x,z) — used to tell "standing on it" from
 // "walking into its side" so the player-vs-prop force code doesn't fight the mover while climbing.
@@ -14947,6 +14988,7 @@ function buildEditorPanel(){
       + '<div class="row2" style="margin-top:6px"><button id="edExport">⬇ Export .json</button><button id="edImport">⬆ Import .json</button></div>'
       + '<input type="file" id="edImportFile" accept=".json,application/json" style="display:none">'
       + '<div class="row2" style="margin-top:6px"><button id="edReset">Reset target</button><button id="edCopy">Copy code</button></div>'
+      + '<div class="row2" style="margin-top:10px"><button id="edWipe" style="width:100%;border-color:#7a2630;color:#ff9b93">🗑 Delete all objects (fresh scene)</button></div>'
       + '<div class="copied" id="edCopied"></div>'
       + '<textarea id="edOut" readonly></textarea>')
     + sec('Campaign', 'campaign', '<div id="edCampaign"></div>')
@@ -15052,6 +15094,11 @@ function buildEditorPanel(){
   p.querySelector('#edPlay').onclick = ()=>{ startGame(); };           // test the live-built level immediately (no save/reload)
   p.querySelector('#edMenu').onclick = ()=>{ editorToMenu(); };        // back to the start overlay
   p.querySelector('#edCopy').onclick = ()=>{ copyEditorCode(); };
+  { const wb=p.querySelector('#edWipe'); if(wb){ let armed=false, t=null; wb.onclick=()=>{
+      if(!armed){ armed=true; wb.textContent='⚠ Click again to delete ALL objects'; wb.style.background='#7a2630'; t=setTimeout(()=>{ armed=false; wb.textContent='🗑 Delete all objects (fresh scene)'; wb.style.background=''; }, 3500); return; }
+      clearTimeout(t); armed=false; wb.textContent='🗑 Delete all objects (fresh scene)'; wb.style.background='';
+      wipeScene(); const note=editorEl.querySelector('#edCopied'); if(note) note.textContent='Scene cleared — all objects deleted ✓';
+    }; } }
   p.querySelector('#edSave').onclick = ()=>{
     const note = editorEl.querySelector('#edCopied');
     note.textContent = saveLevel() ? 'Level saved — it will auto-load next time ✓' : 'Save failed (storage blocked here)';
@@ -16637,6 +16684,20 @@ function renderEditorFields(){
     editorFieldInputs.push({ k:fld.k, rng, num });
     wrap.appendChild(lab); wrap.appendChild(rng);
     host.appendChild(wrap);
+  }
+  // Snap-to-ground: drop the selected prop so its lowest point rests on the surface beneath it.
+  if(tgt===editorTargets.props && tgt.fields && tgt.fields.length && tgt.obj && tgt.obj()){
+    const snapBtn=document.createElement('button'); snapBtn.textContent='\u2b07 Snap bottom to ground'; snapBtn.style.cssText='width:100%;margin-top:6px;';
+    snapBtn.title='Drop the prop so its base sits on the surface (terrain or the prop below it).';
+    snapBtn.onclick=()=>{ const o=tgt.obj(); if(!o) return; pushUndoSnapshot();
+      const box=new THREE.Box3().setFromObject(o); const bottom=box.min.y;             // world-space lowest point
+      const surf=(typeof surfaceTopBelow==='function') ? surfaceTopBelow(o) : (function(){ let s=(typeof surfaceTopAt==='function')?surfaceTopAt(o.position.x,o.position.z):-Infinity; const t=(typeof terrainHeightAt==='function')?terrainHeightAt(o.position.x,o.position.z):0; if(s===-Infinity||s>=bottom-0.01) s=t; return s; })();
+      const drop=bottom-surf; tgt.state.py = o.position.y - drop;                       // lift/lower so bottom == surf
+      o.position.y = tgt.state.py;
+      for(const fi of editorFieldInputs){ if(fi.k==='py'){ fi.rng.value=tgt.state.py; fi.num.value=(+tgt.state.py).toFixed(5); } }
+      tgt.apply(); updateGizmo(); updateEditorOut();
+    };
+    host.appendChild(snapBtn);
   }
   // live preview the aimed pose while the Aim tab is open, and highlight the selected scene object
   editorAimPreview = (editorOpen && editorActive==='aim');
