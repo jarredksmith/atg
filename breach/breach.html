@@ -8633,7 +8633,9 @@ function setPickupMarkersVisible(v){ for(const m of pickupMarkers) m.visible=v; 
 // ---- Placed loot-box editor markers (mirror of pickup markers) ----
 let lootMarkers = [];
 function refreshLootMarkers(){ for(const m of lootMarkers){ scene.remove(m); } lootMarkers.length=0;
-  for(const sp of lootSpots){ const g=buildChestMesh(sp.x, sp.z); g.position.y=_maxTerrainOver(sp.x,sp.z,0); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.lootMarker=true; scene.add(g); lootMarkers.push(g); } }
+  for(let i=0;i<lootSpots.length;i++){ const sp=lootSpots[i]; const g=buildChestMesh(sp.x, sp.z); g.position.y=_maxTerrainOver(sp.x,sp.z,0); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.lootMarker=true;
+    if(i===selLoot){ g.scale.multiplyScalar(1.12); g.traverse(o=>{ if(o.isMesh && o.material){ try{ o.material=o.material.clone(); o.material.emissive && o.material.emissive.setHex(0x38f5b5); o.material.emissiveIntensity=0.6; }catch(e){} } }); }
+    scene.add(g); lootMarkers.push(g); } }
 function setLootMarkersVisible(v){ for(const m of lootMarkers) m.visible=v; }
 function addLootSpot(){ pushUndoSnapshot(); const fwd=new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw)); lootSpots.push({ x:+(player.pos.x+fwd.x*6).toFixed(2), z:+(player.pos.z+fwd.z*6).toFixed(2), items:[] }); selLoot = lootSpots.length-1; refreshLootMarkers(); renderEditorFields(); }
 function removeLootSpot(i){ pushUndoSnapshot(); lootSpots.splice(i,1); if(selLoot>=lootSpots.length) selLoot=lootSpots.length-1; refreshLootMarkers(); renderEditorFields(); }
@@ -9307,7 +9309,7 @@ function loadLevelFromNet(level){
   _applyCine(level.cine);
   // per-player characters: the client keeps its own avatar; the host's character arrives via the welcome 'char' field
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; gameCfg.noRespawn = !!level.game.noRespawn; }
-  extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null; if(typeof refreshExtractMarker==='function') refreshExtractMarker();   // restore the per-level extraction spot (campaign / co-op load path)
+  extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null; if(level.extractFx){ extractFxCfg.color=level.extractFx.color!=null?level.extractFx.color:extractFxCfg.color; extractFxCfg.opacity=level.extractFx.opacity!=null?level.extractFx.opacity:extractFxCfg.opacity; extractFxCfg.height=level.extractFx.height!=null?level.extractFx.height:extractFxCfg.height; extractFxCfg.pillar=level.extractFx.pillar!=null?!!level.extractFx.pillar:extractFxCfg.pillar; if(typeof applyExtractFx==='function') applyExtractFx(); } if(typeof refreshExtractMarker==='function') refreshExtractMarker();   // restore the per-level extraction spot (campaign / co-op load path)
   audioZones = Array.isArray(level.audioZones) ? level.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : []; if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
   fxCfg = _sanitizeFx(level.fx); deathFxCfg = _sanitizeDeathFx(level.deathFx); if(typeof renderImpactFxPanel==='function') renderImpactFxPanel();
   tracerCfg = _sanitizeTracer(level.tracer); if(typeof renderTracerFxPanel==='function') renderTracerFxPanel();
@@ -10529,6 +10531,8 @@ const chestMat = new THREE.MeshStandardMaterial({ color:0x3a2a10, emissive:0xffa
 // Loot box visual: '' = built-in procedural chest; set a GLB URL in the editor's World panel to use a model.
 let chestModelUrl   = (savedLevel && savedLevel.chest && savedLevel.chest.url)   || '';
 let chestModelScale = (savedLevel && savedLevel.chest && savedLevel.chest.scale) || 1;
+// When false, the timed random loot-box spawn is disabled and ONLY placed loot boxes appear. Default on (back-compat).
+let randomLootOn    = !(savedLevel && savedLevel.chest && savedLevel.chest.randomOff);
 function swapChestModel(url){ chestModelUrl = (url||'').trim(); }
 function buildProceduralChest(){
   const g = new THREE.Group();
@@ -10961,7 +10965,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 419 · 2026-06-12';
+const BUILD_VERSION = 'build 420 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12328,6 +12332,13 @@ const escortPos = new THREE.Vector3(); let escortStartDist=1, escortMarker=null,
 let runKills = 0;   // kills this run (for the run summary + best)
 let extractHoldT = 0; let extractZone = null; const extractPos = new THREE.Vector3();   // Extraction objective
 let extractSpot = null;   // manual {x,z} placement from the editor; null = auto (opposite the player spawn)
+// Visual styling for the extraction beacon (ring + light pillar). Authorable in the editor.
+let extractFxCfg = {
+  color:   (savedLevel && savedLevel.extractFx && savedLevel.extractFx.color!=null) ? savedLevel.extractFx.color : 0x38f5b5,
+  opacity: (savedLevel && savedLevel.extractFx && savedLevel.extractFx.opacity!=null) ? savedLevel.extractFx.opacity : 0.85,
+  height:  (savedLevel && savedLevel.extractFx && savedLevel.extractFx.height!=null) ? savedLevel.extractFx.height : 7,
+  pillar:  (savedLevel && savedLevel.extractFx && savedLevel.extractFx.pillar!=null) ? !!savedLevel.extractFx.pillar : true,
+};
 function updateHUD(){
   const w = W();
   $('hp').textContent = Math.max(0,Math.ceil(player.hp));
@@ -12522,13 +12533,21 @@ function buildExtractZone(){
   if(extractZone) return extractZone;
   const g = new THREE.Group();
   const ring = new THREE.Mesh(new THREE.RingGeometry(0.82, 1, 48),
-    new THREE.MeshBasicMaterial({ color:0x38f5b5, transparent:true, opacity:0.85, side:THREE.DoubleSide, blending:THREE.AdditiveBlending, depthWrite:false }));
+    new THREE.MeshBasicMaterial({ color:extractFxCfg.color, transparent:true, opacity:extractFxCfg.opacity, side:THREE.DoubleSide, blending:THREE.AdditiveBlending, depthWrite:false }));
   ring.rotation.x = -Math.PI/2; ring.position.y = 0.06; g.add(ring);
-  const pillar = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 7, 32, 1, true),
-    new THREE.MeshBasicMaterial({ color:0x38f5b5, transparent:true, opacity:0.10, side:THREE.DoubleSide, blending:THREE.AdditiveBlending, depthWrite:false }));
-  pillar.position.y = 3.5; g.add(pillar);
+  const pillar = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, extractFxCfg.height, 32, 1, true),
+    new THREE.MeshBasicMaterial({ color:extractFxCfg.color, transparent:true, opacity:0.10, side:THREE.DoubleSide, blending:THREE.AdditiveBlending, depthWrite:false }));
+  pillar.position.y = extractFxCfg.height/2; pillar.visible = extractFxCfg.pillar; g.add(pillar);
   g.userData.ring = ring; g.userData.pillar = pillar; g.visible = false;
   scene.add(g); extractZone = g; return g;
+}
+// Re-apply the authored extraction styling to the live beacon (called from the editor controls).
+function applyExtractFx(){
+  if(!extractZone) return;
+  const r=extractZone.userData.ring, p=extractZone.userData.pillar;
+  if(r){ r.material.color.setHex(extractFxCfg.color); r.material.opacity=extractFxCfg.opacity; }
+  if(p){ p.material.color.setHex(extractFxCfg.color); p.visible=extractFxCfg.pillar;
+    p.geometry.dispose(); p.geometry=new THREE.CylinderGeometry(1,1,extractFxCfg.height,32,1,true); p.position.y=extractFxCfg.height/2; }
 }
 // Where the beacon sits: the manual editor spot if one was placed, else auto (mirrored across the arena from spawn).
 function extractAutoPos(){
@@ -13450,7 +13469,7 @@ function loop(){
   checkProximity();   // runs in all modes; in duel it only considers trigger-animation props
 
   // periodic chest spawning (host / solo, both co-op and duel) — paused while editing
-  if(!isClient && !editorOpen){
+  if(!isClient && !editorOpen && randomLootOn){
     chestTimer -= dt;
     if(chestTimer <= 0){ spawnChest(); chestTimer = 30 + Math.random()*20; }
   }
@@ -14203,7 +14222,7 @@ function serializeLevel(){
     station: { url: stationModelUrl, state: Object.assign({}, editorTargets.station.state) },
     player:  { url: playerModelCfg.url, thumb: playerModelCfg.thumb||'', state: Object.assign({}, editorTargets.player.state), clips: Object.assign({}, playerModelCfg.clips), clipSpeed: Object.assign({}, playerModelCfg.clipSpeed||{}), clipHold: Object.assign({}, playerModelCfg.clipHold||{}) },
     world:   Object.assign({}, worldCfg),
-    chest:   { url: chestModelUrl, scale: chestModelScale },
+    chest:   { url: chestModelUrl, scale: chestModelScale, randomOff: !randomLootOn },
     coin:    { url: coinCfg.url, scale: coinCfg.scale, on: coinCfg.on !== false },
     enemies: ENEMY_TYPE_KEYS.reduce((a,k)=>{ const m=enemyModelCfg(k); a[k]={ url:m.url, scale:m.scale, face:m.face, cr:m.cr, ch:m.ch, yoff:m.yoff, xoff:m.xoff, zoff:m.zoff, clip:m.clip, clips:Object.assign({}, m.clips) }; return a; }, {}),
     props:   propModels.filter(o=>o && !o.userData.runtime).map(propEntry),
@@ -14212,6 +14231,7 @@ function serializeLevel(){
     pickupsOn: pickupsOn,
     pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind })),
     loot: lootSpots.map(s=>({ x:+s.x, z:+s.z, items:(s.items||[]).slice() })),
+    extractFx: { color: extractFxCfg.color, opacity: extractFxCfg.opacity, height: extractFxCfg.height, pillar: extractFxCfg.pillar },
     audioZones: audioZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, url:z.url||'', vol:+z.vol, loop:!!z.loop })),
     fx: Object.assign({}, fxCfg),
     deathFx: Object.assign({}, deathFxCfg),
@@ -14479,7 +14499,7 @@ function restoreLevel(level){
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.y=level.pstart.y||0; playerSpawn.yaw=level.pstart.yaw||0; } else { playerSpawn.x=0; playerSpawn.z=0; playerSpawn.y=0; playerSpawn.yaw=0; }
   refreshPlayerSpawnMarker();
-  extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null;
+  extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null; if(level.extractFx){ extractFxCfg.color=level.extractFx.color!=null?level.extractFx.color:extractFxCfg.color; extractFxCfg.opacity=level.extractFx.opacity!=null?level.extractFx.opacity:extractFxCfg.opacity; extractFxCfg.height=level.extractFx.height!=null?level.extractFx.height:extractFxCfg.height; extractFxCfg.pillar=level.extractFx.pillar!=null?!!level.extractFx.pillar:extractFxCfg.pillar; if(typeof applyExtractFx==='function') applyExtractFx(); }
   audioZones = Array.isArray(level.audioZones) ? level.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : []; if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
   fxCfg = _sanitizeFx(level.fx); deathFxCfg = _sanitizeDeathFx(level.deathFx); if(typeof renderImpactFxPanel==='function') renderImpactFxPanel();
   tracerCfg = _sanitizeTracer(level.tracer); if(typeof renderTracerFxPanel==='function') renderTracerFxPanel();
@@ -14504,7 +14524,7 @@ function restoreLevel(level){
   if(level.audio){ try{ audioSettings.musicUrl=(typeof level.audio.musicUrl==='string')?level.audio.musicUrl:''; audioSettings.sounds=_sanitizeSounds(level.audio.sounds); if(typeof saveAudioSettings==='function') saveAudioSettings(); if(typeof preloadCustomSounds==='function') preloadCustomSounds(); if(_musicOn){ stopMusic(); startMusic(); } }catch(e){ console.warn('level audio apply failed', e); } }
   _applyCine(level.cine);
   if(level.player) applyPlayerLevel(level.player);
-  if(level.chest){ chestModelUrl = level.chest.url||''; chestModelScale = level.chest.scale||1; }
+  if(level.chest){ chestModelUrl = level.chest.url||''; chestModelScale = level.chest.scale||1; randomLootOn = !level.chest.randomOff; }
   if(level.coin){ const c=level.coin; coinCfg.url=c.url||''; coinCfg.scale=c.scale||1; coinCfg.on=c.on!==false; }
   if(level.enemies || level.enemy){ applyEnemyModelData(level.enemies, level.enemy); for(const en of enemies) buildEnemyVisual(en.mesh); if(typeof refreshPreviewEnemy==='function') refreshPreviewEnemy(); }   // re-skin live enemies (legacy single-model falls back to all types)
   selProps.length = 0;
@@ -15563,6 +15583,13 @@ function renderEditorFields(){
     sNum.onchange=()=>{ chestModelScale=Math.max(0.05,Math.min(50,parseFloat(sNum.value)||1)); };
     sRow.appendChild(sSp); sRow.appendChild(sNum); lHost.appendChild(sRow);
     hint(lHost, '', '3px 0 0').textContent = 'Apply clears current loot boxes so the next spawn uses the new model.';
+    // ---- Random spawn toggle: when off, ONLY placed loot boxes appear ----
+    const rlRow=document.createElement('label'); rlRow.style.cssText='display:flex;align-items:center;gap:8px;color:#9fe6cf;font-size:12px;margin:10px 0 2px;cursor:pointer;';
+    const rlCb=document.createElement('input'); rlCb.type='checkbox'; rlCb.checked=randomLootOn; rlCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;';
+    rlCb.onchange=()=>{ pushUndoSnapshot(); randomLootOn=rlCb.checked; renderEditorFields(); };
+    const rlSp=document.createElement('span'); rlSp.innerHTML='<b>Spawn random loot boxes</b>';
+    rlRow.appendChild(rlCb); rlRow.appendChild(rlSp); lHost.appendChild(rlRow);
+    hint(lHost, '', '0 0 4px').textContent = randomLootOn ? 'Random boxes drop on a timer, plus any you place below.' : 'Off — only the loot boxes you place below will appear.';
     // ---- Placed loot boxes: author position + contents (like pickups) ----
     hint(lHost, '<b>Placed loot boxes</b> — set where they go &amp; what\u2019s inside (else random)', '12px 0 4px');
     const addLb=document.createElement('button'); addLb.textContent='+ Place loot box (ahead of you)'; addLb.style.cssText='width:100%;margin-bottom:6px;';
@@ -15672,6 +15699,31 @@ function renderEditorFields(){
       w.innerHTML='Heads up: this level\u2019s objective isn\u2019t set to <b>Extraction</b> yet, so the beacon won\u2019t appear in play. Set it in <b>Game / waves</b>.';
       picker.appendChild(w);
     }
+    // ---- Beacon look: color / opacity / height / pillar ----
+    const fxH=document.createElement('div'); fxH.className='hint'; fxH.style.cssText='margin:12px 0 4px;'; fxH.innerHTML='<b>Beacon look</b>'; picker.appendChild(fxH);
+    const colRow=document.createElement('label'); colRow.style.cssText='display:flex;align-items:center;gap:8px;color:#9fe6cf;font-size:12px;margin:4px 0;';
+    const colSp=document.createElement('span'); colSp.textContent='Color'; colSp.style.minWidth='70px';
+    const col=document.createElement('input'); col.type='color'; col.value='#'+('000000'+extractFxCfg.color.toString(16)).slice(-6); col.style.cssText='width:46px;height:26px;background:none;border:1px solid #2a3a42;border-radius:4px;cursor:pointer;';
+    col.oninput=()=>{ extractFxCfg.color=parseInt(col.value.slice(1),16)||0x38f5b5; applyExtractFx(); };
+    col.addEventListener('mousedown',()=>pushUndoSnapshot());
+    colRow.appendChild(colSp); colRow.appendChild(col); picker.appendChild(colRow);
+    const mkSlide=(label,key,min,max,step)=>{
+      const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:8px;color:#9fe6cf;font-size:12px;margin:4px 0;';
+      const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='70px';
+      const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=extractFxCfg[key]; rng.style.cssText='flex:1;accent-color:#38f5b5;';
+      const num=document.createElement('input'); num.type='number'; num.min=min; num.max=max; num.step=step; num.value=extractFxCfg[key]; num.style.cssText='width:60px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:11px;';
+      const ap=(v)=>{ let n=parseFloat(v); if(!isFinite(n)) n=min; n=Math.max(min,Math.min(max,n)); extractFxCfg[key]=n; rng.value=n; num.value=n; applyExtractFx(); };
+      rng.addEventListener('mousedown',()=>pushUndoSnapshot()); num.addEventListener('focus',()=>pushUndoSnapshot());
+      rng.oninput=()=>ap(rng.value); num.onchange=()=>ap(num.value);
+      row.appendChild(sp); row.appendChild(rng); row.appendChild(num); picker.appendChild(row);
+    };
+    mkSlide('Glow','opacity',0.1,1,0.05);
+    mkSlide('Height','height',0,20,0.5);
+    const pilRow=document.createElement('label'); pilRow.style.cssText='display:flex;align-items:center;gap:8px;color:#9fe6cf;font-size:12px;margin:4px 0;cursor:pointer;';
+    const pilCb=document.createElement('input'); pilCb.type='checkbox'; pilCb.checked=extractFxCfg.pillar; pilCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;';
+    pilCb.onchange=()=>{ pushUndoSnapshot(); extractFxCfg.pillar=pilCb.checked; applyExtractFx(); };
+    const pilSp=document.createElement('span'); pilSp.textContent='Light pillar';
+    pilRow.appendChild(pilCb); pilRow.appendChild(pilSp); picker.appendChild(pilRow);
   }
   if(tgt.selectable){
     const noun = tgt.noun || (tgt.isLights ? 'Light' : 'Prop');
@@ -16976,6 +17028,7 @@ renderer.domElement.addEventListener('click', (e)=>{
   for(const g of lightModels){ if(g.userData.marker) targets.push(g.userData.marker); }
   for(const g of spawnMarkers){ if(g.visible) targets.push(g); }
   for(const m of pickupMarkers){ if(m && m.visible) targets.push(m); }
+  for(const m of lootMarkers){ if(m && m.visible) targets.push(m); }
   if(!targets.length) return;
   const hits = raycaster.intersectObjects(targets, true);
   if(!hits.length) return;
@@ -16990,10 +17043,13 @@ renderer.domElement.addEventListener('click', (e)=>{
     if(si>=0){ picked='spawns'; editorTargets.spawns.idx=si; selSpawns=[spawnMarkers[si]]; break; }
     const ki = pickupMarkers.indexOf(root);
     if(ki>=0){ picked='pickups'; selPickup=ki; break; }
+    const lti = lootMarkers.indexOf(root);
+    if(lti>=0){ picked='loot'; selLoot=lti; break; }
     root = root.parent;
   }
   if(picked && picked!=='pickups') selPickup = -1;   // selecting anything else releases a grabbed pickup
   if(picked==='pickups'){ selProps.length=0; selLights.length=0; selSpawns=[]; gizmoMode='translate'; if(typeof renderEditorFields==='function') renderEditorFields(); updateSelectionHighlight(); }
+  else if(picked==='loot'){ selProps.length=0; selLights.length=0; selSpawns=[]; selPickup=-1; gizmoMode='translate'; if(typeof refreshLootMarkers==='function') refreshLootMarkers(); if(typeof renderEditorFields==='function') renderEditorFields(); updateSelectionHighlight(); }
   else if(picked==='props'){
     const obj = propModels[editorTargets.props.idx];
     if(e.shiftKey && obj){
