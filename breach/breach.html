@@ -6276,6 +6276,33 @@ const propModels = [];   // live prop Object3Ds (parallel to the editor's prop l
 // glTF files can carry baked animations (idle loops, spinning parts, etc.). For each loaded
 // model we build an AnimationMixer and play its clips; the loop ticks every mixer each frame.
 const mixers = [];
+// Animation LOD: update each mixer at a rate that falls off with distance from the camera. Near models animate
+// every frame; mid-range every other frame; far ones every 4th — accumulating the skipped time so motion stays
+// time-correct, just lower-resolution. Models with no resolvable position (UI/gun/terminal) always update.
+// ADAPT: under the adaptive-res pressure (weak device / low fps) the thresholds tighten so more is throttled.
+const _mxPos = (typeof THREE!=='undefined') ? new THREE.Vector3() : null;
+function _mixerRoot(m){ try{ return (typeof m.getRoot==='function') ? m.getRoot() : (m._root||null); }catch(e){ return null; } }
+function updateMixersLOD(dt){
+  const camX=camera.position.x, camY=camera.position.y, camZ=camera.position.z;
+  // tighten the LOD bands when the renderer is already downshifting for performance
+  const pressure = (typeof _prStepI!=='undefined' && _prStepI>0) ? _prStepI : 0;
+  const near2 = Math.max(64, 225 - pressure*60);    // <~15m (tightens toward ~8m under load): every frame
+  const mid2  = Math.max(400, 1600 - pressure*300); // <~40m: every other frame; beyond: every 4th
+  for(let i=0;i<mixers.length;i++){
+    const m=mixers[i]; if(!m) continue;
+    const root=_mixerRoot(m);
+    let stride=1;
+    if(root){
+      // skip animating models that are fully hidden (dead/despawned/off in the editor)
+      if(root.visible===false || (root.parent && root.parent.visible===false)){ m._lodAcc=(m._lodAcc||0)+dt; continue; }
+      root.getWorldPosition(_mxPos);   // roots are nested in positioned groups, so local position is ~0 — use world
+      const dx=_mxPos.x-camX, dy=_mxPos.y-camY, dz=_mxPos.z-camZ; const d2=dx*dx+dy*dy+dz*dz;
+      stride = (d2<=near2) ? 1 : (d2<=mid2 ? 2 : 4);
+    }
+    if(stride===1){ m.update(dt + (m._lodAcc||0)); m._lodAcc=0; m._lodN=0; }
+    else { m._lodAcc=(m._lodAcc||0)+dt; m._lodN=((m._lodN||0)+1); if(m._lodN>=stride){ m.update(m._lodAcc); m._lodAcc=0; m._lodN=0; } }
+  }
+}
 // Build a mixer for any baked clips. mode 'loop' = ambient auto-loop (default); 'trigger' = stay paused
 // at the start until the player activates the object with E (see interact()). Actions are kept on
 // userData.animActions so the trigger / live mode-switch can drive them.
@@ -7141,31 +7168,59 @@ function _sfFetchArchive(z){
   const grab=(u,lbl)=> fetch(u).catch(()=>{ throw new Error('archive fetch failed'+lbl+' (CORS/network)'); }).then(r=>{ if(!r.ok) throw new Error('archive HTTP '+r.status+lbl); return r.arrayBuffer(); });
   return grab(z, '').catch(()=> grab(proxied(z), ' via proxy'));   // signed CDN URLs rarely allow CORS, so fall back through the proxy
 }
+// ---- Persistent model cache (IndexedDB) ----------------------------------------------------------------
+// Downloaded Sketchfab archives are slow to fetch every session (API call + signed-CDN download + unzip).
+// Cache the raw archive BYTES on disk keyed by model uid, so the FIRST play of a level pays the network cost
+// once and every later session loads instantly. Best-effort: any failure silently falls back to the network.
+const _MODELDB_NAME='breachModels', _MODELDB_STORE='archives', _MODELDB_VER=1;
+let _modelDBp=null;
+function _modelDB(){
+  if(_modelDBp) return _modelDBp;
+  _modelDBp = new Promise((res)=>{
+    try{
+      if(!window.indexedDB){ res(null); return; }
+      const rq=indexedDB.open(_MODELDB_NAME, _MODELDB_VER);
+      rq.onupgradeneeded=()=>{ try{ rq.result.createObjectStore(_MODELDB_STORE); }catch(e){} };
+      rq.onsuccess=()=>res(rq.result); rq.onerror=()=>res(null);
+    }catch(e){ res(null); }
+  });
+  return _modelDBp;
+}
+function _modelCacheGet(key){ return _modelDB().then(db=>{ if(!db) return null; return new Promise(r=>{ try{ const tx=db.transaction(_MODELDB_STORE,'readonly'); const g=tx.objectStore(_MODELDB_STORE).get(key); g.onsuccess=()=>r(g.result||null); g.onerror=()=>r(null); }catch(e){ r(null); } }); }); }
+function _modelCachePut(key, buf){ return _modelDB().then(db=>{ if(!db) return; try{ const tx=db.transaction(_MODELDB_STORE,'readwrite'); tx.objectStore(_MODELDB_STORE).put(buf, key); }catch(e){} }); }
+
 function loadSketchfabModel(uid, cb, errcb){
-  const tok=sfGetToken(); if(!tok){ errcb && errcb(new Error('Add your Sketchfab API token first')); return; }
-  // Try the direct call FIRST: it works whenever Sketchfab's CORS allows the Authorization header (which it
-  // normally does; the header is occasionally rejected by their preflight, which is intermittent on their end).
-  // If the direct call is blocked by CORS/network, fall back through the proxy with the token as a ?sftoken=
-  // query param that the worker turns into the Authorization header server-side (a simple GET, no preflight).
-  // Direct-first means no proxy/worker dependency while Sketchfab cooperates, plus graceful fallback if it doesn't.
-  const _dlUrl = 'https://api.sketchfab.com/v3/models/'+uid+'/download';
-  const _px = proxied(_dlUrl);
-  fetch(_dlUrl, { headers:{ Authorization:'Token '+tok } })
-    .catch(()=> (_px !== _dlUrl)
-      ? fetch(_px + '&sftoken=' + encodeURIComponent(tok))
-      : Promise.reject(new Error('download request blocked (CORS/network) at api.sketchfab.com')))
-    .then(r=>{ if(!r.ok) throw new Error('download HTTP '+r.status+(r.status===401?' (check token)':r.status===403?' (login / not downloadable)':'')); return r.json(); })
-    .then(d=>{ const z=d.gltf&&d.gltf.url; if(!z) throw new Error('no downloadable glTF for this model'); return _sfFetchArchive(z); })
-    .then(buf=> ensureFflate().catch(()=>{ throw new Error('could not load the unzip helper (fflate) from CDN'); }).then(ff=>{
-        const files=ff.unzipSync(new Uint8Array(buf)); const names=Object.keys(files); const blobs={}; let main=null;
-        for(const nm of names){ const ext=(nm.split('.').pop()||'').toLowerCase(); const mt= ext==='gltf'?'model/gltf+json': ext==='png'?'image/png': (ext==='jpg'||ext==='jpeg')?'image/jpeg':'application/octet-stream'; blobs[nm]=URL.createObjectURL(new Blob([files[nm]],{type:mt})); if(!main && (ext==='gltf'||ext==='glb')) main=nm; }
-        if(!main) throw new Error('no .gltf/.glb inside the archive');
-        const base=u=>decodeURIComponent(String(u)).split('?')[0].replace(/^.*[\/\\]/,''); const byBase={}; for(const nm of names) byBase[base(nm)]=blobs[nm];
-        const mgr=new THREE.LoadingManager(); mgr.setURLModifier(u=>{ if(/^data:/.test(u)) return u; const _m=byBase[base(u)]; return _m || u; });   // remap scene.bin / textures (resolved to blob:host/<name>) back to their real blobs; the main glTF's blob falls through
-        const revoke=()=>{ for(const nm of names) try{ URL.revokeObjectURL(blobs[nm]); }catch(e){} };
-        new THREE.GLTFLoader(mgr).load(blobs[main], (gltf)=>{ setTimeout(revoke, 6000); cb(gltf); }, undefined, e=>{ revoke(); errcb && errcb(e); });
-      }))
-    .catch(e=>{ errcb && errcb(e); });
+  // unzip an archive ArrayBuffer -> glTF (shared by the cache-hit and network paths)
+  const _process=(buf)=> ensureFflate().catch(()=>{ throw new Error('could not load the unzip helper (fflate) from CDN'); }).then(ff=>{
+    const files=ff.unzipSync(new Uint8Array(buf)); const names=Object.keys(files); const blobs={}; let main=null;
+    for(const nm of names){ const ext=(nm.split('.').pop()||'').toLowerCase(); const mt= ext==='gltf'?'model/gltf+json': ext==='png'?'image/png': (ext==='jpg'||ext==='jpeg')?'image/jpeg':'application/octet-stream'; blobs[nm]=URL.createObjectURL(new Blob([files[nm]],{type:mt})); if(!main && (ext==='gltf'||ext==='glb')) main=nm; }
+    if(!main) throw new Error('no .gltf/.glb inside the archive');
+    const base=u=>decodeURIComponent(String(u)).split('?')[0].replace(/^.*[\/\\]/,''); const byBase={}; for(const nm of names) byBase[base(nm)]=blobs[nm];
+    const mgr=new THREE.LoadingManager(); mgr.setURLModifier(u=>{ if(/^data:/.test(u)) return u; const _m=byBase[base(u)]; return _m || u; });
+    const revoke=()=>{ for(const nm of names) try{ URL.revokeObjectURL(blobs[nm]); }catch(e){} };
+    return new Promise((res,rej)=>{ new THREE.GLTFLoader(mgr).load(blobs[main], (gltf)=>{ setTimeout(revoke, 6000); res(gltf); }, undefined, e=>{ revoke(); rej(e); }); });
+  });
+  const _cacheKey='sf:'+uid;
+  // 1) try the on-disk cache first — instant on repeat sessions, no network at all
+  _modelCacheGet(_cacheKey).then(buf=>{
+    if(buf){ _process(buf).then(g=>cb(g)).catch(()=>{ _fromNetwork(); }); return; }   // corrupt cache entry -> refetch
+    _fromNetwork();
+  }).catch(()=>_fromNetwork());
+
+  function _fromNetwork(){
+    const tok=sfGetToken(); if(!tok){ errcb && errcb(new Error('Add your Sketchfab API token first')); return; }
+    const _dlUrl = 'https://api.sketchfab.com/v3/models/'+uid+'/download';
+    const _px = proxied(_dlUrl);
+    fetch(_dlUrl, { headers:{ Authorization:'Token '+tok } })
+      .catch(()=> (_px !== _dlUrl)
+        ? fetch(_px + '&sftoken=' + encodeURIComponent(tok))
+        : Promise.reject(new Error('download request blocked (CORS/network) at api.sketchfab.com')))
+      .then(r=>{ if(!r.ok) throw new Error('download HTTP '+r.status+(r.status===401?' (check token)':r.status===403?' (login / not downloadable)':'')); return r.json(); })
+      .then(d=>{ const z=d.gltf&&d.gltf.url; if(!z) throw new Error('no downloadable glTF for this model'); return _sfFetchArchive(z); })
+      .then(buf=>{ try{ _modelCachePut(_cacheKey, buf); }catch(e){} return _process(buf); })   // save bytes for next time
+      .then(g=>cb(g))
+      .catch(e=>{ errcb && errcb(e); });
+  }
 }
 // Stable per-prop network id for live multiplayer prop sync. Prefix namespaces by peer so ids never
 // collide across machines: 's' at startup/single-player, 'h' once hosting, 'c<id>' once joined.
@@ -10855,7 +10910,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 411 · 2026-06-12';
+const BUILD_VERSION = 'build 413 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13024,8 +13079,9 @@ function loop(){
   if(isTouch){ const tu=document.getElementById('touchUI'); if(tu){ const d=(gameOn && !shopOpen && !choosingUpgrade)?'block':'none'; if(tu.style.display!==d) tu.style.display=d; } document.body.classList.toggle('editing', !!editorOpen); }
   updateColliderViz(dt);   // debug overlay of collision boxes (toggle in editor)
 
-  // advance any model animations (terminal/gun/prop idle loops, etc.)
-  if(mixers.length){ for(const m of mixers) m.update(dt); }
+  // advance any model animations (terminal/gun/prop idle loops, etc.) with distance-based LOD: skinned-mesh
+  // mixer updates are among the heaviest per-frame costs, so animate far/off-screen models at a lower rate.
+  if(mixers.length){ updateMixersLOD(dt); }
   // re-pin enemy model roots to their seated transform: clips often carry root-motion / scale tracks that
   // would otherwise drift the model off the body or shrink it to nothing. Bones still animate normally.
   for(const en of enemies){ const v=en.mesh.userData.visual, s=v&&v.userData.seat; if(s){ v.position.copy(s.p); v.quaternion.copy(s.q); v.scale.copy(s.s); } }
