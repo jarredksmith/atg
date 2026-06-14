@@ -6452,8 +6452,9 @@ function setPropAnimMode(obj, mode){
 // Play a trigger-mode prop's animation once from the start (E-key activation).
 function playPropAnimationOnce(obj, clip){
   const acts = obj && obj.userData.animActions; if(!acts || !acts.length) return;
+  const want = clip || obj.userData.animClip || '';   // E-key: fall back to the clip chosen in the editor
   let list = acts;
-  if(clip){ const m = acts.filter(a=>{ try{ return a.getClip().name===clip; }catch(e){ return false; } });
+  if(want){ const m = acts.filter(a=>{ try{ return a.getClip().name===want; }catch(e){ return false; } });
     if(m.length) list = m;   // exact clip match; an unknown name falls back to all clips rather than silence
   }
   for(const a of list){ a.reset(); a.play(); }
@@ -10717,7 +10718,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 397 · 2026-06-12';
+const BUILD_VERSION = 'build 398 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15579,10 +15580,24 @@ function renderEditorFields(){
           }
           if(s.do==='anim'){   // optional: name one clip from the target's GLB; blank = play them all
             const cr2=document.createElement('div'); cr2.style.cssText='display:flex;gap:4px;align-items:center;margin:-1px 0 4px;padding-left:8px;';
-            const ci=document.createElement('input'); ci.type='text'; ci.placeholder='clip name (blank = all clips)'; ci.value=s.clip||'';
-            ci.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#9fe6cf;border-radius:4px;padding:2px 5px;font-size:10px;';
-            ci.onchange=()=>{ pushUndoSnapshot(); const v=ci.value.trim(); if(v) s.clip=v; else delete s.clip; };
-            cr2.appendChild(ci); sgBody.appendChild(cr2);
+            const names = sel.userData.animClipNames || [];
+            if(names.filter(Boolean).length){
+              // this prop's own clips are known -> offer a dropdown (covers the common self-signal case)
+              const cs=document.createElement('select'); cs.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#9fe6cf;border-radius:4px;padding:2px 5px;font-size:10px;';
+              const o0=document.createElement('option'); o0.value=''; o0.textContent='(all clips)'; cs.appendChild(o0);
+              let known=false;
+              for(const nm of names){ if(!nm) continue; const o=document.createElement('option'); o.value=nm; o.textContent=nm; if(nm===s.clip) known=true; cs.appendChild(o); }
+              if(s.clip && !known){ const o=document.createElement('option'); o.value=s.clip; o.textContent=s.clip+' (other)'; cs.appendChild(o); }   // a typed clip from a different target survives
+              cs.value=s.clip||'';
+              cs.onchange=()=>{ pushUndoSnapshot(); if(cs.value) s.clip=cs.value; else delete s.clip; };
+              cr2.appendChild(cs);
+            } else {
+              const ci=document.createElement('input'); ci.type='text'; ci.placeholder='clip name (blank = all clips)'; ci.value=s.clip||'';
+              ci.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#9fe6cf;border-radius:4px;padding:2px 5px;font-size:10px;';
+              ci.onchange=()=>{ pushUndoSnapshot(); const v=ci.value.trim(); if(v) s.clip=v; else delete s.clip; };
+              cr2.appendChild(ci);
+            }
+            sgBody.appendChild(cr2);
           } });
         { const add=document.createElement('button'); add.textContent='+ Add signal'; add.style.cssText='padding:2px 9px;font-size:11px;margin:1px 0 2px;';
           add.onclick=()=>{ pushUndoSnapshot(); sigs.push({ when:'interacted', do:'toggle', target:'' }); renderEditorFields(); };
