@@ -8840,7 +8840,7 @@ function updateBots(dt){
   if(NET.mode!=='host' || !pvpMode() || !gameOn || !bots.length) return;
   const D=botDiff(), koth = NET.gameMode==='cp', lim=ARENA-2, spd=SPEED*D.spd;
   for(const b of bots){
-    if(b.dead){ b.respawnT-=dt; if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,0,sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; b.aiState='engage'; b.aiT=0; b.lkp=null; b.sawTgt=false; if(b.mesh){ b.mesh.visible=true; b.mesh.position.set(sp.x,0,sp.z); } } continue; }
+    if(b.dead){ b.respawnT-=dt; if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,0,sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; b.aiState='engage'; b.aiT=0; b.lkp=null; b.sawTgt=false; b._stuckT=0; if(b.mesh){ b.mesh.visible=true; b.mesh.position.set(sp.x,0,sp.z); } } continue; }
     b.retargetT-=dt;
     if(b.retargetT<=0 || !_botTargetAlive(b.target)){ b.target=_botAcquire(b); b.retargetT=0.4+Math.random()*0.3; }
     const tgt=b.target;
@@ -8895,10 +8895,30 @@ function updateBots(dt){
       if(Math.random()<0.012) b.strafe*=-1;
     }
     else { mvx=dx/dist; mvz=dz/dist; }
+    // SEPARATION: push away from nearby teammates/bots so they don't clump or run into each other.
+    { let sx=0, sz=0, near=0;
+      for(const other of bots){ if(other===b || other.dead) continue;
+        const ddx=b.pos.x-other.pos.x, ddz=b.pos.z-other.pos.z, d2=ddx*ddx+ddz*ddz;
+        if(d2 < 2.56 && d2 > 1e-4){ const d=Math.sqrt(d2), w=(1.6-d)/1.6; sx+=(ddx/d)*w; sz+=(ddz/d)*w; near++; }   // within ~1.6m
+      }
+      if(near){ mvx += sx*0.9; mvz += sz*0.9; const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml; }
+    }
     const ox=b.pos.x, oz=b.pos.z;
     if(b.grounded!==false){   // walk only with feet on a surface; while airborne, momentum carries it
-      let nx=Math.max(-lim,Math.min(lim, b.pos.x+mvx*spd*dt)), nz=Math.max(-lim,Math.min(lim, b.pos.z+mvz*spd*dt));
-      if(typeof clearAt!=='function' || clearAt(nx,nz,b.pos.y)){ b.pos.x=nx; b.pos.z=nz; } else { b.strafe*=-1; }
+      // stuck recovery: if we've been blocked a while, steer perpendicular for a moment to get around it
+      if(b._stuckT>0.6){ const px=-mvz, pz=mvx; mvx=(mvx+px*1.4); mvz=(mvz+pz*1.4); const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml; if(b._stuckT>1.4){ b._stuckT=0; b.strafe*=-1; } }
+      const step=spd*dt;
+      const cx=Math.max(-lim,Math.min(lim, b.pos.x+mvx*step)), cz=Math.max(-lim,Math.min(lim, b.pos.z+mvz*step));
+      const okFull=(typeof clearAt!=='function') || clearAt(cx,cz,b.pos.y);
+      if(okFull){ b.pos.x=cx; b.pos.z=cz; }
+      else {
+        // blocked head-on: try sliding along each axis so we skim past walls/props instead of freezing
+        const okX = clearAt(cx, b.pos.z, b.pos.y), okZ = clearAt(b.pos.x, cz, b.pos.y);
+        if(okX){ b.pos.x=cx; } else if(okZ){ b.pos.z=cz; }   // slide on whichever axis is open
+        else { b.strafe*=-1; }   // boxed in -> reverse strafe and let stuck recovery kick in
+      }
+      const moved=Math.hypot(b.pos.x-ox, b.pos.z-oz);
+      b._stuckT = (moved < step*0.25) ? (b._stuckT||0)+dt : 0;   // barely moved? accrue stuck time
     }
     if(b.evx||b.evz){   // launch momentum from a trebuchet / moving platform, fading once grounded
       b.pos.x=Math.max(-lim,Math.min(lim, b.pos.x+b.evx*dt)); b.pos.z=Math.max(-lim,Math.min(lim, b.pos.z+b.evz*dt));
@@ -10739,7 +10759,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 401 · 2026-06-12';
+const BUILD_VERSION = 'build 402 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
