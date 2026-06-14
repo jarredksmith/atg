@@ -8979,6 +8979,13 @@ function _botHome(){
 }
 // Clamp a wander target to stay inside the confined spawn region (so searching bots don't drift into walls
 // outside the play space). No-op when there's no region.
+// Is (x,z) inside the confined spawn region? True when there's no region.
+function _inRegion(x,z){
+  const sr = (gameCfg && gameCfg.spawnRegion && gameCfg.spawnRegion.on) ? gameCfg.spawnRegion : null;
+  if(!sr) return true;
+  if(sr.shape==='poly' && sr.poly && sr.poly.length>=3) return _pointInPoly(x,z,sr.poly);
+  const dx=x-(+sr.x||0), dz=z-(+sr.z||0), r=Math.max(1,+sr.r||30); return dx*dx+dz*dz<=r*r;
+}
 function _clampToRegion(x,z){
   const sr = (gameCfg && gameCfg.spawnRegion && gameCfg.spawnRegion.on) ? gameCfg.spawnRegion : null;
   if(!sr) return { x, z };
@@ -9130,7 +9137,7 @@ function _botAcquire(b){
   for(const o of bots){ if(o===b||o.dead) continue; if(tm && o.team===b.team) continue; const d=Math.hypot(b.pos.x-o.pos.x, b.pos.z-o.pos.z); if(d<bd){ bd=d; best={kind:'bot', id:o.id, pos:o.pos, bot:o}; } }
   return best;
 }
-function _botLOS(ex,ez,tx,tz){ for(let i=1;i<6;i++){ const t=i/6, x=ex+(tx-ex)*t, z=ez+(tz-ez)*t; if(typeof insideSolid==='function' && insideSolid(x,z,0)) return false; } return true; }
+function _botLOS(ex,ez,tx,tz,eyeY){ const fy=(eyeY!=null)?eyeY:0; for(let i=1;i<6;i++){ const t=i/6, x=ex+(tx-ex)*t, z=ez+(tz-ez)*t; if(typeof insideSolid==='function' && insideSolid(x,z,fy)) return false; } return true; }
 function _botDamage(b, tgt, dmg){
   if(tgt.kind==='host') applyPvpDamage(dmg, b.id);
   else if(tgt.kind==='client') sendToPlayer(tgt.id, {t:'pvpHit', d:dmg, from:b.id});
@@ -9163,7 +9170,7 @@ function updateBots(dt){
     const tgt=b.target;
     b.aiT-=dt;
     // ---- perception: can this bot currently SEE its target? track last-known position (lkp) ----
-    const hasLOS = !!(tgt && _botLOS(b.pos.x,b.pos.z, tgt.pos.x,tgt.pos.z));
+    const hasLOS = !!(tgt && _botLOS(b.pos.x,b.pos.z, tgt.pos.x,tgt.pos.z, b.pos.y));
     const tgtDist = tgt ? Math.hypot(tgt.pos.x-b.pos.x, tgt.pos.z-b.pos.z) : Infinity;
     if(hasLOS && tgt){ b.lkp = b.lkp||{x:0,z:0}; b.lkp.x=tgt.pos.x; b.lkp.z=tgt.pos.z; b.lkpFresh=2.5; b.sawTgt=true; }   // refresh while visible
     else { b.lkpFresh=Math.max(0, b.lkpFresh-dt); }
@@ -9229,11 +9236,15 @@ function updateBots(dt){
       if(b._stuckT>0.6){ const px=-mvz, pz=mvx; mvx=(mvx+px*1.4); mvz=(mvz+pz*1.4); const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml; if(b._stuckT>1.4){ b._stuckT=0; b.strafe*=-1; if(gameCfg && gameCfg.spawnRegion && gameCfg.spawnRegion.on){ const h=_botHome(); const hx=h.x-b.pos.x, hz=h.z-b.pos.z, hl=Math.hypot(hx,hz)||1; mvx=hx/hl; mvz=hz/hl; } } }   // jammed too long -> head back toward the play space
       const step=spd*dt;
       const cx=Math.max(-lim,Math.min(lim, b.pos.x+mvx*step)), cz=Math.max(-lim,Math.min(lim, b.pos.z+mvz*step));
-      const okFull=(typeof clearAt!=='function') || clearAt(cx,cz,b.pos.y);
+      // Keep bots inside the spawn region: if currently inside, a step that leaves it is blocked (slide along the
+      // boundary). A bot that spawned outside (e.g. on a rock) is free to move so it can walk back in.
+      const wasIn = _inRegion(b.pos.x, b.pos.z);
+      const regionOK = (xx,zz)=> !wasIn || _inRegion(xx,zz);
+      const okFull=((typeof clearAt!=='function') || clearAt(cx,cz,b.pos.y)) && regionOK(cx,cz);
       if(okFull){ b.pos.x=cx; b.pos.z=cz; }
       else {
         // blocked head-on: try sliding along each axis so we skim past walls/props instead of freezing
-        const okX = clearAt(cx, b.pos.z, b.pos.y), okZ = clearAt(b.pos.x, cz, b.pos.y);
+        const okX = clearAt(cx, b.pos.z, b.pos.y) && regionOK(cx, b.pos.z), okZ = clearAt(b.pos.x, cz, b.pos.y) && regionOK(b.pos.x, cz);
         if(okX){ b.pos.x=cx; } else if(okZ){ b.pos.z=cz; }   // slide on whichever axis is open
         else { b.strafe*=-1; }   // boxed in -> reverse strafe and let stuck recovery kick in
       }
@@ -9262,7 +9273,7 @@ function updateBots(dt){
     if(tgt && wantFire && b.fireCd<=0){
       const ty=(tgt.pos.y!=null?Math.min(1.5,tgt.pos.y):1.4);
       const fdist=Math.hypot(tgt.pos.x-b.pos.x, ty-1.4, tgt.pos.z-b.pos.z);
-      if(fdist<D.range && _botLOS(b.pos.x,b.pos.z, tgt.pos.x,tgt.pos.z)){
+      if(fdist<D.range && _botLOS(b.pos.x,b.pos.z, tgt.pos.x,tgt.pos.z, b.pos.y)){
         b.fireCd=D.cdMin+Math.random()*D.cdRand;
         const aim=_bv2.set(tgt.pos.x-b.pos.x, ty-1.4, tgt.pos.z-b.pos.z).normalize();
         aim.x+=(Math.random()*2-1)*D.spread; aim.y+=(Math.random()*2-1)*D.spread*0.75; aim.z+=(Math.random()*2-1)*D.spread; aim.normalize();
@@ -11163,7 +11174,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 431 · 2026-06-12';
+const BUILD_VERSION = 'build 432 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
