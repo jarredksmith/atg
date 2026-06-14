@@ -8969,6 +8969,23 @@ function _pointInPoly(px, pz, poly){
 }
 function _polyBounds(poly){ let minx=1e9,maxx=-1e9,minz=1e9,maxz=-1e9; for(const p of poly){ if(p.x<minx)minx=p.x; if(p.x>maxx)maxx=p.x; if(p.z<minz)minz=p.z; if(p.z>maxz)maxz=p.z; } return {minx,maxx,minz,maxz}; }
 function _polyCentroid(poly){ let x=0,z=0; for(const p of poly){ x+=p.x; z+=p.z; } return { x:x/poly.length, z:z/poly.length }; }
+// Where bots should head when they have no enemy in sight. With a confined spawn region, that's the region's
+// center (where the play space is) — NOT the arena origin (CP_POS), which may be outside the region and walled
+// off, causing every targetless bot to grind into the perimeter rocks.
+function _botHome(){
+  const sr = (gameCfg && gameCfg.spawnRegion && gameCfg.spawnRegion.on) ? gameCfg.spawnRegion : null;
+  if(sr){ if(sr.shape==='poly' && sr.poly && sr.poly.length>=3){ const c=_polyCentroid(sr.poly); return { x:c.x, z:c.z }; } return { x:+sr.x||0, z:+sr.z||0 }; }
+  return { x:CP_POS.x, z:CP_POS.z };
+}
+// Clamp a wander target to stay inside the confined spawn region (so searching bots don't drift into walls
+// outside the play space). No-op when there's no region.
+function _clampToRegion(x,z){
+  const sr = (gameCfg && gameCfg.spawnRegion && gameCfg.spawnRegion.on) ? gameCfg.spawnRegion : null;
+  if(!sr) return { x, z };
+  if(sr.shape==='poly' && sr.poly && sr.poly.length>=3){ if(_pointInPoly(x,z,sr.poly)) return { x, z }; const c=_polyCentroid(sr.poly); return { x:c.x, z:c.z }; }
+  const cx=+sr.x||0, cz=+sr.z||0, r=Math.max(1,+sr.r||30), dx=x-cx, dz=z-cz, d=Math.hypot(dx,dz);
+  if(d<=r) return { x, z }; return { x:cx+(dx/d)*r, z:cz+(dz/d)*r };
+}
 function randomSpawn(){
   const lim = ARENA - 6;
   const sr = (gameCfg && gameCfg.spawnRegion && gameCfg.spawnRegion.on) ? gameCfg.spawnRegion : null;
@@ -9179,11 +9196,11 @@ function updateBots(dt){
       wantFire=false;   // can't see it; don't fire blind
     }
     else if(b.aiState==='search'){
-      if(!b._wander || b.aiT<=0){ b._wander={ x:b.pos.x+(Math.random()*2-1)*16, z:b.pos.z+(Math.random()*2-1)*16 }; }
+      if(!b._wander || b.aiT<=0){ const w=_clampToRegion(b.pos.x+(Math.random()*2-1)*16, b.pos.z+(Math.random()*2-1)*16); b._wander={ x:w.x, z:w.z }; }
       destX=Math.max(-lim,Math.min(lim,b._wander.x)); destZ=Math.max(-lim,Math.min(lim,b._wander.z)); wantFire=false;
     }
     else if(tgt){ destX=tgt.pos.x; destZ=tgt.pos.z; }   // engage
-    else { destX=CP_POS.x; destZ=CP_POS.z; }
+    else { const h=_botHome(); destX=h.x; destZ=h.z; }   // no target -> head to the play space (region center, not arena origin)
     let dx=destX-b.pos.x, dz=destZ-b.pos.z; const dist=Math.hypot(dx,dz)||1; let mvx,mvz;
     if(b.aiState==='engage' && tgt && hasLOS && dist<Math.max(9,b.prefRange+3) && !(koth && !cpOwnedBy(b.team))){
       const radial = dist < b.prefRange-1 ? -0.5 : (dist > b.prefRange+1 ? 0.5 : 0);
@@ -11140,7 +11157,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 429 · 2026-06-12';
+const BUILD_VERSION = 'build 430 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
