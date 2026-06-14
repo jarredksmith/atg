@@ -7539,12 +7539,15 @@ let gameCfg = {
   extractRadius: (savedLevel && savedLevel.game && savedLevel.game.extractRadius!=null) ? savedLevel.game.extractRadius : 3.5,
   bossWave: (savedLevel && savedLevel.game && savedLevel.game.bossWave!=null) ? savedLevel.game.bossWave : 5,   // random mode: spawn a BOSS every Nth wave (0 = never)
   noRespawn: !!(savedLevel && savedLevel.game && savedLevel.game.noRespawn),   // pre-built: spawn authored markers once, don't respawn cleared waves
-  // Confine multiplayer/bot random spawns to a circle (e.g. inside an arena prop) instead of the whole map.
+  // Confine multiplayer/bot random spawns to a region (e.g. inside an arena prop) instead of the whole map.
+  // shape 'circle' (x,z,r) or 'poly' (a clicked outline of {x,z} points) — poly handles odd-shaped arenas.
   spawnRegion: {
     on: !!(savedLevel && savedLevel.game && savedLevel.game.spawnRegion && savedLevel.game.spawnRegion.on),
+    shape: (savedLevel && savedLevel.game && savedLevel.game.spawnRegion && savedLevel.game.spawnRegion.shape) || 'circle',
     x:  (savedLevel && savedLevel.game && savedLevel.game.spawnRegion && savedLevel.game.spawnRegion.x!=null) ? +savedLevel.game.spawnRegion.x : 0,
     z:  (savedLevel && savedLevel.game && savedLevel.game.spawnRegion && savedLevel.game.spawnRegion.z!=null) ? +savedLevel.game.spawnRegion.z : 0,
     r:  (savedLevel && savedLevel.game && savedLevel.game.spawnRegion && savedLevel.game.spawnRegion.r!=null) ? +savedLevel.game.spawnRegion.r : 30,
+    poly: (savedLevel && savedLevel.game && savedLevel.game.spawnRegion && Array.isArray(savedLevel.game.spawnRegion.poly)) ? savedLevel.game.spawnRegion.poly.map(p=>({ x:+p.x||0, z:+p.z||0 })) : [],
   },
 };
 
@@ -8713,12 +8716,27 @@ function refreshSpawnRegionMarker(){
   const sr = gameCfg && gameCfg.spawnRegion;
   if(spawnRegionMarker){ scene.remove(spawnRegionMarker); spawnRegionMarker.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); spawnRegionMarker=null; }
   if(!sr || !sr.on) return;
-  const r=Math.max(1,+sr.r||30); const g=new THREE.Group();
-  const ring=new THREE.Mesh(new THREE.RingGeometry(Math.max(0.5,r-0.5), r, 64), new THREE.MeshBasicMaterial({ color:0x9b7bff, transparent:true, opacity:0.6, side:THREE.DoubleSide, depthWrite:false }));
-  ring.rotation.x=-Math.PI/2; ring.position.y=0.08; g.add(ring);
-  const fill=new THREE.Mesh(new THREE.CircleGeometry(r,56), new THREE.MeshBasicMaterial({ color:0x9b7bff, transparent:true, opacity:0.08, side:THREE.DoubleSide, depthWrite:false }));
-  fill.rotation.x=-Math.PI/2; fill.position.y=0.06; g.add(fill);
-  g.position.set(+sr.x||0, _maxTerrainOver(+sr.x||0,+sr.z||0,r), +sr.z||0);
+  const g=new THREE.Group();
+  if(sr.shape==='poly'){
+    const pts=sr.poly||[];
+    if(pts.length){
+      const y=0.12;
+      // outline (closed loop if 3+ points)
+      const verts=[]; for(const p of pts){ verts.push(new THREE.Vector3(p.x, _maxTerrainOver(p.x,p.z,0)+y, p.z)); }
+      if(pts.length>=3) verts.push(verts[0].clone());
+      if(verts.length>=2){ const lg=new THREE.BufferGeometry().setFromPoints(verts); const line=new THREE.Line(lg, new THREE.LineBasicMaterial({ color:0x9b7bff, transparent:true, opacity:0.9 })); line.renderOrder=9000; g.add(line); }
+      // vertex dots so you can see each clicked point
+      for(const p of pts){ const d=new THREE.Mesh(new THREE.SphereGeometry(0.5,12,8), new THREE.MeshBasicMaterial({ color:0x9b7bff, transparent:true, opacity:0.9, depthTest:false })); d.position.set(p.x, _maxTerrainOver(p.x,p.z,0)+y, p.z); d.renderOrder=9001; g.add(d); }
+      // translucent fill (fan triangulation from the centroid — fine for the simple convex-ish arenas this targets)
+      if(pts.length>=3){ const c=_polyCentroid(pts); const fy=_maxTerrainOver(c.x,c.z,0)+0.06; const pos=[]; for(let i=0;i<pts.length;i++){ const a=pts[i], b=pts[(i+1)%pts.length]; pos.push(c.x,fy,c.z, a.x,fy,a.z, b.x,fy,b.z); } const fg=new THREE.BufferGeometry(); fg.setAttribute('position', new THREE.Float32BufferAttribute(pos,3)); const fill=new THREE.Mesh(fg, new THREE.MeshBasicMaterial({ color:0x9b7bff, transparent:true, opacity:0.10, side:THREE.DoubleSide, depthWrite:false })); g.add(fill); }
+    }
+  } else {
+    const r=Math.max(1,+sr.r||30);
+    const ring=new THREE.Mesh(new THREE.RingGeometry(Math.max(0.5,r-0.5), r, 64), new THREE.MeshBasicMaterial({ color:0x9b7bff, transparent:true, opacity:0.6, side:THREE.DoubleSide, depthWrite:false }));
+    ring.rotation.x=-Math.PI/2; ring.position.set(+sr.x||0, _maxTerrainOver(+sr.x||0,+sr.z||0,r)+0.08, +sr.z||0); g.add(ring);
+    const fill=new THREE.Mesh(new THREE.CircleGeometry(r,56), new THREE.MeshBasicMaterial({ color:0x9b7bff, transparent:true, opacity:0.08, side:THREE.DoubleSide, depthWrite:false }));
+    fill.rotation.x=-Math.PI/2; fill.position.set(+sr.x||0, _maxTerrainOver(+sr.x||0,+sr.z||0,r)+0.06, +sr.z||0); g.add(fill);
+  }
   g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.spawnRegionMarker=true;
   scene.add(g); spawnRegionMarker=g;
 }
@@ -8915,23 +8933,38 @@ const DUEL_KILL_CREDITS = 75;   // credits earned per kill in 1v1 (so loot crate
 function duelSpawnFor(id){ return DUEL_SPAWNS[id % DUEL_SPAWNS.length]; }
 // Pick a random, valid spawn point on the map: not inside geometry, clear to stand, and as far as
 // possible from other players, facing the arena center. Used for duel deploy + every respawn.
+// Ray-cast point-in-polygon test (XZ plane). poly = [{x,z},...].
+function _pointInPoly(px, pz, poly){
+  let inside=false;
+  for(let i=0, j=poly.length-1; i<poly.length; j=i++){
+    const xi=poly[i].x, zi=poly[i].z, xj=poly[j].x, zj=poly[j].z;
+    if(((zi>pz)!==(zj>pz)) && (px < (xj-xi)*(pz-zi)/((zj-zi)||1e-9)+xi)) inside=!inside;
+  }
+  return inside;
+}
+function _polyBounds(poly){ let minx=1e9,maxx=-1e9,minz=1e9,maxz=-1e9; for(const p of poly){ if(p.x<minx)minx=p.x; if(p.x>maxx)maxx=p.x; if(p.z<minz)minz=p.z; if(p.z>maxz)maxz=p.z; } return {minx,maxx,minz,maxz}; }
+function _polyCentroid(poly){ let x=0,z=0; for(const p of poly){ x+=p.x; z+=p.z; } return { x:x/poly.length, z:z/poly.length }; }
 function randomSpawn(){
   const lim = ARENA - 6;
-  const reg = (gameCfg && gameCfg.spawnRegion && gameCfg.spawnRegion.on) ? gameCfg.spawnRegion : null;   // confine to a circle?
+  const sr = (gameCfg && gameCfg.spawnRegion && gameCfg.spawnRegion.on) ? gameCfg.spawnRegion : null;
+  const usePoly = sr && sr.shape==='poly' && sr.poly && sr.poly.length>=3;   // a clicked outline?
+  const reg = (sr && !usePoly) ? sr : null;                                  // a circle?
+  const pb = usePoly ? _polyBounds(sr.poly) : null;
   const others = [];
   for(const id in NET.players){ const rp=NET.players[id]; if(rp) others.push([rp.posEye.x, rp.posEye.z]); }
   let best=null, bestScore=-1;
-  for(let tries=0; tries<48; tries++){
+  for(let tries=0; tries<64; tries++){
     let x, z;
-    if(reg){ const a=Math.random()*Math.PI*2, rr=Math.sqrt(Math.random())*Math.max(1,reg.r); x=reg.x+Math.cos(a)*rr; z=reg.z+Math.sin(a)*rr; }   // uniform point in the region disc
+    if(usePoly){ x = pb.minx + Math.random()*(pb.maxx-pb.minx); z = pb.minz + Math.random()*(pb.maxz-pb.minz); if(!_pointInPoly(x,z,sr.poly)) continue; }   // reject points outside the outline
+    else if(reg){ const a=Math.random()*Math.PI*2, rr=Math.sqrt(Math.random())*Math.max(1,reg.r); x=reg.x+Math.cos(a)*rr; z=reg.z+Math.sin(a)*rr; }   // uniform point in the region disc
     else { x=(Math.random()*2-1)*lim; z=(Math.random()*2-1)*lim; }
     if(insideSolid(x,z,0) || !clearAt(x,z,0)) continue;     // skip points inside/blocked by geometry
     let nd = others.length ? 1e9 : lim;
     for(const o of others){ const d=Math.hypot(x-o[0], z-o[1]); if(d<nd) nd=d; }
-    const good = reg ? (reg.r*0.6) : 34;   // "good enough separation" scales with the region size
+    const good = usePoly ? Math.min(34, Math.hypot(pb.maxx-pb.minx, pb.maxz-pb.minz)*0.3) : (reg ? (reg.r*0.6) : 34);
     if(nd>bestScore){ bestScore=nd; best={x,z}; if(nd>good) break; }   // good enough separation -> take it
   }
-  if(!best) best = reg ? { x:reg.x, z:reg.z } : { x:0, z:0 };   // fallback: region center (or arena center)
+  if(!best) best = usePoly ? _polyCentroid(sr.poly) : (reg ? { x:reg.x, z:reg.z } : { x:0, z:0 });   // fallback: region center
   return { x:best.x, z:best.z, yaw:Math.atan2(best.x, best.z) };   // atan2(x,z) faces the center (0,0)
 }
 function sendToPlayer(id, msg){
@@ -9420,7 +9453,7 @@ function loadLevelFromNet(level){
   _applyCine(level.cine);
   // per-player characters: the client keeps its own avatar; the host's character arrives via the welcome 'char' field
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; gameCfg.noRespawn = !!level.game.noRespawn;
-      if(level.game.spawnRegion){ gameCfg.spawnRegion = { on:!!level.game.spawnRegion.on, x:+level.game.spawnRegion.x||0, z:+level.game.spawnRegion.z||0, r:(level.game.spawnRegion.r!=null?+level.game.spawnRegion.r:30) }; } else { gameCfg.spawnRegion = { on:false, x:0, z:0, r:30 }; } }
+      if(level.game.spawnRegion){ const _sr=level.game.spawnRegion; gameCfg.spawnRegion = { on:!!_sr.on, shape:_sr.shape||'circle', x:+_sr.x||0, z:+_sr.z||0, r:(_sr.r!=null?+_sr.r:30), poly:Array.isArray(_sr.poly)?_sr.poly.map(p=>({x:+p.x||0,z:+p.z||0})):[] }; } else { gameCfg.spawnRegion = { on:false, shape:'circle', x:0, z:0, r:30, poly:[] }; } }
   extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null; if(level.extractFx){ extractFxCfg.color=level.extractFx.color!=null?level.extractFx.color:extractFxCfg.color; extractFxCfg.opacity=level.extractFx.opacity!=null?level.extractFx.opacity:extractFxCfg.opacity; extractFxCfg.height=level.extractFx.height!=null?level.extractFx.height:extractFxCfg.height; extractFxCfg.pillar=level.extractFx.pillar!=null?!!level.extractFx.pillar:extractFxCfg.pillar; if(typeof applyExtractFx==='function') applyExtractFx(); } if(typeof refreshExtractMarker==='function') refreshExtractMarker();   // restore the per-level extraction spot (campaign / co-op load path)
   audioZones = Array.isArray(level.audioZones) ? level.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : [];
   deathZones = Array.isArray(level.deathZones) ? level.deathZones.map(z=>_migrateDeathZone(z)) : []; if(typeof refreshDeathZoneMarkers==='function') refreshDeathZoneMarkers(); if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
@@ -11078,7 +11111,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 424 · 2026-06-12';
+const BUILD_VERSION = 'build 425 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14367,7 +14400,7 @@ function serializeLevel(){
     roster: charRoster.map(c=>({ name:c.name, url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, thumb:c.thumb||'', clips:Object.assign({},c.clips||{}), clipSpeed:Object.assign({},c.clipSpeed||{}), clipHold:Object.assign({},c.clipHold||{}) })),
     pickupModels: Object.keys(pickupModels).reduce((a,k)=>{ const m=pickupModels[k]; if(m&&m.url){ a[k]={ url:m.url, scale:m.scale||1 }; } return a; }, {}),
     keyNames: Object.keys(keyNames).reduce((a,k)=>{ const n=(keyNames[k]||'').trim(); if(n) a[k]=n; return a; }, {}),
-    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave, noRespawn: !!gameCfg.noRespawn, spawnRegion: { on: !!gameCfg.spawnRegion.on, x: +gameCfg.spawnRegion.x, z: +gameCfg.spawnRegion.z, r: +gameCfg.spawnRegion.r } },
+    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave, noRespawn: !!gameCfg.noRespawn, spawnRegion: { on: !!gameCfg.spawnRegion.on, shape: gameCfg.spawnRegion.shape||'circle', x: +gameCfg.spawnRegion.x, z: +gameCfg.spawnRegion.z, r: +gameCfg.spawnRegion.r, poly: (gameCfg.spawnRegion.poly||[]).map(p=>({ x:+p.x, z:+p.z })) } },
     dmgNum:  { on: dmgNumCfg.on !== false, size: dmgNumCfg.size, hit: dmgNumCfg.hitColor, kill: dmgNumCfg.killColor },
     pstart:  { x: playerSpawn.x, y: playerSpawn.y||0, z: playerSpawn.z, yaw: playerSpawn.yaw },
     extract: extractSpot ? { x: +extractSpot.x.toFixed(3), z: +extractSpot.z.toFixed(3) } : null,
@@ -14658,7 +14691,7 @@ function restoreLevel(level){
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns) buildSpawnMarker(sp); } setSpawnMarkersVisible(editorOpen);
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; gameCfg.noRespawn = !!level.game.noRespawn;
-      if(level.game.spawnRegion){ gameCfg.spawnRegion = { on:!!level.game.spawnRegion.on, x:+level.game.spawnRegion.x||0, z:+level.game.spawnRegion.z||0, r:(level.game.spawnRegion.r!=null?+level.game.spawnRegion.r:30) }; } else { gameCfg.spawnRegion = { on:false, x:0, z:0, r:30 }; } }
+      if(level.game.spawnRegion){ const _sr=level.game.spawnRegion; gameCfg.spawnRegion = { on:!!_sr.on, shape:_sr.shape||'circle', x:+_sr.x||0, z:+_sr.z||0, r:(_sr.r!=null?+_sr.r:30), poly:Array.isArray(_sr.poly)?_sr.poly.map(p=>({x:+p.x||0,z:+p.z||0})):[] }; } else { gameCfg.spawnRegion = { on:false, shape:'circle', x:0, z:0, r:30, poly:[] }; } }
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
   if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.y=level.pstart.y||0; playerSpawn.yaw=level.pstart.yaw||0; } else { playerSpawn.x=0; playerSpawn.z=0; playerSpawn.y=0; playerSpawn.yaw=0; }
   refreshPlayerSpawnMarker();
@@ -15647,21 +15680,46 @@ function renderEditorFields(){
         ? 'Players and bots spawn only inside this circle \u2014 keep it inside your arena.'
         : 'Off \u2014 players/bots spawn anywhere clear on the map (can land outside an arena prop).';
       if(sr.on){
-        const useStart=document.createElement('button'); useStart.textContent='\u2316 Center on player start'; useStart.style.cssText='width:100%;margin:0 0 6px;';
-        useStart.title='Snap the region center to your placed player start.';
-        useStart.onclick=()=>{ pushUndoSnapshot(); sr.x=+playerSpawn.x||0; sr.z=+playerSpawn.z||0; refreshSpawnRegionMarker(); renderEditorFields(); };
-        gHost.appendChild(useStart);
-        const mkN=(label,key,min,max,step)=>{
-          const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:8px;color:#9fe6cf;font-size:12px;margin:3px 0;';
-          const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='70px';
-          const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=sr[key]; rng.style.cssText='flex:1;accent-color:#38f5b5;';
-          const num=document.createElement('input'); num.type='number'; num.min=min; num.max=max; num.step=step; num.value=sr[key]; num.style.cssText='width:62px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:11px;';
-          const ap=(v)=>{ let n=parseFloat(v); if(!isFinite(n)) n=0; sr[key]=n; rng.value=n; num.value=n; refreshSpawnRegionMarker(); };
-          rng.addEventListener('mousedown',()=>pushUndoSnapshot()); num.addEventListener('focus',()=>pushUndoSnapshot());
-          rng.oninput=()=>ap(rng.value); num.onchange=()=>ap(num.value);
-          row.appendChild(sp); row.appendChild(rng); row.appendChild(num); gHost.appendChild(row);
-        };
-        mkN('Center X','x',-200,200,1); mkN('Center Z','z',-200,200,1); mkN('Radius','r',3,200,1);
+        // shape: circle or clicked outline (polygon) for odd-shaped arenas
+        const shRow=document.createElement('div'); shRow.style.cssText='display:flex;gap:6px;margin:2px 0 8px;';
+        [['circle','● Circle'],['poly','⬡ Outline']].forEach(([val,lab])=>{
+          const b=document.createElement('button'); b.textContent=lab; b.style.cssText='flex:1;'+(sr.shape===val?'background:#1d6f5e;border-color:#38f5b5;color:#eafff7;':'');
+          b.onclick=()=>{ pushUndoSnapshot(); sr.shape=val; if(val==='circle') spawnPolyEdit=false; refreshSpawnRegionMarker(); renderEditorFields(); };
+          shRow.appendChild(b);
+        });
+        gHost.appendChild(shRow);
+        if(sr.shape==='poly'){
+          spawnPolyEdit = !!spawnPolyEdit;   // keep current draw state
+          const tip=hint(gHost,'','0 0 6px'); tip.textContent='Switch to Top view, click Draw, then click around your arena\u2019s edge to trace its shape. 3+ points needed.';
+          const drawBtn=document.createElement('button'); drawBtn.style.cssText='width:100%;margin:0 0 6px;'+(spawnPolyEdit?'background:#7a4d12;border-color:#ffb74d;color:#fff;':'');
+          drawBtn.textContent = spawnPolyEdit ? '✓ Drawing… click the map (click here to stop)' : '✎ Draw outline (click points on the map)';
+          drawBtn.onclick=()=>{ spawnPolyEdit=!spawnPolyEdit; renderEditorFields(); };
+          gHost.appendChild(drawBtn);
+          const cnt=hint(gHost,'','0 0 6px'); cnt.textContent=(sr.poly.length)+' point'+(sr.poly.length===1?'':'s')+' placed'+(sr.poly.length>=3?' — region active.':(sr.poly.length?' — need at least 3.':'.'));
+          const row=document.createElement('div'); row.style.cssText='display:flex;gap:6px;';
+          const undo=document.createElement('button'); undo.textContent='↶ Undo point'; undo.style.flex='1'; undo.disabled=!sr.poly.length;
+          undo.onclick=()=>{ if(!sr.poly.length) return; pushUndoSnapshot(); sr.poly.pop(); refreshSpawnRegionMarker(); renderEditorFields(); };
+          const clr=document.createElement('button'); clr.textContent='✕ Clear outline'; clr.style.flex='1'; clr.disabled=!sr.poly.length;
+          clr.onclick=()=>{ pushUndoSnapshot(); sr.poly.length=0; refreshSpawnRegionMarker(); renderEditorFields(); };
+          row.appendChild(undo); row.appendChild(clr); gHost.appendChild(row);
+        } else {
+          spawnPolyEdit=false;
+          const useStart=document.createElement('button'); useStart.textContent='\u2316 Center on player start'; useStart.style.cssText='width:100%;margin:0 0 6px;';
+          useStart.title='Snap the region center to your placed player start.';
+          useStart.onclick=()=>{ pushUndoSnapshot(); sr.x=+playerSpawn.x||0; sr.z=+playerSpawn.z||0; refreshSpawnRegionMarker(); renderEditorFields(); };
+          gHost.appendChild(useStart);
+          const mkN=(label,key,min,max,step)=>{
+            const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:8px;color:#9fe6cf;font-size:12px;margin:3px 0;';
+            const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='70px';
+            const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=sr[key]; rng.style.cssText='flex:1;accent-color:#38f5b5;';
+            const num=document.createElement('input'); num.type='number'; num.min=min; num.max=max; num.step=step; num.value=sr[key]; num.style.cssText='width:62px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:11px;';
+            const ap=(v)=>{ let n=parseFloat(v); if(!isFinite(n)) n=0; sr[key]=n; rng.value=n; num.value=n; refreshSpawnRegionMarker(); };
+            rng.addEventListener('mousedown',()=>pushUndoSnapshot()); num.addEventListener('focus',()=>pushUndoSnapshot());
+            rng.oninput=()=>ap(rng.value); num.onchange=()=>ap(num.value);
+            row.appendChild(sp); row.appendChild(rng); row.appendChild(num); gHost.appendChild(row);
+          };
+          mkN('Center X','x',-200,200,1); mkN('Center Z','z',-200,200,1); mkN('Radius','r',3,200,1);
+        }
       }
     }
     // ===== Pickups: weapons / ammo / health / buffs placed on the map =====
@@ -16788,7 +16846,8 @@ const AXIS_COL = { x:0xff5566, y:0x66ff88, z:0x5599ff };
 let selProps = [];        // selected prop meshes; the "primary" is editorTargets.props.idx
 let selLights = [];       // selected light groups; the "primary" is editorTargets.lights.idx
 let selSpawns = [];       // selected spawn markers; the "primary" is editorTargets.spawns.idx
-let spawnRouteEdit = null;   // while set (a spawn marker), clicking the ground appends a waypoint to its route
+let spawnRouteEdit = null;
+let spawnPolyEdit = false;   // when true, editor clicks add MP spawn-area outline points (top view)   // while set (a spawn marker), clicking the ground appends a waypoint to its route
 const _groundPlane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
 function groundPointUnderPointer(e){
   const r = renderer.domElement.getBoundingClientRect();
@@ -17231,6 +17290,12 @@ renderer.domElement.addEventListener('click', (e)=>{
     if(gp){ pushUndoSnapshot(); spawnRouteEdit.userData.mark.route.push({ x:gp.x, z:gp.z }); refreshRouteViz(spawnRouteEdit); renderEditorFields(); }
     return;
   }
+  if(spawnPolyEdit){   // spawn-area drawing: each ground click adds an outline point for the MP spawn polygon
+    if(editorDragMoved){ editorDragMoved = false; return; }
+    const gp = groundPointUnderPointer(e);
+    if(gp){ pushUndoSnapshot(); gameCfg.spawnRegion.poly.push({ x:+gp.x.toFixed(2), z:+gp.z.toFixed(2) }); refreshSpawnRegionMarker(); renderEditorFields(); }
+    return;
+  }
   if(editorDragMoved){ editorDragMoved = false; return; }   // that was a drag (look/pan/gizmo), not a selection
   const r = renderer.domElement.getBoundingClientRect();
   const nx = ((e.clientX - r.left)/r.width)*2 - 1;
@@ -17487,9 +17552,9 @@ function startGame(){
   if(typeof selBoxes!=='undefined' && selBoxes) for(const b of selBoxes) b.visible=false;
   if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false);
   if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setLootMarkersVisible==='function') setLootMarkersVisible(false);
-  if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof setDeathZoneMarkersVisible==='function') setDeathZoneMarkersVisible(false); if(typeof setSpawnRegionMarkerVisible==='function') setSpawnRegionMarkerVisible(false);
+  if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof setDeathZoneMarkersVisible==='function') setDeathZoneMarkersVisible(false); if(typeof setSpawnRegionMarkerVisible==='function') setSpawnRegionMarkerVisible(false); spawnPolyEdit=false;
   if(typeof lightModels!=='undefined') for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; }
-  if(typeof _cinePreviewGroup!=='undefined' && _cinePreviewGroup) _cinePreviewGroup.visible=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; { const _fb=document.getElementById('edAddFab'); if(_fb) _fb.style.display='none'; }   // the + lives outside the panel — hide it on this direct-close path too gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof _pathPreviewGroup!=='undefined' && _pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; } if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG; if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setLootMarkersVisible==='function') setLootMarkersVisible(false); if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof setDeathZoneMarkersVisible==='function') setDeathZoneMarkersVisible(false); if(typeof setSpawnRegionMarkerVisible==='function') setSpawnRegionMarkerVisible(false); if(typeof gr!=='undefined' && gr){ gr.translate.visible=gr.scale.visible=gr.rotate.visible=false; } if(typeof selBox!=='undefined' && selBox) selBox.visible=false;
+  if(typeof _cinePreviewGroup!=='undefined' && _cinePreviewGroup) _cinePreviewGroup.visible=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; { const _fb=document.getElementById('edAddFab'); if(_fb) _fb.style.display='none'; }   // the + lives outside the panel — hide it on this direct-close path too gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof _pathPreviewGroup!=='undefined' && _pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; } if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG; if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setLootMarkersVisible==='function') setLootMarkersVisible(false); if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof setDeathZoneMarkersVisible==='function') setDeathZoneMarkersVisible(false); if(typeof setSpawnRegionMarkerVisible==='function') setSpawnRegionMarkerVisible(false); spawnPolyEdit=false; if(typeof gr!=='undefined' && gr){ gr.translate.visible=gr.scale.visible=gr.rotate.visible=false; } if(typeof selBox!=='undefined' && selBox) selBox.visible=false;
   camera.fov = (worldCfg && worldCfg.fov) || BASE_FOV; camera.updateProjectionMatrix(); camera.rotation.z = 0;
   // clear entities
   enemies.slice().forEach(e=>{ scene.remove(e.mesh); if(e.mesh.userData.mixer){ const mi=mixers.indexOf(e.mesh.userData.mixer); if(mi>=0) mixers.splice(mi,1); } }); enemies.length=0;
@@ -17629,9 +17694,9 @@ function endGame(){
   if(typeof selBoxes!=='undefined' && selBoxes) for(const b of selBoxes) b.visible=false;
   if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false);
   if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setLootMarkersVisible==='function') setLootMarkersVisible(false);
-  if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof setDeathZoneMarkersVisible==='function') setDeathZoneMarkersVisible(false); if(typeof setSpawnRegionMarkerVisible==='function') setSpawnRegionMarkerVisible(false);
+  if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof setDeathZoneMarkersVisible==='function') setDeathZoneMarkersVisible(false); if(typeof setSpawnRegionMarkerVisible==='function') setSpawnRegionMarkerVisible(false); spawnPolyEdit=false;
   if(typeof lightModels!=='undefined') for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; }
-  if(typeof _cinePreviewGroup!=='undefined' && _cinePreviewGroup) _cinePreviewGroup.visible=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; { const _fb=document.getElementById('edAddFab'); if(_fb) _fb.style.display='none'; }   // the + lives outside the panel — hide it on this direct-close path too gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof _pathPreviewGroup!=='undefined' && _pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; } if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG; if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setLootMarkersVisible==='function') setLootMarkersVisible(false); if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof setDeathZoneMarkersVisible==='function') setDeathZoneMarkersVisible(false); if(typeof setSpawnRegionMarkerVisible==='function') setSpawnRegionMarkerVisible(false); if(typeof gr!=='undefined' && gr){ gr.translate.visible=gr.scale.visible=gr.rotate.visible=false; } if(typeof selBox!=='undefined' && selBox) selBox.visible=false;
+  if(typeof _cinePreviewGroup!=='undefined' && _cinePreviewGroup) _cinePreviewGroup.visible=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; { const _fb=document.getElementById('edAddFab'); if(_fb) _fb.style.display='none'; }   // the + lives outside the panel — hide it on this direct-close path too gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof _pathPreviewGroup!=='undefined' && _pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; } if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG; if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setLootMarkersVisible==='function') setLootMarkersVisible(false); if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof setDeathZoneMarkersVisible==='function') setDeathZoneMarkersVisible(false); if(typeof setSpawnRegionMarkerVisible==='function') setSpawnRegionMarkerVisible(false); spawnPolyEdit=false; if(typeof gr!=='undefined' && gr){ gr.translate.visible=gr.scale.visible=gr.rotate.visible=false; } if(typeof selBox!=='undefined' && selBox) selBox.visible=false;
   $('shop').classList.add('hidden');
   $('prompt').style.display='none';
   const ov=$('overlay'); ov.classList.remove('hidden');
