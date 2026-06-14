@@ -10855,7 +10855,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 409 · 2026-06-12';
+const BUILD_VERSION = 'build 410 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12328,10 +12328,19 @@ function boltImpact(p, color){
 // True if a wall / static prop sits on the segment between two floor points (sampled at chest height).
 function segmentBlocked(ax, az, bx, bz, y){
   const steps = 14;
-  for(let s=1; s<steps; s++){
-    const t = s/steps, x = ax+(bx-ax)*t, z = az+(bz-az)*t;
-    for(const c of colliders){ const b=c.userData.box; if(!b) continue;
-      if(x>=b.min.x && x<=b.max.x && z>=b.min.z && z<=b.max.z && y>=b.min.y && y<=b.max.y) return true; }
+  for(const c of colliders){
+    const bs = (c.userData && (c.userData.boxes || (c.userData.box && [c.userData.box]))); if(!bs) continue;
+    for(const b of bs){
+      // An enclosing volume (e.g. a whole arena model) has a box that contains BOTH endpoints — it can't be a
+      // wall standing between them, so it must not block sight. Skip those; only count boxes you'd cross into.
+      const aIn = (ax>=b.min.x && ax<=b.max.x && az>=b.min.z && az<=b.max.z);
+      const bIn = (bx>=b.min.x && bx<=b.max.x && bz>=b.min.z && bz<=b.max.z);
+      if(aIn && bIn) continue;
+      for(let s=1; s<steps; s++){
+        const t = s/steps, x = ax+(bx-ax)*t, z = az+(bz-az)*t;
+        if(x>=b.min.x && x<=b.max.x && z>=b.min.z && z<=b.max.z && y>=b.min.y && y<=b.max.y) return true;   // a wall/pillar crosses the sightline
+      }
+    }
   }
   return false;
 }
