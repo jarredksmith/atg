@@ -7161,7 +7161,19 @@ function loadGLTFCached(url, cb, errcb){
 // downloading requires the token. Models arrive as a zipped glTF, so we unzip (fflate, lazy-loaded) and feed
 // the entries to GLTFLoader via blob URLs. A prop's src is stored as 'sketchfab:<uid>' so it re-resolves on load.
 const SF_TOKEN_KEY='breach_sketchfab_token', SF_ON_KEY='breach_sketchfab_on';
-function sfGetToken(){ try{ return (localStorage.getItem(SF_TOKEN_KEY)||'').trim(); }catch(e){ return ''; } }
+// A host can lend its Sketchfab token to joiners for a session so a level's models load even if the joiner has
+// no token of their own. Session-only (never saved to localStorage), and the joiner's own token always wins.
+let _sfSessionToken = '';
+function sfSetSessionToken(t){ _sfSessionToken = (t||'').trim(); }
+// Light reversible obfuscation (NOT encryption) so the token isn't sitting in the data stream as plain text.
+function _sfPack(s){ try{ s=String(s||''); let o=''; for(let i=0;i<s.length;i++) o+=String.fromCharCode(s.charCodeAt(i)^(0x42+(i%13))); return 'sfk1:'+btoa(unescape(encodeURIComponent(o))); }catch(e){ return ''; } }
+function _sfUnpack(p){ try{ if(typeof p!=='string'||p.indexOf('sfk1:')!==0) return ''; const o=decodeURIComponent(escape(atob(p.slice(5)))); let s=''; for(let i=0;i<o.length;i++) s+=String.fromCharCode(o.charCodeAt(i)^(0x42+(i%13))); return s; }catch(e){ return ''; } }
+// Does a serialized level reference any Sketchfab model (sketchfab:<uid>)? Used to decide whether to lend the token.
+function _levelUsesSketchfab(level){
+  try{ const props=(level&&level.props)||[]; for(const p of props){ const u=p&&(p.src||p.url||p.model); if(typeof u==='string' && u.indexOf('sketchfab:')===0) return true; } }catch(e){}
+  return false;
+}
+function sfGetToken(){ try{ const own=(localStorage.getItem(SF_TOKEN_KEY)||'').trim(); return own || _sfSessionToken || ''; }catch(e){ return _sfSessionToken||''; } }
 function sfSetToken(k){ try{ localStorage.setItem(SF_TOKEN_KEY, (k||'').trim()); }catch(e){} }
 function sfEnabled(){ try{ return localStorage.getItem(SF_ON_KEY)==='1'; }catch(e){ return false; } }
 function sfSetEnabled(b){ try{ localStorage.setItem(SF_ON_KEY, b?'1':'0'); }catch(e){} }
@@ -10153,6 +10165,7 @@ function handleHostMsg(msg){
     if(msg.teams) NET.teams=msg.teams;
     if(msg.yourTeam!=null) NET.team=msg.yourTeam;
     if(msg.level) NET.pendingLevel=msg.level;
+    if(msg.sfTok){ try{ const t=_sfUnpack(msg.sfTok); if(t) sfSetSessionToken(t); }catch(e){} }   // borrow the host's Sketchfab token for this session so the level's models load
     NET.charById = Object.assign({}, msg.chars||{}); if(msg.char) NET.charById[0]=msg.char;   // host + existing players' characters
     if(msg.sounds) NET.pendingSounds=msg.sounds;
     if(msg.music!=null) NET.pendingMusic=msg.music;
@@ -10213,7 +10226,10 @@ function hostStart(code, mode, killTarget){
       if(teamMode()) assignTeam(conn._pid);
       // hand the joiner the mode, the kill target, and the current level so their map matches
       let level=null; try{ level = serializeLevel(); }catch(e){}
-      conn.send({t:'welcome', id:conn._pid, mode:NET.gameMode, killTarget:NET.killTarget, level, sounds:audioSettings.sounds, music:audioSettings.musicUrl, teams:NET.teams, yourTeam:(teamMode()?NET.teams[conn._pid]:undefined), char:myCharCfg(), chars:Object.assign({}, NET.charById), phase:NET.phase});
+      // If this level uses Sketchfab models and we have a token, lend it to the joiner so the models load even
+      // if they have no Sketchfab account of their own. Obfuscated (not encrypted) — they don't keep it.
+      let sfTok; try{ if(_levelUsesSketchfab(level) && sfGetToken()) sfTok = _sfPack(sfGetToken()); }catch(e){}
+      conn.send({t:'welcome', id:conn._pid, mode:NET.gameMode, killTarget:NET.killTarget, level, sfTok, sounds:audioSettings.sounds, music:audioSettings.musicUrl, teams:NET.teams, yourTeam:(teamMode()?NET.teams[conn._pid]:undefined), char:myCharCfg(), chars:Object.assign({}, NET.charById), phase:NET.phase});
       netStatus('Player joined ('+Object.keys(NET.conns).length+' connected)');
       if(pvpMode()) broadcastDuelScore();
       if(teamMode()){ broadcastTeams(); applyTeamColors(); }
@@ -11183,7 +11199,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 433 · 2026-06-12';
+const BUILD_VERSION = 'build 434 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
