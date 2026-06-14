@@ -6133,6 +6133,19 @@ function generateTerrain(seg, amp, freq, seed){
   return h;
 }
 // World-space height at (x,z); 0 if no terrain is set.
+// Ease an angle toward a target by the shortest path, capped at a max turn rate (rad/sec). Returns the new
+// angle. This is what makes characters/enemies pivot to a new facing instead of snapping ("jumping direction").
+function turnToward(cur, target, dt, rate){
+  let d = target - cur;
+  while(d >  Math.PI) d -= 2*Math.PI;   // shortest way around the circle
+  while(d < -Math.PI) d += 2*Math.PI;
+  const step = (rate==null?9:rate) * dt;   // default ~9 rad/s: brisk but visibly a turn, not a snap
+  if(d >  step) d =  step;
+  if(d < -step) d = -step;
+  return cur + d;
+}
+const TURN_RATE = 9;   // shared default turn speed for bots + enemies (rad/sec)
+
 function terrainHeightAt(x, z){
   let t=null; try { t=(typeof worldCfg!=='undefined' && worldCfg) ? worldCfg.terrain : null; } catch(e){ return 0; }   // worldCfg can be in its TDZ during the first rebuildArena()
   if(!t || !t.h || !t.h.length || !t.seg) return 0;
@@ -9040,7 +9053,7 @@ function updateBots(dt){
       else { b.pos.y=groundY; b.vy=0; b.grounded=true; }
     }
     b.yaw = (tgt && hasLOS) ? Math.atan2(-(tgt.pos.x-b.pos.x), -(tgt.pos.z-b.pos.z)) : Math.atan2(-mvx,-mvz);   // face the target only while it's visible; otherwise face where we're moving (no x-ray tracking)
-    if(b.mesh){ b.mesh.position.set(b.pos.x,b.pos.y,b.pos.z); if(b.grounded===false){ b._spin=(b._spin||0)+(Math.hypot(b.evx||0,b.evz||0)+Math.abs(b.vy||0))*dt*0.5; b.mesh.rotation.set(b._spin, b.yaw, b._spin*0.5); } else { b._spin=0; b.mesh.rotation.set(0, b.yaw, 0); }
+    if(b.mesh){ b.mesh.position.set(b.pos.x,b.pos.y,b.pos.z); if(b.grounded===false){ b._spin=(b._spin||0)+(Math.hypot(b.evx||0,b.evz||0)+Math.abs(b.vy||0))*dt*0.5; b.mesh.rotation.set(b._spin, (b._dispYaw=turnToward(b._dispYaw==null?b.yaw:b._dispYaw, b.yaw, dt, TURN_RATE)), b._spin*0.5); } else { b._spin=0; b.mesh.rotation.set(0, (b._dispYaw=turnToward(b._dispYaw==null?b.yaw:b._dispYaw, b.yaw, dt, TURN_RATE)), 0); }
       if(b.mesh.userData.hasModel && b.mesh.userData.visual && b.mesh.userData.visual.userData.stateActions){
         const md=Math.hypot(b.pos.x-ox, b.pos.z-oz);
         let st = md>0.06 ? 'run' : (md>0.015 ? 'walk' : 'idle');
@@ -9851,7 +9864,7 @@ function netInterpolate(dt){
     } }
   if(NET.mode==='client'){
     for(const id in NET.powerupMeshes){ const m=NET.powerupMeshes[id]; if(m.visible) _animatePickup(m, dt); }
-    for(const id in NET.enemyMeshes){ const em=NET.enemyMeshes[id]; em.mesh.position.lerp(em.target, k); em.mesh.lookAt(player.pos.x, em.mesh.position.y, player.pos.z); if(em.mesh.userData.hasModel) em.mesh.rotateY(em.mesh.userData.faceOff||0); }
+    for(const id in NET.enemyMeshes){ const em=NET.enemyMeshes[id]; em.mesh.position.lerp(em.target, k); const _ey=Math.atan2(player.pos.x - em.mesh.position.x, player.pos.z - em.mesh.position.z) + (em.mesh.userData.hasModel ? (em.mesh.userData.faceOff||0) : 0); em.mesh.rotation.set(0, turnToward(em.mesh.rotation.y, _ey, dt, TURN_RATE), 0); }
     for(const o of dynamicProps){ const tp=o.userData._netTarget; if(tp){ o.position.lerp(new THREE.Vector3(tp[0],tp[1],tp[2]), k); } }
     if(_clientBeaconOn && extractZone){ const pulse=0.6+0.4*Math.sin(performance.now()*0.004);
       if(extractZone.userData.ring) extractZone.userData.ring.material.opacity=0.5+0.4*pulse;
@@ -10948,7 +10961,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 418 · 2026-06-12';
+const BUILD_VERSION = 'build 419 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13544,8 +13557,9 @@ function loop(){
         en.mesh.rotation.set(en._spin, en.mesh.rotation.y, en._spin*0.5);
       } else {
         en._spin=0;
-        en.mesh.lookAt(fx, en.mesh.position.y, fz);   // chasing -> face player; patrolling -> face where it walks
-        if(en.mesh.userData.hasModel) en.mesh.rotateY(en.mesh.userData.faceOff||0);   // GLB characters vary in which way they face; nudge to face forward
+        // face the target (player when chasing, travel dir when patrolling) but TURN toward it, don't snap.
+        const _tYaw = Math.atan2(fx - en.mesh.position.x, fz - en.mesh.position.z) + (en.mesh.userData.hasModel ? (en.mesh.userData.faceOff||0) : 0);
+        en.mesh.rotation.set(0, turnToward(en.mesh.rotation.y, _tYaw, dt, TURN_RATE), 0);
       }
       en.cooldown -= dt;
       if(en.ranged){
