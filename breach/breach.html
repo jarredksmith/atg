@@ -7227,6 +7227,11 @@ const DEFAULT_FX = { color:0xffd9a0, size:1, count:1, life:1, spread:0.55, gravi
 let fxCfg = _sanitizeFx(savedLevel && savedLevel.fx);   // load saved impact FX on boot (boot path reads savedLevel.* directly)
 function _fxClamp(v,lo,hi,d){ v=+v; if(!isFinite(v)) return d; return Math.max(lo,Math.min(hi,v)); }
 function _sanitizeFx(o){ o=o||{}; return { color:(o.color!=null?(o.color|0):DEFAULT_FX.color), size:_fxClamp(o.size,0.2,4,1), count:_fxClamp(o.count,0.25,4,1), life:_fxClamp(o.life,0.2,3,1), spread:_fxClamp(o.spread,0,1,0.55), gravity:_fxClamp(o.gravity,0,3,1), glow:o.glow!==false, flash:o.flash!==false }; }
+// Death burst FX (the pop where a player/bot falls). Pick a style; serialized with the level.
+const DEATH_FX_STYLES = ['classic','blood','plasma','gib','vapor'];
+const DEFAULT_DEATHFX = { style:'classic', scale:1, color:0xff2d55 };
+function _sanitizeDeathFx(o){ o=o||{}; return { style:(DEATH_FX_STYLES.indexOf(o.style)>=0?o.style:'classic'), scale:_fxClamp(o.scale,0.3,3,1), color:(o.color!=null?(o.color|0):DEFAULT_DEATHFX.color) }; }
+let deathFxCfg = _sanitizeDeathFx(savedLevel && savedLevel.deathFx);
 // Bullet streak / tracer (tunable in the editor under Scene > Bullet streak; serialized with the level)
 const DEFAULT_TRACER = { color:0xfff1c0, width:1, life:1, opacity:0.95, glow:true, on:true };
 let tracerCfg = _sanitizeTracer(savedLevel && savedLevel.tracer);   // load saved bullet streak on boot
@@ -9170,7 +9175,7 @@ function loadLevelFromNet(level){
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; gameCfg.noRespawn = !!level.game.noRespawn; }
   extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null; if(typeof refreshExtractMarker==='function') refreshExtractMarker();   // restore the per-level extraction spot (campaign / co-op load path)
   audioZones = Array.isArray(level.audioZones) ? level.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : []; if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
-  fxCfg = _sanitizeFx(level.fx); if(typeof renderImpactFxPanel==='function') renderImpactFxPanel();
+  fxCfg = _sanitizeFx(level.fx); deathFxCfg = _sanitizeDeathFx(level.deathFx); if(typeof renderImpactFxPanel==='function') renderImpactFxPanel();
   tracerCfg = _sanitizeTracer(level.tracer); if(typeof renderTracerFxPanel==='function') renderTracerFxPanel();
   charRoster = Array.isArray(level.roster) ? level.roster.map(_sanitizeCharCfg) : []; if(typeof renderCharRosterPanel==='function') renderCharRosterPanel();
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
@@ -10694,17 +10699,45 @@ function spark(pos, color){
 // so kills read visually instead of the avatar just vanishing. (x,z) = feet position.
 const deathRings = [];
 function playerDeathFx(x, y, z){
-  for(let i=0;i<26;i++){
-    const p = new THREE.Mesh(new THREE.SphereGeometry(0.13,5,5),
-      new THREE.MeshBasicMaterial({ color: (i%2)?0xff2d55:0xff8a3d, transparent:true }));
-    p.position.set(x, y+0.9, z);
-    const v = new THREE.Vector3((Math.random()-.5), (Math.random()*0.9+0.25), (Math.random()-.5)).multiplyScalar(11);
-    scene.add(p); sparks.push({mesh:p, vel:v, life:0.6});
+  const style = (deathFxCfg && deathFxCfg.style) || 'classic';
+  const SC = (deathFxCfg && deathFxCfg.scale) || 1;
+  const baseCol = (deathFxCfg && deathFxCfg.color!=null) ? deathFxCfg.color : 0xff2d55;
+  // per-style profile: particle count, colors, size, speed, gravity, lifetime, geometry, + ground decal look
+  const P = {
+    classic: { n:26, cols:[0xff2d55,0xff8a3d], size:0.13, spd:11, up:[0.25,1.15], grav:1,   life:0.6, geo:'sphere', ring:{ col:0xff2d55, life:0.5, grow:7,  flat:true } },
+    blood:   { n:34, cols:[0x8a0303,0xb31313,0x5c0202], size:0.16, spd:8.5, up:[0.1,0.8],  grav:2.2, life:0.8, geo:'sphere', ring:{ col:0x6b0000, life:0.9, grow:3.2, flat:true, splat:true } },
+    plasma:  { n:30, cols:[0x38f5b5,0x38c8f5,0xa0ffe8], size:0.12, spd:13, up:[0.4,1.3],  grav:0.3, life:0.7, geo:'sphere', ring:{ col:0x38f5b5, life:0.6, grow:9,  flat:true } },
+    gib:     { n:18, cols:[0x9a0d0d,0x6b4a2a,0xb31313], size:0.22, spd:10, up:[0.5,1.4],  grav:2.6, life:1.0, geo:'box',    ring:{ col:0x6b0000, life:0.8, grow:3,   flat:true, splat:true } },
+    vapor:   { n:22, cols:[0xc8c8d0,0x9aa0b0,0xe0e0ea], size:0.2,  spd:5,  up:[0.3,0.7],  grav:-0.3,life:1.1, geo:'sphere', ring:{ col:0x9aa0b0, life:1.0, grow:6,  flat:true } },
+  }[style] || null;
+  if(!P){   // unknown style -> classic fallback
+    for(let i=0;i<26;i++){ const p=new THREE.Mesh(new THREE.SphereGeometry(0.13,5,5), new THREE.MeshBasicMaterial({ color:(i%2)?0xff2d55:0xff8a3d, transparent:true })); p.position.set(x,y+0.9,z); const v=new THREE.Vector3((Math.random()-.5),(Math.random()*0.9+0.25),(Math.random()-.5)).multiplyScalar(11); scene.add(p); sparks.push({mesh:p,vel:v,life:0.6}); }
+    return;
   }
-  const ring = new THREE.Mesh(new THREE.RingGeometry(0.35,0.6,28),
-    new THREE.MeshBasicMaterial({ color:0xff2d55, side:THREE.DoubleSide, transparent:true, opacity:0.9, depthTest:false }));
+  for(let i=0;i<P.n;i++){
+    const col = P.cols[i % P.cols.length];
+    const geo = P.geo==='box' ? new THREE.BoxGeometry(P.size*SC*1.4, P.size*SC*1.4, P.size*SC*1.4) : new THREE.SphereGeometry(P.size*SC,5,5);
+    const p = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color:col, transparent:true }));
+    p.position.set(x, y+0.9, z);
+    const up = P.up[0] + Math.random()*(P.up[1]-P.up[0]);
+    const v = new THREE.Vector3((Math.random()-.5), up, (Math.random()-.5)).multiplyScalar(P.spd*SC);
+    if(P.geo==='box') p.rotation.set(Math.random()*6,Math.random()*6,Math.random()*6);
+    scene.add(p);
+    const life = P.life*(0.7+Math.random()*0.5);
+    sparks.push({ mesh:p, vel:v, life, max:life, grav:P.grav, shrink:(style==='vapor'?false:true), grow:(style==='vapor'?2.2:0), s0:P.size*SC });
+  }
+  // ground burst ring (and a lingering splat decal for the gory styles)
+  const R = P.ring;
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.35*SC, 0.6*SC, 28),
+    new THREE.MeshBasicMaterial({ color:R.col, side:THREE.DoubleSide, transparent:true, opacity:0.9, depthTest:false }));
   ring.rotation.x = -Math.PI/2; ring.position.set(x, y+0.12, z); ring.renderOrder = 998;
-  scene.add(ring); deathRings.push({ mesh:ring, life:0.5 });
+  scene.add(ring); deathRings.push({ mesh:ring, life:R.life, max:R.life, grow:R.grow });
+  if(R.splat){   // dark pool that fades slower, sells a "blood splat" on the ground
+    const splat = new THREE.Mesh(new THREE.CircleGeometry(0.5*SC, 18),
+      new THREE.MeshBasicMaterial({ color:R.col, transparent:true, opacity:0.55, depthWrite:false }));
+    splat.rotation.x = -Math.PI/2; splat.position.set(x, y+0.06, z); splat.renderOrder = 997;
+    scene.add(splat); deathRings.push({ mesh:splat, life:2.2, max:2.2, grow:1.6, fade:true });
+  }
 }
 // broadcast a death pop so every peer sees it where the player fell (cosmetic; separate from score)
 function netDeath(x, y, z){
@@ -10775,7 +10808,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 405 · 2026-06-12';
+const BUILD_VERSION = 'build 406 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13206,11 +13239,13 @@ function loop(){
     else if(s.grow && s.s0!=null) s.mesh.scale.setScalar(s.s0*(1+s.grow*(1-t)));
     if(s.life<=0){ scene.remove(s.mesh); if(s.mesh.material&&s.mesh.material.dispose) s.mesh.material.dispose(); sparks.splice(i,1); }
   }
-  // death rings (expanding + fading)
+  // death rings (expanding + fading); each carries its own lifetime + growth (set by the death-FX style)
   for(let i=deathRings.length-1;i>=0;i--){
     const r=deathRings[i]; r.life-=dt;
-    const k=1-Math.max(0,r.life)/0.5; const sc=1+k*7;
-    r.mesh.scale.set(sc,sc,sc); r.mesh.material.opacity=Math.max(0,r.life/0.5)*0.9;
+    const mx=r.max||0.5, gr=(r.grow!=null?r.grow:7);
+    const k=1-Math.max(0,r.life)/mx; const sc=1+k*gr;
+    r.mesh.scale.set(sc,sc,sc);
+    r.mesh.material.opacity = r.fade ? Math.max(0,r.life/mx)*0.55 : Math.max(0,r.life/mx)*0.9;   // splats are dimmer + linger
     if(r.life<=0){ scene.remove(r.mesh); r.mesh.geometry.dispose(); deathRings.splice(i,1); }
   }
 
@@ -14014,6 +14049,7 @@ function serializeLevel(){
     pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind })),
     audioZones: audioZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, url:z.url||'', vol:+z.vol, loop:!!z.loop })),
     fx: Object.assign({}, fxCfg),
+    deathFx: Object.assign({}, deathFxCfg),
     tracer: Object.assign({}, tracerCfg),
     roster: charRoster.map(c=>({ name:c.name, url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, thumb:c.thumb||'', clips:Object.assign({},c.clips||{}), clipSpeed:Object.assign({},c.clipSpeed||{}), clipHold:Object.assign({},c.clipHold||{}) })),
     pickupModels: Object.keys(pickupModels).reduce((a,k)=>{ const m=pickupModels[k]; if(m&&m.url){ a[k]={ url:m.url, scale:m.scale||1 }; } return a; }, {}),
@@ -14155,6 +14191,25 @@ function renderImpactFxPanel(){
   const rst=document.createElement('button'); rst.textContent='Reset'; rst.onclick=()=>{ fxCfg=Object.assign({}, DEFAULT_FX); renderImpactFxPanel(); };
   br.appendChild(test); br.appendChild(rst); wrap.appendChild(br);
   const note=document.createElement('div'); note.className='hint'; note.style.marginTop='6px'; note.textContent='Surface / object impacts use this color; hits on enemies stay gold/red so damage still reads.'; wrap.appendChild(note);
+
+  // ---- Death burst FX: pick the style of the pop when a player/bot dies ----
+  const dh=document.createElement('div'); dh.className='hint'; dh.style.cssText='margin:12px 0 4px;font-weight:bold;color:#9fe6cf;'; dh.textContent='Death burst'; wrap.appendChild(dh);
+  const dsel=document.createElement('select'); dsel.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
+  [['classic','Classic (red/orange spark)'],['blood','Blood burst + splat'],['plasma','Plasma (energy)'],['gib','Gib (chunky debris)'],['vapor','Vapor (soft cloud)']].forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(deathFxCfg.style===o[0]) op.selected=true; dsel.appendChild(op); });
+  dsel.onchange=()=>{ deathFxCfg.style=dsel.value; renderImpactFxPanel(); };
+  row('Style', dsel);
+  const dsc=document.createElement('div'); dsc.style.cssText='display:flex;flex:1;gap:6px;align-items:center';
+  const dscI=document.createElement('input'); dscI.type='range'; dscI.min='0.3'; dscI.max='3'; dscI.step='0.1'; dscI.value=deathFxCfg.scale; dscI.style.flex='1';
+  const dscV=document.createElement('span'); dscV.textContent=(+deathFxCfg.scale).toFixed(1); dscV.style.minWidth='28px';
+  dscI.oninput=()=>{ deathFxCfg.scale=+dscI.value; dscV.textContent=(+dscI.value).toFixed(1); }; dsc.appendChild(dscI); dsc.appendChild(dscV); row('Size', dsc);
+  const dci=document.createElement('input'); dci.type='color'; dci.value='#'+((deathFxCfg.color||0xff2d55)>>>0).toString(16).padStart(6,'0').slice(-6); dci.oninput=()=>{ deathFxCfg.color=parseInt(dci.value.slice(1),16); }; row('Tint', dci);
+  const dbr=document.createElement('div'); dbr.style.cssText='display:flex;gap:6px;margin-top:4px;';
+  const dtest=document.createElement('button'); dtest.textContent='Test'; dtest.style.flex='1';
+  dtest.onclick=()=>{ const fwd=new THREE.Vector3(Math.sin(player.yaw),0,Math.cos(player.yaw)).multiplyScalar(-4); playerDeathFx(player.pos.x+fwd.x, player.pos.y, player.pos.z+fwd.z); };
+  const drst=document.createElement('button'); drst.textContent='Reset'; drst.onclick=()=>{ deathFxCfg=Object.assign({}, DEFAULT_DEATHFX); renderImpactFxPanel(); };
+  dbr.appendChild(dtest); dbr.appendChild(drst); wrap.appendChild(dbr);
+  const dnote=document.createElement('div'); dnote.className='hint'; dnote.style.marginTop='4px'; dnote.textContent='Shown when any player or bot dies. \u201cTint\u201d recolors the ring/splat; Classic & Plasma use their own preset colors. Test fires it just ahead of you.'; wrap.appendChild(dnote);
+
   host.appendChild(wrap);
 }
 function renderAudioZonesPanel(){
@@ -14261,7 +14316,7 @@ function restoreLevel(level){
   refreshPlayerSpawnMarker();
   extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null;
   audioZones = Array.isArray(level.audioZones) ? level.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : []; if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
-  fxCfg = _sanitizeFx(level.fx); if(typeof renderImpactFxPanel==='function') renderImpactFxPanel();
+  fxCfg = _sanitizeFx(level.fx); deathFxCfg = _sanitizeDeathFx(level.deathFx); if(typeof renderImpactFxPanel==='function') renderImpactFxPanel();
   tracerCfg = _sanitizeTracer(level.tracer); if(typeof renderTracerFxPanel==='function') renderTracerFxPanel();
   charRoster = Array.isArray(level.roster) ? level.roster.map(_sanitizeCharCfg) : []; if(typeof renderCharRosterPanel==='function') renderCharRosterPanel();
   if(level.grenade){ const G=level.grenade; if(G.model!=null) GRENADE.model=G.model||''; if(G.scale!=null) GRENADE.scale=G.scale; if(G.radius!=null) GRENADE.radius=G.radius; if(G.damage!=null) GRENADE.damage=G.damage; if(G.fuse!=null) GRENADE.fuse=G.fuse; if(G.throwForce!=null) GRENADE.throwForce=G.throwForce; loadGrenadeModel(); if(editorTargets.grenade.sync) editorTargets.grenade.sync(); }
