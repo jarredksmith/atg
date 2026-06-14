@@ -7105,8 +7105,8 @@ function sfFetchPage(url, cb, errcb){   // cb(results, nextPageUrl|null)
     .then(d=>{ cb((d.results||[]).map(sfMap), d.next||null); })
     .catch(errcb);
 }
-function sfSearch(query, cb, errcb){
-  sfFetchPage('https://api.sketchfab.com/v3/search?type=models&downloadable=true&archives_flavours=false&count=24&q='+encodeURIComponent(query), cb, errcb);
+function sfSearch(query, cb, errcb, animatedOnly){
+  sfFetchPage('https://api.sketchfab.com/v3/search?type=models&downloadable=true&archives_flavours=false&count=24'+(animatedOnly?'&animated=true':'')+'&q='+encodeURIComponent(query), cb, errcb);
 }
 let _fflateP=null;
 function ensureFflate(){
@@ -10717,7 +10717,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 396 · 2026-06-12';
+const BUILD_VERSION = 'build 397 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14259,6 +14259,12 @@ function renderSketchfabSearch(host, onPick){
   const sRow=document.createElement('div'); sRow.className='row2'; sRow.style.marginBottom='4px';
   const q=document.createElement('input'); q.type='text'; q.placeholder='search Sketchfab\u2026'; q.value=sfLastQuery; q.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
   const sb=document.createElement('button'); sb.textContent='Search'; sb.style.flex='0 0 auto'; sRow.appendChild(q); sRow.appendChild(sb); host.appendChild(sRow);
+  const aRow=document.createElement('label'); aRow.style.cssText='display:flex;align-items:center;gap:6px;color:#9fe6cf;font-size:11px;cursor:pointer;margin:1px 0 4px;';
+  const acb=document.createElement('input'); acb.type='checkbox'; acb.style.cssText='width:14px;height:14px;accent-color:#38f5b5;flex:none;';
+  let _sfAnimOnly=false; try{ _sfAnimOnly = localStorage.getItem('breach_sf_anim_only')==='1'; }catch(e){}
+  acb.checked=_sfAnimOnly;
+  acb.onchange=()=>{ _sfAnimOnly=acb.checked; try{ localStorage.setItem('breach_sf_anim_only', _sfAnimOnly?'1':'0'); }catch(e){} if(q.value.trim()) doSearch(); };   // re-run with the filter
+  const asp=document.createElement('span'); asp.textContent='Animated only'; aRow.appendChild(acb); aRow.appendChild(asp); host.appendChild(aRow);
   const status=document.createElement('div'); status.className='hint'; status.style.margin='2px 0'; host.appendChild(status);
   const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:4px;'; host.appendChild(grid);
   const moreWrap=document.createElement('div'); moreWrap.style.cssText='margin-top:6px;text-align:center;'; host.appendChild(moreWrap);
@@ -14271,7 +14277,7 @@ function renderSketchfabSearch(host, onPick){
       grid.appendChild(card); }
     if(sfNextUrl){ const mb=document.createElement('button'); mb.textContent='Show more'; mb.style.cssText='padding:5px 16px;font-size:11px;'; mb.onclick=()=>{ mb.disabled=true; mb.textContent='Loading\u2026'; sfFetchPage(sfNextUrl, (more,next)=>{ sfLastResults=sfLastResults.concat(more); sfNextUrl=next; render(); }, err=>{ mb.disabled=false; mb.textContent='Show more'; status.textContent='Could not load more: '+((err&&err.message)||err); }); }; moreWrap.appendChild(mb); } }
   function doSearch(){ const term=q.value.trim(); if(!term){ status.textContent='Type something to search.'; return; } sfLastQuery=term; status.textContent='Searching\u2026'; grid.innerHTML='';
-    sfSearch(term, (list,next)=>{ sfLastResults=list; sfNextUrl=next; render(); }, err=>{ sfLastResults=[]; sfNextUrl=null; status.textContent='Search failed: '+((err&&err.message)||err); }); }
+    sfSearch(term, (list,next)=>{ sfLastResults=list; sfNextUrl=next; render(); }, err=>{ sfLastResults=[]; sfNextUrl=null; status.textContent='Search failed: '+((err&&err.message)||err); }, _sfAnimOnly); }
   sb.onclick=doSearch; q.addEventListener('keydown', e=>{ if(e.code==='Enter'){ e.preventDefault(); doSearch(); } });
   if(sfLastResults.length) render(sfLastResults);
 }
