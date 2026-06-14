@@ -8654,9 +8654,16 @@ let _puId = 1;
 let selPickup = -1;   // editor: index of the pickup spot grabbed by the gizmo (-1 = none)
 let pickupSpots = (savedLevel && Array.isArray(savedLevel.pickups)) ? savedLevel.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : [];
 let audioZones = (savedLevel && Array.isArray(savedLevel.audioZones)) ? savedLevel.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : [];
-// DEATH zones: stepping inside kills the player (lava, pits, out-of-bounds). { x,z,r, maxY }. maxY = only lethal
-// at/below this height (so a bridge OVER lava is safe); null/blank = lethal at any height in the radius.
-let deathZones = (savedLevel && Array.isArray(savedLevel.deathZones)) ? savedLevel.deathZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||6, maxY:(z.maxY!=null?+z.maxY:null) })) : [];
+// DEATH zones: stepping inside kills the player (lava, pits, out-of-bounds). { x,z,r, y, h }. The zone is a
+// horizontal LETHAL PLANE at height y (the surface where placed) with a band h tall above it — so you can jump
+// /arc OVER it and only die if your feet are within the band (i.e. you fall onto it). Back-compat: old zones
+// stored maxY (absolute "only below"); migrate to y=0,h=maxY-ish, else a tall band for old infinite ones.
+let deathZones = (savedLevel && Array.isArray(savedLevel.deathZones)) ? savedLevel.deathZones.map(z=>_migrateDeathZone(z)) : [];
+function _migrateDeathZone(z){
+  if(z.h!=null || z.y!=null) return { x:+z.x||0, z:+z.z||0, r:+z.r||6, y:(z.y!=null?+z.y:0), h:(z.h!=null?+z.h:3) };
+  if(z.maxY!=null) return { x:+z.x||0, z:+z.z||0, r:+z.r||6, y:0, h:Math.max(0.5, +z.maxY) };   // old "only below Y"
+  return { x:+z.x||0, z:+z.z||0, r:+z.r||6, y:0, h:3 };   // old infinite -> sensible plane band
+}
 let selDeathZone = -1;
 let audioZoneMarkers = []; const _zoneRT = [];   // editor ring markers + per-zone runtime playback state
 let newPickupKind = 'health';
@@ -8716,8 +8723,8 @@ function refreshSpawnRegionMarker(){
   scene.add(g); spawnRegionMarker=g;
 }
 function setSpawnRegionMarkerVisible(v){ if(spawnRegionMarker) spawnRegionMarker.visible=v; }
-function addDeathZone(){ pushUndoSnapshot(); deathZones.push({ x:+player.pos.x.toFixed(2), z:+player.pos.z.toFixed(2), r:6, maxY:null }); selDeathZone=deathZones.length-1; refreshDeathZoneMarkers(); renderEditorFields(); }
-function removeDeathZone(i){ pushUndoSnapshot(); deathZones.splice(i,1); if(selDeathZone>=deathZones.length) selDeathZone=deathZones.length-1; refreshDeathZoneMarkers(); renderEditorFields(); }
+function addDeathZone(){ pushUndoSnapshot(); deathZones.push({ x:+player.pos.x.toFixed(2), z:+player.pos.z.toFixed(2), r:6, y:(typeof surfaceTopAt==='function'&&surfaceTopAt(player.pos.x,player.pos.z)>-Infinity?surfaceTopAt(player.pos.x,player.pos.z):(typeof terrainHeightAt==='function'?terrainHeightAt(player.pos.x,player.pos.z):0)), h:3 }); selDeathZone=deathZones.length-1; refreshDeathZoneMarkers(); if(typeof renderDeathZonesPanel==='function') renderDeathZonesPanel(); }
+function removeDeathZone(i){ pushUndoSnapshot(); deathZones.splice(i,1); if(selDeathZone>=deathZones.length) selDeathZone=deathZones.length-1; refreshDeathZoneMarkers(); if(typeof renderDeathZonesPanel==='function') renderDeathZonesPanel(); }
 // Per-frame: kill the player if they're inside a lethal zone.
 let _inDeathZone=false;
 function updateDeathZones(){
@@ -8731,8 +8738,11 @@ function updateDeathZones(){
     const r=Math.max(1,+z.r||6);
     const dx=player.pos.x-(+z.x||0), dz=player.pos.z-(+z.z||0);
     if(dx*dx+dz*dz > r*r) continue;                        // outside the radius
-    if(z.maxY!=null && (player.pos.y - EYE) > (+z.maxY)) continue;   // above the lethal height (e.g. a bridge)
-    if(!_inDeathZone){ _inDeathZone=true; applyEnemyDamageToSelf(99999, null, null); }   // instant kill (routes to endGame, MP-safe)
+    const feetY = player.pos.y - EYE;
+    const baseY = (+z.y||0), h = (z.h!=null?+z.h:3);
+    if(feetY > baseY + h) continue;                        // jumped/arced above the lethal plane -> safe
+    if(feetY < baseY - 6) continue;                        // far below it (shouldn't happen on solid ground) -> safe
+    if(!_inDeathZone){ _inDeathZone=true; applyEnemyDamageToSelf(99999, null, null); }   // inside the band -> die once
     return;
   }
   _inDeathZone=false;
@@ -9413,7 +9423,7 @@ function loadLevelFromNet(level){
       if(level.game.spawnRegion){ gameCfg.spawnRegion = { on:!!level.game.spawnRegion.on, x:+level.game.spawnRegion.x||0, z:+level.game.spawnRegion.z||0, r:(level.game.spawnRegion.r!=null?+level.game.spawnRegion.r:30) }; } else { gameCfg.spawnRegion = { on:false, x:0, z:0, r:30 }; } }
   extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null; if(level.extractFx){ extractFxCfg.color=level.extractFx.color!=null?level.extractFx.color:extractFxCfg.color; extractFxCfg.opacity=level.extractFx.opacity!=null?level.extractFx.opacity:extractFxCfg.opacity; extractFxCfg.height=level.extractFx.height!=null?level.extractFx.height:extractFxCfg.height; extractFxCfg.pillar=level.extractFx.pillar!=null?!!level.extractFx.pillar:extractFxCfg.pillar; if(typeof applyExtractFx==='function') applyExtractFx(); } if(typeof refreshExtractMarker==='function') refreshExtractMarker();   // restore the per-level extraction spot (campaign / co-op load path)
   audioZones = Array.isArray(level.audioZones) ? level.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : [];
-  deathZones = Array.isArray(level.deathZones) ? level.deathZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||6, maxY:(z.maxY!=null?+z.maxY:null) })) : []; if(typeof refreshDeathZoneMarkers==='function') refreshDeathZoneMarkers(); if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
+  deathZones = Array.isArray(level.deathZones) ? level.deathZones.map(z=>_migrateDeathZone(z)) : []; if(typeof refreshDeathZoneMarkers==='function') refreshDeathZoneMarkers(); if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
   fxCfg = _sanitizeFx(level.fx); deathFxCfg = _sanitizeDeathFx(level.deathFx); if(typeof renderImpactFxPanel==='function') renderImpactFxPanel();
   tracerCfg = _sanitizeTracer(level.tracer); if(typeof renderTracerFxPanel==='function') renderTracerFxPanel();
   charRoster = Array.isArray(level.roster) ? level.roster.map(_sanitizeCharCfg) : []; if(typeof renderCharRosterPanel==='function') renderCharRosterPanel();
@@ -11068,7 +11078,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 423 · 2026-06-12';
+const BUILD_VERSION = 'build 424 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14350,7 +14360,7 @@ function serializeLevel(){
     loot: lootSpots.map(s=>({ x:+s.x, z:+s.z, items:(s.items||[]).slice() })),
     extractFx: { color: extractFxCfg.color, opacity: extractFxCfg.opacity, height: extractFxCfg.height, pillar: extractFxCfg.pillar },
     audioZones: audioZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, url:z.url||'', vol:+z.vol, loop:!!z.loop })),
-    deathZones: deathZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, maxY:(z.maxY!=null?+z.maxY:null) })),
+    deathZones: deathZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:3) })),
     fx: Object.assign({}, fxCfg),
     deathFx: Object.assign({}, deathFxCfg),
     tracer: Object.assign({}, tracerCfg),
@@ -14528,28 +14538,24 @@ function renderDeathZonesPanel(){
     const box=document.createElement('div'); box.style.cssText='border:1px solid rgba(255,59,48,0.25);border-radius:6px;padding:7px 9px;margin-bottom:6px;background:'+(i===selDeathZone?'rgba(255,59,48,0.08)':'transparent')+';';
     const hd=document.createElement('div'); hd.style.cssText='display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px;';
     const tt=document.createElement('span'); tt.style.cssText='font-size:11px;color:#ffb3ae;'; tt.textContent='Zone '+(i+1)+'  ·  ('+(+z.x).toFixed(1)+', '+(+z.z).toFixed(1)+')';
-    const selB=document.createElement('button'); selB.textContent=(i===selDeathZone?'selected':'select'); selB.style.cssText='font-size:10px;padding:2px 8px;'; selB.onclick=()=>{ selDeathZone=i; refreshDeathZoneMarkers(); renderEditorFields(); };
+    const selB=document.createElement('button'); selB.textContent=(i===selDeathZone?'selected':'select'); selB.style.cssText='font-size:10px;padding:2px 8px;'; selB.onclick=()=>{ selDeathZone=i; refreshDeathZoneMarkers(); renderDeathZonesPanel(); };
     const del=document.createElement('button'); del.textContent='\u2715'; del.style.cssText='font-size:10px;padding:2px 8px;'; del.onclick=()=>removeDeathZone(i);
     const right=document.createElement('div'); right.style.cssText='display:flex;gap:4px;'; right.appendChild(selB); right.appendChild(del);
     hd.appendChild(tt); hd.appendChild(right); box.appendChild(hd);
-    // radius
-    const rRow=document.createElement('label'); rRow.style.cssText='display:flex;align-items:center;gap:8px;color:#ffb3ae;font-size:11px;margin:3px 0;';
-    const rSp=document.createElement('span'); rSp.textContent='Radius'; rSp.style.minWidth='60px';
-    const rRng=document.createElement('input'); rRng.type='range'; rRng.min='1'; rRng.max='60'; rRng.step='0.5'; rRng.value=z.r; rRng.style.cssText='flex:1;accent-color:#ff3b30;';
-    const rNum=document.createElement('input'); rNum.type='number'; rNum.min='1'; rNum.max='200'; rNum.step='0.5'; rNum.value=z.r; rNum.style.cssText='width:58px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:11px;';
-    const apR=(v)=>{ let n=parseFloat(v); if(!isFinite(n)||n<1) n=1; z.r=n; rRng.value=Math.min(60,n); rNum.value=n; refreshDeathZoneMarkers(); };
-    rRng.addEventListener('mousedown',()=>pushUndoSnapshot()); rNum.addEventListener('focus',()=>pushUndoSnapshot());
-    rRng.oninput=()=>apR(rRng.value); rNum.onchange=()=>apR(rNum.value);
-    rRow.appendChild(rSp); rRow.appendChild(rRng); rRow.appendChild(rNum); box.appendChild(rRow);
-    // max height (optional)
-    const hRow=document.createElement('label'); hRow.style.cssText='display:flex;align-items:center;gap:8px;color:#ffb3ae;font-size:11px;margin:3px 0;cursor:pointer;';
-    const hCb=document.createElement('input'); hCb.type='checkbox'; hCb.checked=(z.maxY!=null); hCb.style.cssText='width:14px;height:14px;accent-color:#ff3b30;';
-    const hNum=document.createElement('input'); hNum.type='number'; hNum.step='0.5'; hNum.value=(z.maxY!=null?z.maxY:2); hNum.disabled=(z.maxY==null); hNum.style.cssText='width:58px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:11px;';
-    hCb.onchange=()=>{ pushUndoSnapshot(); z.maxY = hCb.checked ? (parseFloat(hNum.value)||2) : null; hNum.disabled=!hCb.checked; renderEditorFields(); };
-    hNum.onchange=()=>{ pushUndoSnapshot(); z.maxY=parseFloat(hNum.value); if(!isFinite(z.maxY)) z.maxY=2; };
-    const hSp=document.createElement('span'); hSp.textContent='Only below Y'; hSp.style.minWidth='80px';
-    hRow.appendChild(hCb); hRow.appendChild(hSp); hRow.appendChild(hNum); box.appendChild(hRow);
-    const hHint=document.createElement('div'); hHint.className='hint'; hHint.style.cssText='font-size:10px;opacity:0.7;margin:1px 0 0;'; hHint.textContent='On = only lethal at/below that height (e.g. a bridge over lava is safe). Off = lethal at any height.'; box.appendChild(hHint);
+    const mkN=(label,key,min,max,step,onApply)=>{
+      const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:8px;color:#ffb3ae;font-size:11px;margin:3px 0;';
+      const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='62px';
+      const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=z[key]; rng.style.cssText='flex:1;accent-color:#ff3b30;';
+      const num=document.createElement('input'); num.type='number'; num.step=step; num.value=z[key]; num.style.cssText='width:58px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:11px;';
+      const ap=(v)=>{ let n=parseFloat(v); if(!isFinite(n)) n=min; if(onApply) n=onApply(n); z[key]=n; rng.value=Math.max(min,Math.min(max,n)); num.value=n; refreshDeathZoneMarkers(); };
+      rng.addEventListener('mousedown',()=>pushUndoSnapshot()); num.addEventListener('focus',()=>pushUndoSnapshot());
+      rng.oninput=()=>ap(rng.value); num.onchange=()=>ap(num.value);
+      row.appendChild(sp); row.appendChild(rng); row.appendChild(num); box.appendChild(row);
+    };
+    mkN('Radius','r',1,60,0.5,(n)=>Math.max(1,n));
+    mkN('Lethal height','h',0.5,40,0.5,(n)=>Math.max(0.5,n));
+    mkN('Base Y','y',-20,40,0.5,null);
+    const hHint=document.createElement('div'); hHint.className='hint'; hHint.style.cssText='font-size:10px;opacity:0.7;margin:1px 0 0;'; hHint.textContent='It\u2019s a lethal plane: you die only if your feet are within \u201cLethal height\u201d above \u201cBase Y\u201d \u2014 so you can jump/arc over it, but falling onto it kills. Base Y auto-sets to the surface when you add it.'; box.appendChild(hHint);
     host.appendChild(box);
   });
 }
@@ -14658,7 +14664,7 @@ function restoreLevel(level){
   refreshPlayerSpawnMarker();
   extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null; if(level.extractFx){ extractFxCfg.color=level.extractFx.color!=null?level.extractFx.color:extractFxCfg.color; extractFxCfg.opacity=level.extractFx.opacity!=null?level.extractFx.opacity:extractFxCfg.opacity; extractFxCfg.height=level.extractFx.height!=null?level.extractFx.height:extractFxCfg.height; extractFxCfg.pillar=level.extractFx.pillar!=null?!!level.extractFx.pillar:extractFxCfg.pillar; if(typeof applyExtractFx==='function') applyExtractFx(); }
   audioZones = Array.isArray(level.audioZones) ? level.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : [];
-  deathZones = Array.isArray(level.deathZones) ? level.deathZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||6, maxY:(z.maxY!=null?+z.maxY:null) })) : []; if(typeof refreshDeathZoneMarkers==='function') refreshDeathZoneMarkers(); if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
+  deathZones = Array.isArray(level.deathZones) ? level.deathZones.map(z=>_migrateDeathZone(z)) : []; if(typeof refreshDeathZoneMarkers==='function') refreshDeathZoneMarkers(); if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
   fxCfg = _sanitizeFx(level.fx); deathFxCfg = _sanitizeDeathFx(level.deathFx); if(typeof renderImpactFxPanel==='function') renderImpactFxPanel();
   tracerCfg = _sanitizeTracer(level.tracer); if(typeof renderTracerFxPanel==='function') renderTracerFxPanel();
   charRoster = Array.isArray(level.roster) ? level.roster.map(_sanitizeCharCfg) : []; if(typeof renderCharRosterPanel==='function') renderCharRosterPanel();
