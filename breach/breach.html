@@ -10855,7 +10855,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 410 · 2026-06-12';
+const BUILD_VERSION = 'build 411 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -17036,6 +17036,13 @@ function _prewarmMatchModels(){
   // ENEMY models too — these load when an enemy first spawns (often a frame or two into the match), which is
   // exactly the placeholder-capsule-then-pop the player sees. Warm every enemy type that has a model set.
   try{ if(typeof enemyModels==='object' && enemyModels){ for(const k in enemyModels){ const em=enemyModels[k]; if(em && em.url) urls.add(em.url); } } }catch(e){}
+  // GUN viewmodel(s): the held weapon's model loads only when showWeaponModel runs (at/after deploy), so the
+  // intro cutscene frames the placeholder gun. Warm the current weapon + everything owned, plus all weapon models.
+  try{ if(typeof WEAPONS==='object' && WEAPONS){ for(const k in WEAPONS){ const w=WEAPONS[k]; const u=(w&&w.model)?w.model:(typeof gunModelUrl!=='undefined'?gunModelUrl:''); if(u) urls.add(u); } } }catch(e){}
+  // SCENE PROP models: these are queued at boot, but a slow/large Sketchfab prop (e.g. an arena) may still be
+  // in flight — warming here makes the gate count it. (loadGLTFCached rides an in-flight load, never double-fetches.)
+  try{ const list=(savedLevel && Array.isArray(savedLevel.props))?savedLevel.props:(typeof SCENE_PROPS!=='undefined'?SCENE_PROPS:[]);
+    for(const p of (list||[])){ if(p && p.src && typeof isPrimitive==='function' && !isPrimitive(p.src)) urls.add(p.src); } }catch(e){}
   urls.forEach(u=>{ try{ loadGLTFCached(u, ()=>{}, ()=>{}); }catch(e){} });
 }
 function startGame(){
