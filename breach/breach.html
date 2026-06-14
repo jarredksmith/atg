@@ -447,6 +447,13 @@
     margin:10px 0; padding:13px 15px; border-radius:10px; text-align:left;
     background:rgba(255,255,255,.02); border:1px solid rgba(255,255,255,.06); border-left:3px solid #2a6e5c;
   }
+  /* Multiplayer modal: use the screen width — wider card + two-column grid of mode cards so it isn't one tall scroll */
+  #mpModal .modalCard{ max-width:880px; width:100%; }
+  #mpModal .mpModes{ display:grid; grid-template-columns:1fr 1fr; gap:10px; align-items:start; }
+  #mpModal .mpModes .mpSection{ margin:0; height:100%; box-sizing:border-box; }
+  #mpModal .mpTop{ display:grid; grid-template-columns:1fr 1fr; gap:10px; align-items:start; margin-bottom:10px; }
+  #mpModal .mpTop .mpSection{ margin:0; }
+  @media (max-width:680px){ #mpModal .mpModes, #mpModal .mpTop{ grid-template-columns:1fr; } }
   .mpSection.coop { border-left-color:#38f5b5; background:rgba(56,245,181,.05); }
   .mpSection.duel { border-left-color:#ff5da2; background:rgba(255,93,162,.05); }
   .mpSection .mpTitle { font:700 14px 'Chakra Petch',ui-monospace,monospace; letter-spacing:3px; margin-bottom:3px; }
@@ -627,33 +634,36 @@
     <h2>MULTIPLAYER</h2>
     <div class="mpRow" style="margin-bottom:6px"><input id="mpName" type="text" maxlength="14" placeholder="your name" autocomplete="off"></div>
     <div class="mpRow" style="margin-bottom:6px"><button id="charBtn" class="mpBtn" style="width:100%;text-align:left">CHARACTER ▸</button></div>
-    <div class="mpSection coop">
-      <div class="mpTitle">🤝 CO-OP</div>
-      <div class="mpDesc">Team up and clear waves together. You host — friends join with your room code.</div>
-      <div class="mpActions"><button id="mpHost" class="mpBtn coop">Host co-op</button></div>
+    <div class="mpTop">
+      <div class="mpSection join">
+        <div class="mpTitle">→ JOIN A ROOM</div>
+        <div class="mpDesc">Got a code from the host? Drop in to their game.</div>
+        <div class="mpActions"><input id="mpCode" type="text" maxlength="5" placeholder="room code" autocomplete="off"><button id="mpJoin" class="mpBtn">Join</button></div>
+        <div id="mpGamesRow" style="display:none;flex-direction:column;align-items:stretch;gap:6px;margin-top:8px"><div style="display:flex;align-items:center;justify-content:space-between"><span class="mpHint">Open games</span><button id="mpRefresh" class="mpBtn" style="padding:3px 10px;font-size:12px">Refresh</button></div><div id="mpGames"></div></div>
+      </div>
+      <div class="mpSection coop">
+        <div class="mpTitle">🤝 CO-OP</div>
+        <div class="mpDesc">Team up and clear waves together. You host — friends join with your room code.</div>
+        <div class="mpActions"><button id="mpHost" class="mpBtn coop">Host co-op</button></div>
+      </div>
     </div>
-    <div class="mpSection duel">
-      <div class="mpTitle">⚔ 1 v 1 DUEL</div>
-      <div class="mpDesc">Head-to-head arena fight — first to the kill target wins.</div>
-      <div class="mpActions"><button id="mpDuel" class="mpBtn duel">Host duel</button><span class="mpHint">first to</span><input id="mpKills" type="number" min="1" max="99" value="5"><span class="mpHint">kills</span></div>
-    </div>
-    <div class="mpSection duel">
-      <div class="mpTitle">🎯 FREE-FOR-ALL</div>
-      <div class="mpDesc">Everyone vs everyone (3+ players). Most kills to the target wins. Share your code with the whole group.</div>
-      <div class="mpActions"><button id="mpFFA" class="mpBtn duel">Host FFA</button><span class="mpHint">first to</span><input id="mpFFAKills" type="number" min="1" max="99" value="15"><span class="mpHint">kills</span></div>
-    </div>
-    <div class="mpSection duel">
-      <div class="mpTitle">🟥🟦 TEAM DEATHMATCH</div>
-      <div class="mpDesc">Auto-balanced Red vs Blue, no friendly fire. First team to the kill target wins. Players are assigned as they join.</div>
-      <div class="mpActions"><button id="mpTDM" class="mpBtn duel">Host TDM</button><span class="mpHint">first to</span><input id="mpTDMKills" type="number" min="1" max="199" value="30"><span class="mpHint">kills</span></div>
-      <div class="mpActions"><button id="mpCP" class="mpBtn duel">Host KOTH</button><span class="mpHint">first to</span><input id="mpCPScore" type="number" min="50" max="999" value="200"><span class="mpHint">pts</span></div>
-      <div class="mpActions"><span class="mpHint">add</span><input id="mpBots" type="number" min="0" max="7" value="3"><span class="mpHint">AI bots ·</span><select id="mpBotDiff" style="background:#0b1a18;color:#cfe;border:1px solid #2a5d52;border-radius:6px;padding:3px 6px;font:inherit;cursor:pointer"><option value="recruit">Recruit</option><option value="regular" selected>Regular</option><option value="veteran">Veteran</option><option value="elite">Elite</option></select></div>
-    </div>
-    <div class="mpSection join">
-      <div class="mpTitle">→ JOIN A ROOM</div>
-      <div class="mpDesc">Got a code from the host? Drop in to their co-op or duel.</div>
-      <div class="mpActions"><input id="mpCode" type="text" maxlength="5" placeholder="room code" autocomplete="off"><button id="mpJoin" class="mpBtn">Join</button></div>
-      <div id="mpGamesRow" style="display:none;flex-direction:column;align-items:stretch;gap:6px;margin-top:8px"><div style="display:flex;align-items:center;justify-content:space-between"><span class="mpHint">Open games</span><button id="mpRefresh" class="mpBtn" style="padding:3px 10px;font-size:12px">Refresh</button></div><div id="mpGames"></div></div>
+    <div class="mpModes">
+      <div class="mpSection duel">
+        <div class="mpTitle">⚔ 1 v 1 DUEL</div>
+        <div class="mpDesc">Head-to-head arena fight — first to the kill target wins.</div>
+        <div class="mpActions"><button id="mpDuel" class="mpBtn duel">Host duel</button><span class="mpHint">first to</span><input id="mpKills" type="number" min="1" max="99" value="5"><span class="mpHint">kills</span></div>
+      </div>
+      <div class="mpSection duel">
+        <div class="mpTitle">🎯 FREE-FOR-ALL</div>
+        <div class="mpDesc">Everyone vs everyone (3+ players). Most kills to the target wins. Share your code with the whole group.</div>
+        <div class="mpActions"><button id="mpFFA" class="mpBtn duel">Host FFA</button><span class="mpHint">first to</span><input id="mpFFAKills" type="number" min="1" max="99" value="15"><span class="mpHint">kills</span></div>
+      </div>
+      <div class="mpSection duel" style="grid-column:1 / -1">
+        <div class="mpTitle">🟥🟦 TEAM DEATHMATCH</div>
+        <div class="mpDesc">Auto-balanced Red vs Blue, no friendly fire. First team to the kill target wins. Players are assigned as they join.</div>
+        <div class="mpActions"><button id="mpTDM" class="mpBtn duel">Host TDM</button><span class="mpHint">first to</span><input id="mpTDMKills" type="number" min="1" max="199" value="30"><span class="mpHint">kills</span><button id="mpCP" class="mpBtn duel" style="margin-left:14px">Host KOTH</button><span class="mpHint">first to</span><input id="mpCPScore" type="number" min="50" max="999" value="200"><span class="mpHint">pts</span></div>
+        <div class="mpActions" style="margin-top:6px"><span class="mpHint">add</span><input id="mpBots" type="number" min="0" max="7" value="3"><span class="mpHint">AI bots ·</span><select id="mpBotDiff" style="background:#0b1a18;color:#cfe;border:1px solid #2a5d52;border-radius:6px;padding:3px 6px;font:inherit;cursor:pointer"><option value="recruit">Recruit</option><option value="regular" selected>Regular</option><option value="veteran">Veteran</option><option value="elite">Elite</option></select></div>
+      </div>
     </div>
     <div id="mpStatus"></div>
   </div>
@@ -10910,7 +10920,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 415 · 2026-06-12';
+const BUILD_VERSION = 'build 417 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15785,7 +15795,7 @@ function renderEditorFields(){
         ni.textContent = isPrim
           ? 'This is a built-in shape (no animation). Use the Mechanism section below to move/rotate it.'
           : 'This model has no animation clips, so there\u2019s nothing to play/loop. To animate it, use the Mechanism section below, or import a model that includes animations (try \u201cAnimated only\u201d in the Sketchfab search).';
-        aHost.appendChild(ni);
+        animHost.appendChild(ni);
       }
       // ---- Lock: this prop's E-activation (triggered animation or mechanism) needs a key ----
       if(sel){
