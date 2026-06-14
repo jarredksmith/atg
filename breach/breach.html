@@ -8617,6 +8617,13 @@ function refreshPickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m);
   if(typeof pickupsOn!=='undefined' && !pickupsOn) return;   // pickups disabled: no editor markers
   for(const sp of pickupSpots){ const g=buildPowerupMesh(sp.kind); g.position.set(sp.x, _maxTerrainOver(sp.x,sp.z,1.2), sp.z); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.pickupMarker=true; scene.add(g); pickupMarkers.push(g); } }
 function setPickupMarkersVisible(v){ for(const m of pickupMarkers) m.visible=v; }
+// ---- Placed loot-box editor markers (mirror of pickup markers) ----
+let lootMarkers = [];
+function refreshLootMarkers(){ for(const m of lootMarkers){ scene.remove(m); } lootMarkers.length=0;
+  for(const sp of lootSpots){ const g=buildChestMesh(sp.x, sp.z); g.position.y=_maxTerrainOver(sp.x,sp.z,0); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.lootMarker=true; scene.add(g); lootMarkers.push(g); } }
+function setLootMarkersVisible(v){ for(const m of lootMarkers) m.visible=v; }
+function addLootSpot(){ pushUndoSnapshot(); const fwd=new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw)); lootSpots.push({ x:+(player.pos.x+fwd.x*6).toFixed(2), z:+(player.pos.z+fwd.z*6).toFixed(2), items:[] }); selLoot = lootSpots.length-1; refreshLootMarkers(); renderEditorFields(); }
+function removeLootSpot(i){ pushUndoSnapshot(); lootSpots.splice(i,1); if(selLoot>=lootSpots.length) selLoot=lootSpots.length-1; refreshLootMarkers(); renderEditorFields(); }
 function setAudioZoneMarkersVisible(v){ for(const g of audioZoneMarkers) g.visible=v; }   // rings are editor-only; hide on play without rebuilding
 function disposePickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m); } pickupMarkers.length=0; }
 function addPickupSpot(kind){ pushUndoSnapshot(); const fwd=new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw)); pickupSpots.push({ x:+(player.pos.x+fwd.x*6).toFixed(2), z:+(player.pos.z+fwd.z*6).toFixed(2), kind:kind||'health' }); selPickup = pickupSpots.length-1; refreshPickupMarkers(); renderEditorFields(); }
@@ -9279,7 +9286,9 @@ function loadLevelFromNet(level){
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns) buildSpawnMarker(sp); } setSpawnMarkersVisible(editorOpen);
   pickupsOn = (level.pickupsOn !== false);
-  pickupSpots = Array.isArray(level.pickups) ? level.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : []; pickupModels = (level.pickupModels && typeof level.pickupModels==='object') ? JSON.parse(JSON.stringify(level.pickupModels)) : {}; keyNames = (level.keyNames && typeof level.keyNames==='object') ? JSON.parse(JSON.stringify(level.keyNames)) : {}; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
+  pickupSpots = Array.isArray(level.pickups) ? level.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : [];
+  lootSpots = Array.isArray(level.loot) ? level.loot.map(s=>({ x:+s.x||0, z:+s.z||0, items:Array.isArray(s.items)?s.items.slice():[] })) : [];
+  if(typeof refreshLootMarkers==='function') refreshLootMarkers(); pickupModels = (level.pickupModels && typeof level.pickupModels==='object') ? JSON.parse(JSON.stringify(level.pickupModels)) : {}; keyNames = (level.keyNames && typeof level.keyNames==='object') ? JSON.parse(JSON.stringify(level.keyNames)) : {}; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); _skyHdriUrl = null; applyWorldCfg(); }   // adopt the host's sky / ground / fog (reset the sky guard so each level's sky re-applies cleanly, even mid-campaign)
   if(level.audio && NET.mode!=='client'){ try{ audioSettings.musicUrl=(typeof level.audio.musicUrl==='string')?level.audio.musicUrl:''; audioSettings.sounds=_sanitizeSounds(level.audio.sounds); if(typeof saveAudioSettings==='function') saveAudioSettings(); if(typeof preloadCustomSounds==='function') preloadCustomSounds(); if(_musicOn){ stopMusic(); startMusic(); } }catch(e){ console.warn('level audio apply failed', e); } }
   _applyCine(level.cine);
@@ -10483,6 +10492,10 @@ function swapStationModel(url){ stationModelUrl = url; loadStationModel(); }
 
 // ---------- Chests ----------
 const chests = [];
+// PLACED loot boxes: authored positions with chosen contents, like pickups. Empty contents = 3 random items
+// (the classic behavior). Stored as { x, z, items:[itemId,...] }. The random timer spawn still runs alongside.
+let lootSpots = (savedLevel && Array.isArray(savedLevel.loot)) ? savedLevel.loot.map(s=>({ x:+s.x||0, z:+s.z||0, items:Array.isArray(s.items)?s.items.slice():[] })) : [];
+let selLoot = -1;
 const ITEM_POOL = [
   { id:'medkit',  name:'MEDKIT',        desc:'Restore 50 integrity',        cost:60,  act:applyHealth },
   { id:'shield',  name:'OVERSHIELD',    desc:'Absorbs 75 incoming damage',  cost:100, act:applyShield },
@@ -10535,17 +10548,32 @@ function buildChestMesh(px, pz){
   scene.add(mesh);
   return mesh;
 }
+// Pick `n` items for a chest from the pool (used by both random and placed-with-no-contents loot).
+function _rollLootItems(n){
+  const pool = ITEM_POOL.filter(it => !(it.oneTime && owned.includes(it.id)));
+  const picks=[], copy=pool.slice();
+  for(let i=0;i<n && copy.length;i++){ picks.push(copy.splice(Math.floor(Math.random()*copy.length),1)[0]); }
+  return picks;
+}
+// Spawn the AUTHORED loot boxes (lootSpots) at their placed positions with their chosen contents. Called once
+// when a level starts. Empty contents -> 3 random items, so a placed box without a chosen loadout still works.
+function spawnPlacedLoot(){
+  if(typeof isClient!=='undefined' && isClient) return;   // host/solo authoritative; clients receive via snapshot
+  for(const sp of lootSpots){
+    const mesh = buildChestMesh(sp.x, sp.z);
+    const items = (sp.items && sp.items.length)
+      ? sp.items.map(id=>ITEM_POOL.find(it=>it.id===id)).filter(Boolean)
+      : _rollLootItems(3);
+    chests.push({ id:nextChestId++, mesh, pos:mesh.position.clone(), items, spin:0, placed:true });
+  }
+}
 function spawnChest(){
-  if(chests.length>=2) return; // cap
+  if(chests.length>=2 + (lootSpots?lootSpots.length:0)) return; // cap (placed boxes don't count against the random budget)
   let px, pz;
   do { px=(Math.random()-0.5)*ARENA*1.4; pz=(Math.random()-0.5)*ARENA*1.4; }
   while(Math.hypot(px,pz)<10);
   const mesh = buildChestMesh(px, pz);
-  // 3 random items
-  const pool = ITEM_POOL.filter(it => !(it.oneTime && owned.includes(it.id)));
-  const picks = [];
-  const copy = pool.slice();
-  for(let i=0;i<3 && copy.length;i++){ picks.push(copy.splice(Math.floor(Math.random()*copy.length),1)[0]); }
+  const picks = _rollLootItems(3);
   chests.push({ id:nextChestId++, mesh, pos:mesh.position.clone(), items:picks, spin:0 });
 }
 function updateChests(dt){
@@ -10920,7 +10948,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 417 · 2026-06-12';
+const BUILD_VERSION = 'build 418 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14169,6 +14197,7 @@ function serializeLevel(){
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
     pickupsOn: pickupsOn,
     pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind })),
+    loot: lootSpots.map(s=>({ x:+s.x, z:+s.z, items:(s.items||[]).slice() })),
     audioZones: audioZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, url:z.url||'', vol:+z.vol, loop:!!z.loop })),
     fx: Object.assign({}, fxCfg),
     deathFx: Object.assign({}, deathFxCfg),
@@ -15520,6 +15549,30 @@ function renderEditorFields(){
     sNum.onchange=()=>{ chestModelScale=Math.max(0.05,Math.min(50,parseFloat(sNum.value)||1)); };
     sRow.appendChild(sSp); sRow.appendChild(sNum); lHost.appendChild(sRow);
     hint(lHost, '', '3px 0 0').textContent = 'Apply clears current loot boxes so the next spawn uses the new model.';
+    // ---- Placed loot boxes: author position + contents (like pickups) ----
+    hint(lHost, '<b>Placed loot boxes</b> — set where they go &amp; what\u2019s inside (else random)', '12px 0 4px');
+    const addLb=document.createElement('button'); addLb.textContent='+ Place loot box (ahead of you)'; addLb.style.cssText='width:100%;margin-bottom:6px;';
+    addLb.onclick=()=>addLootSpot(); lHost.appendChild(addLb);
+    if(!lootSpots.length){ hint(lHost, '', '0 0 4px').textContent='None placed. Random loot boxes still spawn on a timer. Place one to pin its location and choose its contents.'; }
+    lootSpots.forEach((sp, li)=>{
+      const box=document.createElement('div'); box.style.cssText='border:1px solid rgba(56,245,181,0.2);border-radius:6px;padding:7px 9px;margin-bottom:6px;background:'+(li===selLoot?'rgba(56,245,181,0.08)':'transparent')+';';
+      const hd=document.createElement('div'); hd.style.cssText='display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px;';
+      const tt=document.createElement('span'); tt.style.cssText='font-size:11px;color:#9fe6cf;'; tt.textContent='Box '+(li+1)+'  ·  ('+sp.x.toFixed(1)+', '+sp.z.toFixed(1)+')';
+      const sel=document.createElement('button'); sel.textContent=(li===selLoot?'selected':'select'); sel.style.cssText='font-size:10px;padding:2px 8px;'; sel.onclick=()=>{ selLoot=li; refreshLootMarkers(); renderEditorFields(); };
+      const del=document.createElement('button'); del.textContent='✕'; del.style.cssText='font-size:10px;padding:2px 8px;'; del.onclick=()=>removeLootSpot(li);
+      const right=document.createElement('div'); right.style.cssText='display:flex;gap:4px;'; right.appendChild(sel); right.appendChild(del);
+      hd.appendChild(tt); hd.appendChild(right); box.appendChild(hd);
+      const cap=document.createElement('div'); cap.className='hint'; cap.style.cssText='font-size:10px;opacity:0.75;margin-bottom:4px;'; cap.textContent=(sp.items&&sp.items.length)?('Contains: '+sp.items.length+' chosen item(s)'):'Contains: 3 random items (none chosen)'; box.appendChild(cap);
+      const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:1fr 1fr;gap:3px;';
+      ITEM_POOL.forEach(it=>{
+        const lab=document.createElement('label'); lab.style.cssText='display:flex;align-items:center;gap:5px;font-size:10px;color:#cfeee2;cursor:pointer;';
+        const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=(sp.items||[]).includes(it.id); cb.style.cssText='width:13px;height:13px;accent-color:#38f5b5;flex:none;';
+        cb.onchange=()=>{ pushUndoSnapshot(); sp.items=sp.items||[]; if(cb.checked){ if(!sp.items.includes(it.id)) sp.items.push(it.id); } else { sp.items=sp.items.filter(x=>x!==it.id); } renderEditorFields(); };
+        const sp2=document.createElement('span'); sp2.textContent=it.name; lab.appendChild(cb); lab.appendChild(sp2); grid.appendChild(lab);
+      });
+      box.appendChild(grid);
+      lHost.appendChild(box);
+    });
     // coins
     hint(lHost, '<b>Coins</b> — drops collected for credits', '12px 0 4px');
     const cnLab=document.createElement('label'); cnLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;cursor:pointer;';
@@ -17040,7 +17093,7 @@ function toggleEditor(){
     if(selBox) selBox.visible = false;
     for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible = false; }
     if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false);
-    if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false);   // markers linger visible otherwise — the 'stuck double' next to every live pad
+    if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setLootMarkersVisible==='function') setLootMarkersVisible(false);   // markers linger visible otherwise — the 'stuck double' next to every live pad
     for(const en of enemies){ en.mesh.visible = true; }   // un-hide enemies when leaving the editor
     const mm=$('minimap'); if(mm) mm.style.display='';
     const wp=$('wavePanel'); if(wp) wp.style.display='';
@@ -17145,10 +17198,10 @@ function startGame(){
   if(typeof selBox!=='undefined' && selBox) selBox.visible=false;
   if(typeof selBoxes!=='undefined' && selBoxes) for(const b of selBoxes) b.visible=false;
   if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false);
-  if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false);
+  if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setLootMarkersVisible==='function') setLootMarkersVisible(false);
   if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false);
   if(typeof lightModels!=='undefined') for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; }
-  if(typeof _cinePreviewGroup!=='undefined' && _cinePreviewGroup) _cinePreviewGroup.visible=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; { const _fb=document.getElementById('edAddFab'); if(_fb) _fb.style.display='none'; }   // the + lives outside the panel — hide it on this direct-close path too gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof _pathPreviewGroup!=='undefined' && _pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; } if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG; if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof gr!=='undefined' && gr){ gr.translate.visible=gr.scale.visible=gr.rotate.visible=false; } if(typeof selBox!=='undefined' && selBox) selBox.visible=false;
+  if(typeof _cinePreviewGroup!=='undefined' && _cinePreviewGroup) _cinePreviewGroup.visible=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; { const _fb=document.getElementById('edAddFab'); if(_fb) _fb.style.display='none'; }   // the + lives outside the panel — hide it on this direct-close path too gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof _pathPreviewGroup!=='undefined' && _pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; } if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG; if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setLootMarkersVisible==='function') setLootMarkersVisible(false); if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof gr!=='undefined' && gr){ gr.translate.visible=gr.scale.visible=gr.rotate.visible=false; } if(typeof selBox!=='undefined' && selBox) selBox.visible=false;
   camera.fov = (worldCfg && worldCfg.fov) || BASE_FOV; camera.updateProjectionMatrix(); camera.rotation.z = 0;
   // clear entities
   enemies.slice().forEach(e=>{ scene.remove(e.mesh); if(e.mesh.userData.mixer){ const mi=mixers.indexOf(e.mesh.userData.mixer); if(mi>=0) mixers.splice(mi,1); } }); enemies.length=0;
@@ -17168,7 +17221,7 @@ function startGame(){
   if(NET.pendingMusic!=null){ NET.musicUrl=(typeof NET.pendingMusic==='string'?NET.pendingMusic:''); NET.pendingMusic=null; }   // and the host's music
   chestTimer = 20;
   if(!station) buildStation();
-  gameOn=true; gameOver=false; shopOpen=false;
+  gameOn=true; gameOver=false; shopOpen=false; if(typeof spawnPlacedLoot==='function') spawnPlacedLoot();
   $('shop').classList.add('hidden');
   $('overlay').classList.add('hidden');
   $('hud').classList.remove('hidden');
@@ -17287,10 +17340,10 @@ function endGame(){
   if(typeof selBox!=='undefined' && selBox) selBox.visible=false;
   if(typeof selBoxes!=='undefined' && selBoxes) for(const b of selBoxes) b.visible=false;
   if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false);
-  if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false);
+  if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setLootMarkersVisible==='function') setLootMarkersVisible(false);
   if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false);
   if(typeof lightModels!=='undefined') for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; }
-  if(typeof _cinePreviewGroup!=='undefined' && _cinePreviewGroup) _cinePreviewGroup.visible=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; { const _fb=document.getElementById('edAddFab'); if(_fb) _fb.style.display='none'; }   // the + lives outside the panel — hide it on this direct-close path too gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof _pathPreviewGroup!=='undefined' && _pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; } if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG; if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof gr!=='undefined' && gr){ gr.translate.visible=gr.scale.visible=gr.rotate.visible=false; } if(typeof selBox!=='undefined' && selBox) selBox.visible=false;
+  if(typeof _cinePreviewGroup!=='undefined' && _cinePreviewGroup) _cinePreviewGroup.visible=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; { const _fb=document.getElementById('edAddFab'); if(_fb) _fb.style.display='none'; }   // the + lives outside the panel — hide it on this direct-close path too gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof _pathPreviewGroup!=='undefined' && _pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; } if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG; if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setLootMarkersVisible==='function') setLootMarkersVisible(false); if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof gr!=='undefined' && gr){ gr.translate.visible=gr.scale.visible=gr.rotate.visible=false; } if(typeof selBox!=='undefined' && selBox) selBox.visible=false;
   $('shop').classList.add('hidden');
   $('prompt').style.display='none';
   const ov=$('overlay'); ov.classList.remove('hidden');
