@@ -10739,7 +10739,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 399 · 2026-06-12';
+const BUILD_VERSION = 'build 401 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15552,6 +15552,15 @@ function renderEditorFields(){
           const ch=document.createElement('div'); ch.className='hint'; ch.style.cssText='font-size:10px;opacity:0.7;margin:1px 0 0;'; ch.textContent=names.filter(Boolean).length+' animation(s) in this model. Pick one to play it on its own.'; animHost.appendChild(ch);
         }
       }
+      else if(sel){
+        // selected prop has no detected GLB animations -> the per-prop play controls can't apply. Say so plainly.
+        const ni=document.createElement('div'); ni.className='hint'; ni.style.cssText='margin:6px 0 2px;font-size:10px;opacity:0.8;';
+        const isPrim = (typeof isPrimitive==='function') && isPrimitive(sel.userData.src||'');
+        ni.textContent = isPrim
+          ? 'This is a built-in shape (no animation). Use the Mechanism section below to move/rotate it.'
+          : 'This model has no animation clips, so there\u2019s nothing to play/loop. To animate it, use the Mechanism section below, or import a model that includes animations (try \u201cAnimated only\u201d in the Sketchfab search).';
+        animHost.appendChild(ni);
+      }
       // ---- Lock: this prop's E-activation (triggered animation or mechanism) needs a key ----
       if(sel){
         const lr=document.createElement('div'); lr.style.cssText='display:flex;gap:6px;align-items:center;margin:8px 0 2px;font-size:11px;color:#9fe6cf;';
@@ -15595,7 +15604,7 @@ function renderEditorFields(){
           r.appendChild(mkSel([['toggle','Toggle'],['open','Open'],['close','Close'],['anim','Play anim'],['unlock','Unlock'],['win','Win level'],['cutscene','Play cutscene']], s.do, v=>{ s.do=v; }));
           const ti=document.createElement('input'); ti.type='text'; ti.placeholder='target tag'; ti.value=s.target||'';
           ti.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 5px;font-size:11px;';
-          ti.onchange=()=>{ pushUndoSnapshot(); s.target=ti.value.trim(); };
+          ti.onchange=()=>{ pushUndoSnapshot(); s.target=ti.value.trim(); renderEditorFields(); };   // re-render so the anim clip dropdown can list the new target's clips
           const del=document.createElement('button'); del.textContent='\u00d7'; del.style.cssText='padding:1px 7px;font-size:12px;';
           del.onclick=()=>{ pushUndoSnapshot(); sigs.splice(si,1); renderEditorFields(); };
           r.appendChild(ti); r.appendChild(del); sgBody.appendChild(r);
@@ -15606,21 +15615,26 @@ function renderEditorFields(){
             ni2.onchange=()=>{ pushUndoSnapshot(); const v=ni2.value.trim(); if(v) s.cs=v; else delete s.cs; };
             nr2.appendChild(ni2); sgBody.appendChild(nr2);
           }
-          if(s.do==='anim'){   // optional: name one clip from the target's GLB; blank = play them all
+          if(s.do==='anim'){   // name one clip from the TARGET prop's GLB; blank = play them all
             const cr2=document.createElement('div'); cr2.style.cssText='display:flex;gap:4px;align-items:center;margin:-1px 0 4px;padding-left:8px;';
-            const names = sel.userData.animClipNames || [];
-            if(names.filter(Boolean).length){
-              // this prop's own clips are known -> offer a dropdown (covers the common self-signal case)
+            // collect animation clip names from every prop carrying the target tag (that's what this signal plays).
+            // fall back to this prop's own clips (self-signal), then to free text if nothing is known yet.
+            const tag = (s.target||'').trim();
+            const names = new Set();
+            if(tag){ for(const o of propModels){ if(o && o.userData.tag===tag && o.userData.animClipNames){ for(const nm of o.userData.animClipNames){ if(nm) names.add(nm); } } } }
+            if(!names.size && sel.userData.animClipNames){ for(const nm of sel.userData.animClipNames){ if(nm) names.add(nm); } }
+            const nameArr = [...names];
+            if(nameArr.length){
               const cs=document.createElement('select'); cs.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#9fe6cf;border-radius:4px;padding:2px 5px;font-size:10px;';
               const o0=document.createElement('option'); o0.value=''; o0.textContent='(all clips)'; cs.appendChild(o0);
               let known=false;
-              for(const nm of names){ if(!nm) continue; const o=document.createElement('option'); o.value=nm; o.textContent=nm; if(nm===s.clip) known=true; cs.appendChild(o); }
-              if(s.clip && !known){ const o=document.createElement('option'); o.value=s.clip; o.textContent=s.clip+' (other)'; cs.appendChild(o); }   // a typed clip from a different target survives
+              for(const nm of nameArr){ const o=document.createElement('option'); o.value=nm; o.textContent=nm; if(nm===s.clip) known=true; cs.appendChild(o); }
+              if(s.clip && !known){ const o=document.createElement('option'); o.value=s.clip; o.textContent=s.clip+' (other)'; cs.appendChild(o); }   // a clip whose target isn't loaded yet survives
               cs.value=s.clip||'';
               cs.onchange=()=>{ pushUndoSnapshot(); if(cs.value) s.clip=cs.value; else delete s.clip; };
               cr2.appendChild(cs);
             } else {
-              const ci=document.createElement('input'); ci.type='text'; ci.placeholder='clip name (blank = all clips)'; ci.value=s.clip||'';
+              const ci=document.createElement('input'); ci.type='text'; ci.placeholder=tag?('no clips found on \u201c'+tag+'\u201d \u2014 type a clip name'):'clip name (blank = all clips)'; ci.value=s.clip||'';
               ci.style.cssText='flex:1;background:#0c1418;border:1px solid #2a3a42;color:#9fe6cf;border-radius:4px;padding:2px 5px;font-size:10px;';
               ci.onchange=()=>{ pushUndoSnapshot(); const v=ci.value.trim(); if(v) s.clip=v; else delete s.clip; };
               cr2.appendChild(ci);
