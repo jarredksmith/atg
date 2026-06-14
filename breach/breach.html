@@ -9011,7 +9011,10 @@ function randomSpawn(){
     if(nd>bestScore){ bestScore=nd; best={x,z,y:fy}; if(nd>good) break; }   // good enough separation -> take it
   }
   if(!best){ const c = usePoly ? _polyCentroid(sr.poly) : (reg ? { x:reg.x, z:reg.z } : { x:0, z:0 }); best={ x:c.x, z:c.z, y:surfAt(c.x,c.z) }; }   // fallback: region center, on its surface
-  return { x:best.x, y:best.y, z:best.z, yaw:Math.atan2(best.x, best.z) };   // y = floor height; atan2(x,z) faces center
+  // Face the region center when confined (so spawns look INTO the play space, not out toward the arena origin).
+  let fx=0, fz=0; if(sr){ const h=(usePoly?_polyCentroid(sr.poly):{x:reg.x,z:reg.z}); fx=h.x; fz=h.z; }
+  const yaw = (Math.abs(fx-best.x)>0.01||Math.abs(fz-best.z)>0.01) ? Math.atan2(fx-best.x, fz-best.z) : Math.atan2(best.x, best.z);
+  return { x:best.x, y:best.y, z:best.z, yaw };   // y = floor height; yaw faces the play space / center
 }
 function sendToPlayer(id, msg){
   if(NET.mode==='host'){ const c=NET.conns[id]; if(c) try{ c.send(msg); }catch(e){} }
@@ -9201,6 +9204,9 @@ function updateBots(dt){
     }
     else if(tgt){ destX=tgt.pos.x; destZ=tgt.pos.z; }   // engage
     else { const h=_botHome(); destX=h.x; destZ=h.z; }   // no target -> head to the play space (region center, not arena origin)
+    // Confined to a region? Pull the destination back inside it, so no AI state can steer a bot out toward a
+    // walled-off point (the off-center arena origin, a target/last-seen spot behind a wall, etc.).
+    if(gameCfg && gameCfg.spawnRegion && gameCfg.spawnRegion.on){ const cc=_clampToRegion(destX,destZ); destX=cc.x; destZ=cc.z; }
     let dx=destX-b.pos.x, dz=destZ-b.pos.z; const dist=Math.hypot(dx,dz)||1; let mvx,mvz;
     if(b.aiState==='engage' && tgt && hasLOS && dist<Math.max(9,b.prefRange+3) && !(koth && !cpOwnedBy(b.team))){
       const radial = dist < b.prefRange-1 ? -0.5 : (dist > b.prefRange+1 ? 0.5 : 0);
@@ -9220,7 +9226,7 @@ function updateBots(dt){
     const ox=b.pos.x, oz=b.pos.z;
     if(b.grounded!==false){   // walk only with feet on a surface; while airborne, momentum carries it
       // stuck recovery: if we've been blocked a while, steer perpendicular for a moment to get around it
-      if(b._stuckT>0.6){ const px=-mvz, pz=mvx; mvx=(mvx+px*1.4); mvz=(mvz+pz*1.4); const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml; if(b._stuckT>1.4){ b._stuckT=0; b.strafe*=-1; } }
+      if(b._stuckT>0.6){ const px=-mvz, pz=mvx; mvx=(mvx+px*1.4); mvz=(mvz+pz*1.4); const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml; if(b._stuckT>1.4){ b._stuckT=0; b.strafe*=-1; if(gameCfg && gameCfg.spawnRegion && gameCfg.spawnRegion.on){ const h=_botHome(); const hx=h.x-b.pos.x, hz=h.z-b.pos.z, hl=Math.hypot(hx,hz)||1; mvx=hx/hl; mvz=hz/hl; } } }   // jammed too long -> head back toward the play space
       const step=spd*dt;
       const cx=Math.max(-lim,Math.min(lim, b.pos.x+mvx*step)), cz=Math.max(-lim,Math.min(lim, b.pos.z+mvz*step));
       const okFull=(typeof clearAt!=='function') || clearAt(cx,cz,b.pos.y);
@@ -11157,7 +11163,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 430 · 2026-06-12';
+const BUILD_VERSION = 'build 431 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
