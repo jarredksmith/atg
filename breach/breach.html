@@ -8977,20 +8977,24 @@ function randomSpawn(){
   const pb = usePoly ? _polyBounds(sr.poly) : null;
   const others = [];
   for(const id in NET.players){ const rp=NET.players[id]; if(rp) others.push([rp.posEye.x, rp.posEye.z]); }
+  // Surface height at a column (the elevated arena floor, a prop top, or terrain) — so spawns validate and place
+  // ON the floor that's actually there, not at world-Y 0 (which is buried inside an elevated arena).
+  const surfAt = (x,z)=>{ const s=(typeof surfaceTopAt==='function')?surfaceTopAt(x,z):-Infinity; const t=(typeof terrainHeightAt==='function')?terrainHeightAt(x,z):0; return (s>-Infinity)?Math.max(s,t):t; };
   let best=null, bestScore=-1;
   for(let tries=0; tries<64; tries++){
     let x, z;
     if(usePoly){ x = pb.minx + Math.random()*(pb.maxx-pb.minx); z = pb.minz + Math.random()*(pb.maxz-pb.minz); if(!_pointInPoly(x,z,sr.poly)) continue; }   // reject points outside the outline
     else if(reg){ const a=Math.random()*Math.PI*2, rr=Math.sqrt(Math.random())*Math.max(1,reg.r); x=reg.x+Math.cos(a)*rr; z=reg.z+Math.sin(a)*rr; }   // uniform point in the region disc
     else { x=(Math.random()*2-1)*lim; z=(Math.random()*2-1)*lim; }
-    if(insideSolid(x,z,0) || !clearAt(x,z,0)) continue;     // skip points inside/blocked by geometry
+    const fy = surfAt(x,z);                                  // the floor height at this column
+    if(insideSolid(x,z,fy) || !clearAt(x,z,fy)) continue;    // skip points inside/blocked by geometry (tested AT the floor)
     let nd = others.length ? 1e9 : lim;
     for(const o of others){ const d=Math.hypot(x-o[0], z-o[1]); if(d<nd) nd=d; }
     const good = usePoly ? Math.min(34, Math.hypot(pb.maxx-pb.minx, pb.maxz-pb.minz)*0.3) : (reg ? (reg.r*0.6) : 34);
-    if(nd>bestScore){ bestScore=nd; best={x,z}; if(nd>good) break; }   // good enough separation -> take it
+    if(nd>bestScore){ bestScore=nd; best={x,z,y:fy}; if(nd>good) break; }   // good enough separation -> take it
   }
-  if(!best) best = usePoly ? _polyCentroid(sr.poly) : (reg ? { x:reg.x, z:reg.z } : { x:0, z:0 });   // fallback: region center
-  return { x:best.x, z:best.z, yaw:Math.atan2(best.x, best.z) };   // atan2(x,z) faces the center (0,0)
+  if(!best){ const c = usePoly ? _polyCentroid(sr.poly) : (reg ? { x:reg.x, z:reg.z } : { x:0, z:0 }); best={ x:c.x, z:c.z, y:surfAt(c.x,c.z) }; }   // fallback: region center, on its surface
+  return { x:best.x, y:best.y, z:best.z, yaw:Math.atan2(best.x, best.z) };   // y = floor height; atan2(x,z) faces center
 }
 function sendToPlayer(id, msg){
   if(NET.mode==='host'){ const c=NET.conns[id]; if(c) try{ c.send(msg); }catch(e){} }
@@ -9086,8 +9090,8 @@ function spawnBots(n){
     const id=BOT_ID_BASE+i; let team=-1;
     if(teamMode()){ let c0=(NET.team===0?1:0), c1=(NET.team===1?1:0); for(const b of bots){ if(b.team===0)c0++; else if(b.team===1)c1++; } team=(c0<=c1)?0:1; }
     const nm=BOT_NAMES[i%BOT_NAMES.length]+(i>=BOT_NAMES.length?(' '+(i+1)):'');
-    const sp=randomSpawn(); const mesh=makeBot(team, nm); mesh.userData.botId=id; mesh.position.set(sp.x,0,sp.z); mesh.rotation.y=sp.yaw;
-    bots.push({ id, team, name:nm, mesh, pos:new THREE.Vector3(sp.x,0,sp.z), yaw:sp.yaw, hp:D.hp, maxHp:D.hp, dead:false, respawnT:0, fireCd:Math.random()*0.6, strafe:Math.random()<0.5?1:-1, retargetT:0, target:null, vy:0, evx:0, evz:0, grounded:true,
+    const sp=randomSpawn(); const mesh=makeBot(team, nm); mesh.userData.botId=id; mesh.position.set(sp.x,(sp.y||0),sp.z); mesh.rotation.y=sp.yaw;
+    bots.push({ id, team, name:nm, mesh, pos:new THREE.Vector3(sp.x,(sp.y||0),sp.z), yaw:sp.yaw, hp:D.hp, maxHp:D.hp, dead:false, respawnT:0, fireCd:Math.random()*0.6, strafe:Math.random()<0.5?1:-1, retargetT:0, target:null, vy:0, evx:0, evz:0, grounded:true,
       aiState:'engage', aiT:0, lkp:null, lkpFresh:0, sawTgt:false, flankSide:Math.random()<0.5?1:-1,
       // personality: aggression (push vs hold), bravery (low hp before retreat), preferred engage distance
       aggr:0.4+Math.random()*0.6, bravery:0.18+Math.random()*0.22, prefRange:6+Math.random()*9 });
@@ -9132,8 +9136,8 @@ function updateBots(dt){
         if(b._dieT > fadeStart){ const k=Math.max(0,1-(b._dieT-fadeStart)/0.7); b.mesh.traverse(o=>{ if(o.isMesh && o.material){ const ms=Array.isArray(o.material)?o.material:[o.material]; ms.forEach(m=>{ m.transparent=true; m.opacity=k; }); } }); }
         if(b._dieT >= 2.5){ b.mesh.visible=false; b._dying=false; }
       }
-      if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,0,sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; b.aiState='engage'; b.aiT=0; b.lkp=null; b.sawTgt=false; b._stuckT=0; b._dying=false; b._dieT=0;
-        if(b.mesh){ b.mesh.visible=true; b.mesh.traverse(o=>{ if(o.isMesh && o.material){ const ms=Array.isArray(o.material)?o.material:[o.material]; ms.forEach(m=>{ m.opacity=1; }); } }); b.mesh.position.set(sp.x,0,sp.z); if(typeof setEnemyAnimState==='function') setEnemyAnimState(b.mesh,'idle'); } } continue; }
+      if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,(sp.y||0),sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; b.aiState='engage'; b.aiT=0; b.lkp=null; b.sawTgt=false; b._stuckT=0; b._dying=false; b._dieT=0;
+        if(b.mesh){ b.mesh.visible=true; b.mesh.traverse(o=>{ if(o.isMesh && o.material){ const ms=Array.isArray(o.material)?o.material:[o.material]; ms.forEach(m=>{ m.opacity=1; }); } }); b.mesh.position.set(sp.x,(sp.y||0),sp.z); if(typeof setEnemyAnimState==='function') setEnemyAnimState(b.mesh,'idle'); } } continue; }
     b.retargetT-=dt;
     if(b.retargetT<=0 || !_botTargetAlive(b.target)){ b.target=_botAcquire(b); b.retargetT=0.4+Math.random()*0.3; }
     const tgt=b.target;
@@ -9386,7 +9390,7 @@ function duelDie(){
 function duelRespawn(){
   duelDead = false; duelInvuln = 1.2;
   const sp = randomSpawn();
-  player.hp = player.maxHp; player.pos.set(sp.x, terrainHeightAt(sp.x, sp.z)+EYE, sp.z); player.vel.set(0,0,0);
+  player.hp = player.maxHp; player.pos.set(sp.x, (sp.y!=null?sp.y:terrainHeightAt(sp.x, sp.z))+EYE, sp.z); player.vel.set(0,0,0);
   player.yaw = sp.yaw; player.pitch = 0;
   refillAllWeapons(); buffs.shield=0;
   const ov=document.getElementById('overlay'); if(ov) ov.classList.add('hidden');
@@ -11136,7 +11140,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 428 · 2026-06-12';
+const BUILD_VERSION = 'build 429 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -17624,7 +17628,7 @@ function startGame(){
     giveDuelLoadout();
     if(NET.mode==='host') spawnBots(NET.botCount||0);
     const sp = randomSpawn();
-    player.pos.set(sp.x, terrainHeightAt(sp.x, sp.z)+EYE, sp.z); player.yaw = sp.yaw;
+    player.pos.set(sp.x, (sp.y!=null?sp.y:terrainHeightAt(sp.x, sp.z))+EYE, sp.z); player.yaw = sp.yaw;
     toSpawn = 0;
     if(NET.mode==='host' && !NET.duelScore[0]) NET.duelScore[0]=0;
     duelHUD();
