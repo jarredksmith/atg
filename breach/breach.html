@@ -7450,6 +7450,7 @@ let gameCfg = {
 let playerSpawn = {
   x:   (savedLevel && savedLevel.pstart && savedLevel.pstart.x  !=null) ? savedLevel.pstart.x   : 0,
   z:   (savedLevel && savedLevel.pstart && savedLevel.pstart.z  !=null) ? savedLevel.pstart.z   : 0,
+  y:   (savedLevel && savedLevel.pstart && savedLevel.pstart.y  !=null) ? savedLevel.pstart.y   : 0,   // height ABOVE the ground (for second stories / platform tops); 0 = on the floor
   yaw: (savedLevel && savedLevel.pstart && savedLevel.pstart.yaw!=null) ? savedLevel.pstart.yaw : 0,
 };
 let playerSpawnMarker = null;
@@ -7464,11 +7465,11 @@ function buildPlayerSpawnMarker(){
   const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.6, 10), new THREE.MeshBasicMaterial({ color:0xffffff, depthTest:false }));
   arrow.rotation.x = Math.PI/2; arrow.position.set(0, 0.18, -1.1); arrow.renderOrder = 9001; g.add(arrow);   // points to the spawn facing (-Z forward)
   g.userData.isPlayerStart = true; g.userData.post = pole;
-  g.position.set(playerSpawn.x, 0, playerSpawn.z); g.rotation.y = playerSpawn.yaw;
+  g.position.set(playerSpawn.x, ((typeof terrainHeightAt==='function')?terrainHeightAt(playerSpawn.x,playerSpawn.z):0)+(playerSpawn.y||0), playerSpawn.z); g.rotation.y = playerSpawn.yaw;
   g.visible = false; scene.add(g);
   return g;
 }
-function refreshPlayerSpawnMarker(){ if(playerSpawnMarker){ playerSpawnMarker.position.set(playerSpawn.x, 0, playerSpawn.z); playerSpawnMarker.rotation.y = playerSpawn.yaw; } }
+function refreshPlayerSpawnMarker(){ if(playerSpawnMarker){ playerSpawnMarker.position.set(playerSpawn.x, ((typeof terrainHeightAt==='function')?terrainHeightAt(playerSpawn.x,playerSpawn.z):0)+(playerSpawn.y||0), playerSpawn.z); playerSpawnMarker.rotation.y = playerSpawn.yaw; } }
 playerSpawnMarker = buildPlayerSpawnMarker();
 
 // ---------- Player / controls ----------
@@ -7783,6 +7784,13 @@ addEventListener('keydown', e=>{
   // If a text field has focus, let it handle the key — don't record movement or fire any shortcut.
   if(typingInField(e)) return;
   if(_cineActive){ endCinematic(); return; }   // any key skips the intro flythrough
+  // Universal escape hatch in multiplayer: Esc always opens a match menu, even while dead or on the result
+  // screen, so you can never get trapped with no way out.
+  if(e.code==='Escape' && NET.mode && NET.mode!=='off' && !editorOpen){
+    e.preventDefault();
+    if(typeof toggleMatchMenu==='function') toggleMatchMenu();
+    return;
+  }
   keys[e.code]=true;
   // Claim the keys the game drives so the browser never swallows them — Space in particular gets eaten
   // (page scroll / button activation) during modifier combos like Shift+Space, which broke jump-while-running.
@@ -8733,6 +8741,14 @@ function sendToPlayer(id, msg){
   else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send(msg); }catch(e){} }   // client's only peer is the host (id 0)
 }
 function netStatus(msg){ const el=document.getElementById('mpStatus'); if(el) el.textContent = msg || ''; }
+// after a "Replay" reload, pre-fill the room code and nudge the player to host/join again
+(function restoreReplay(){
+  let r=null; try{ const v=sessionStorage.getItem('breach_replay'); if(v){ r=JSON.parse(v); sessionStorage.removeItem('breach_replay'); } }catch(e){}
+  if(!r) return;
+  const apply=()=>{ const inp=document.getElementById('mpCode'); if(inp && r.code) inp.value=r.code;
+    netStatus(r.wasHost ? ('Replay: you hosted '+(r.code||'')+' \u2014 start a new match to play again.') : ('Replay: re-join code '+(r.code||'')+' (host must restart).')); };
+  if(document.readyState!=='loading') apply(); else document.addEventListener('DOMContentLoaded', apply);
+})();
 
 // Players the host simulates against (enemy targeting + coin pickup). Each has a credit()/hurt()
 // that routes locally or over the wire. In solo or on a client this is just the local player.
@@ -9136,6 +9152,33 @@ function registerDuelKill(killerId, victimId){   // host only
 }
 function broadcastDuelScore(){ const m={t:'score', s:NET.duelScore}; for(const id in NET.conns){ try{ NET.conns[id].send(m); }catch(e){} } }
 function broadcastDuelOver(winnerId){ const wt=teamMode()?NET.teams[winnerId]:null; const m={t:'duelOver', w:winnerId, wt}; for(const id in NET.conns){ try{ NET.conns[id].send(m); }catch(e){} } showDuelResult(winnerId, wt); }
+// Always-available multiplayer match menu (opened with Esc). Works mid-match, while dead, or on the result
+// screen, so a player can never be trapped. Offers Resume, Replay (re-enter the same room), Back to menu.
+let _matchMenuOpen = false;
+function toggleMatchMenu(){
+  if(_matchMenuOpen){ closeMatchMenu(); return; }
+  _matchMenuOpen = true; safeExitPointerLock();
+  let el = document.getElementById('matchMenu');
+  if(!el){ el = document.createElement('div'); el.id='matchMenu';
+    el.style.cssText='position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:rgba(3,8,10,0.82);backdrop-filter:blur(3px);';
+    document.body.appendChild(el);
+  }
+  const onResult = (typeof gameOver!=='undefined') && gameOver;
+  const isHost = NET.mode==='host';
+  el.innerHTML = '<div style="font:600 26px sans-serif;color:#eafff7;letter-spacing:1px;margin-bottom:4px;">'+(onResult?'MATCH OVER':'PAUSED')+'</div>';
+  const mk=(label,bg,fn)=>{ const b=document.createElement('button'); b.textContent=label; b.style.cssText='min-width:220px;padding:10px 18px;font:600 14px sans-serif;border:1px solid rgba(56,245,181,0.4);border-radius:8px;background:'+bg+';color:#eafff7;cursor:pointer;'; b.onclick=fn; el.appendChild(b); };
+  if(!onResult) mk('Resume', 'rgba(56,245,181,0.18)', ()=>closeMatchMenu());
+  mk(isHost?'Replay match':'Rejoin / replay', 'rgba(56,200,245,0.18)', ()=>replayMatch());
+  mk('Back to menu', 'rgba(255,45,85,0.18)', ()=>{ NET.mode='off'; NET.gameMode='coop'; location.reload(); });
+  el.style.display='flex';
+}
+function closeMatchMenu(){ _matchMenuOpen=false; const el=document.getElementById('matchMenu'); if(el) el.style.display='none'; }
+function replayMatch(){
+  // P2P can't reliably re-sync a live rematch (the host may have left; PeerJS ids change), so the robust path
+  // is to drop back to the menu with the room code remembered + pre-filled, ready to host/join again in one tap.
+  try{ sessionStorage.setItem('breach_replay', JSON.stringify({ wasHost:NET.mode==='host', code:NET.roomCode||'', gameMode:NET.gameMode, killTarget:NET.killTarget })); }catch(e){}
+  NET.mode='off'; NET.gameMode='coop'; location.reload();
+}
 function showDuelResult(winnerId, winnerTeam){
   gameOn=false; gameOver=true; safeExitPointerLock();
   { const sb=document.getElementById('scoreboard'); if(sb) sb.style.display='none'; }
@@ -9144,9 +9187,13 @@ function showDuelResult(winnerId, winnerTeam){
   const ov=document.getElementById('overlay'); ov.classList.remove('hidden');
   ov.innerHTML = `<h1 style="color:${win?'#38f5b5':'#ff2d55'};text-shadow:0 0 30px ${win?'rgba(56,245,181,.5)':'rgba(255,45,85,.5)'}">${win?'VICTORY':'DEFEAT'}</h1>
     <div class="sub">${teamMode() ? (TEAM_NAME[winnerTeam]+' TEAM WINS') : (pvpLabel()+' TO '+NET.killTarget+' KILLS')}</div>
-    <button id="startBtn">Back to menu</button>`;
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:6px;">
+      <button id="replayBtn">${NET.mode==='host'?'Replay match':'Rejoin / replay'}</button>
+      <button id="startBtn">Back to menu</button>
+    </div>`;
   document.getElementById('hud').classList.add('hidden');
   document.getElementById('startBtn').onclick = ()=>{ NET.mode='off'; NET.gameMode='coop'; location.reload(); };
+  { const rb=document.getElementById('replayBtn'); if(rb) rb.onclick = ()=>replayMatch(); }
 }
 
 // ---- apply a host-built level on a joining client (props + lights), through the real spawn path ----
@@ -9179,7 +9226,7 @@ function loadLevelFromNet(level){
   tracerCfg = _sanitizeTracer(level.tracer); if(typeof renderTracerFxPanel==='function') renderTracerFxPanel();
   charRoster = Array.isArray(level.roster) ? level.roster.map(_sanitizeCharCfg) : []; if(typeof renderCharRosterPanel==='function') renderCharRosterPanel();
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
-  if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; refreshPlayerSpawnMarker(); }
+  if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.y=level.pstart.y||0; playerSpawn.yaw=level.pstart.yaw||0; refreshPlayerSpawnMarker(); }
   if(level.weapons){ for(const k in WEAPONS){ const wd=level.weapons[k]; if(wd){ WEAPONS[k].model=wd.model||''; WEAPONS[k].view=wd.view||null; if(wd.clips) WEAPONS[k].clips=Object.assign({idle:'',shoot:'',reload:''}, wd.clips); } } }
   if(level.grenade){ const G=level.grenade; if(G.model!=null) GRENADE.model=G.model||''; if(G.scale!=null) GRENADE.scale=G.scale; if(G.radius!=null) GRENADE.radius=G.radius; if(G.damage!=null) GRENADE.damage=G.damage; if(G.fuse!=null) GRENADE.fuse=G.fuse; if(G.throwForce!=null) GRENADE.throwForce=G.throwForce; loadGrenadeModel(); if(editorTargets.grenade.sync) editorTargets.grenade.sync(); }
   if(level.enemies || level.enemy){   // adopt the host's per-type enemy models so clients render the same hostiles
@@ -10808,7 +10855,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 406 · 2026-06-12';
+const BUILD_VERSION = 'build 409 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14056,7 +14103,7 @@ function serializeLevel(){
     keyNames: Object.keys(keyNames).reduce((a,k)=>{ const n=(keyNames[k]||'').trim(); if(n) a[k]=n; return a; }, {}),
     game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave, noRespawn: !!gameCfg.noRespawn },
     dmgNum:  { on: dmgNumCfg.on !== false, size: dmgNumCfg.size, hit: dmgNumCfg.hitColor, kill: dmgNumCfg.killColor },
-    pstart:  { x: playerSpawn.x, z: playerSpawn.z, yaw: playerSpawn.yaw },
+    pstart:  { x: playerSpawn.x, y: playerSpawn.y||0, z: playerSpawn.z, yaw: playerSpawn.yaw },
     extract: extractSpot ? { x: +extractSpot.x.toFixed(3), z: +extractSpot.z.toFixed(3) } : null,
     grenade: { model: GRENADE.model, scale: GRENADE.scale, radius: GRENADE.radius, damage: GRENADE.damage, fuse: GRENADE.fuse, throwForce: GRENADE.throwForce },
     audio:   { musicUrl: (audioSettings.musicUrl||''), sounds: _sanitizeSounds(audioSettings.sounds) },   // music track + custom SFX travel with the level (volumes/mute stay per-device)
@@ -14312,7 +14359,7 @@ function restoreLevel(level){
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns) buildSpawnMarker(sp); } setSpawnMarkersVisible(editorOpen);
   if(level.game){ gameCfg.mode = level.game.mode||'random'; gameCfg.winWaves = level.game.winWaves||0; gameCfg.upgrades = level.game.upgrades !== false; gameCfg.objective = level.game.objective||'eliminate'; gameCfg.surviveSecs = level.game.surviveSecs!=null ? level.game.surviveSecs : 120; gameCfg.extractHold = level.game.extractHold!=null ? level.game.extractHold : 5; gameCfg.extractRadius = level.game.extractRadius!=null ? level.game.extractRadius : 3.5; gameCfg.bossWave = level.game.bossWave!=null ? level.game.bossWave : 5; gameCfg.noRespawn = !!level.game.noRespawn; }
   if(level.dmgNum){ const d=level.dmgNum; dmgNumCfg.on = d.on!==false; if(d.size) dmgNumCfg.size=+d.size; if(d.hit) dmgNumCfg.hitColor=d.hit; if(d.kill) dmgNumCfg.killColor=d.kill; }
-  if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.yaw=level.pstart.yaw||0; } else { playerSpawn.x=0; playerSpawn.z=0; playerSpawn.yaw=0; }
+  if(level.pstart){ playerSpawn.x=level.pstart.x||0; playerSpawn.z=level.pstart.z||0; playerSpawn.y=level.pstart.y||0; playerSpawn.yaw=level.pstart.yaw||0; } else { playerSpawn.x=0; playerSpawn.z=0; playerSpawn.y=0; playerSpawn.yaw=0; }
   refreshPlayerSpawnMarker();
   extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null;
   audioZones = Array.isArray(level.audioZones) ? level.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : []; if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
@@ -15452,10 +15499,20 @@ function renderEditorFields(){
     fr.addEventListener('mousedown',()=>pushUndoSnapshot()); fn.addEventListener('focus',()=>pushUndoSnapshot());
     fr.oninput=()=>apF(fr.value); fn.onchange=()=>apF(fn.value);
     fl.appendChild(fsp); fl.appendChild(fr); fl.appendChild(fn); picker.appendChild(fl);
-    const pr=document.createElement('div'); pr.className='hint'; pr.style.margin='4px 0 6px'; pr.textContent='Position:  X '+playerSpawn.x.toFixed(1)+'   Z '+playerSpawn.z.toFixed(1)+'   (drag the gizmo to move)';
+    const pr=document.createElement('div'); pr.className='hint'; pr.style.margin='4px 0 6px'; pr.textContent='Position:  X '+playerSpawn.x.toFixed(1)+'   Z '+playerSpawn.z.toFixed(1)+'   Y +'+(playerSpawn.y||0).toFixed(1)+'   (drag the gizmo for X/Z)';
     picker.appendChild(pr);
+    // Height field: raise the start above the ground for a second story / platform top. 0 = on the floor.
+    const yl=document.createElement('div'); yl.style.cssText='display:flex;align-items:center;gap:8px;margin:2px 0 6px;';
+    const ysp=document.createElement('span'); ysp.textContent='Height ↑'; ysp.style.minWidth='70px'; ysp.style.fontSize='12px';
+    const yr=document.createElement('input'); yr.type='range'; yr.min='0'; yr.max='30'; yr.step='0.1'; yr.value=String(playerSpawn.y||0); yr.style.flex='1';
+    const yn=document.createElement('input'); yn.type='number'; yn.step='0.1'; yn.value=String(playerSpawn.y||0); yn.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:11px;';
+    const apY=(v)=>{ let n=parseFloat(v); if(!isFinite(n)) n=0; if(n<0) n=0; playerSpawn.y=n; yr.max=String(Math.max(30, n+1)); yr.value=String(n); yn.value=String(n); refreshPlayerSpawnMarker(); pr.textContent='Position:  X '+playerSpawn.x.toFixed(1)+'   Z '+playerSpawn.z.toFixed(1)+'   Y +'+n.toFixed(1)+'   (drag the gizmo for X/Z)'; };
+    yr.addEventListener('mousedown',()=>pushUndoSnapshot()); yn.addEventListener('focus',()=>pushUndoSnapshot());
+    yr.oninput=()=>apY(yr.value); yn.onchange=()=>apY(yn.value);
+    yl.appendChild(ysp); yl.appendChild(yr); yl.appendChild(yn); picker.appendChild(yl);
+    const yh=document.createElement('div'); yh.className='hint'; yh.style.cssText='font-size:10px;opacity:0.7;margin:-2px 0 6px;'; yh.textContent='Height above the ground at this spot. Set it to land on a platform or second story; you\u2019ll drop onto it on spawn. 0 = floor.'; picker.appendChild(yh);
     const ctr=document.createElement('button'); ctr.textContent='⌖ Reset to arena center';
-    ctr.onclick=()=>{ pushUndoSnapshot(); playerSpawn.x=0; playerSpawn.z=0; playerSpawn.yaw=0; refreshPlayerSpawnMarker(); renderEditorFields(); };
+    ctr.onclick=()=>{ pushUndoSnapshot(); playerSpawn.x=0; playerSpawn.z=0; playerSpawn.y=0; playerSpawn.yaw=0; refreshPlayerSpawnMarker(); renderEditorFields(); };
     picker.appendChild(ctr);
   }
   if(tgt.isExtract){
@@ -16836,7 +16893,7 @@ function resetEditorTarget(key){
   else if(key==='station'){ t.state = { px:8, py:0, pz:8, rx:0, ry:180, rz:0, s:2.0 }; t.apply(); }
   else if(key==='props'){ const o=t.obj(); if(o){ const sp=(SCENE_PROPS[t.idx] && SCENE_PROPS[t.idx].t) || [0,0,0,0,0,0,1];
       o.position.set(sp[0],sp[1],sp[2]); o.rotation.set(sp[3],sp[4],sp[5]); o.scale.setScalar(sp[6]); refreshPropCollider(o); } }
-  else if(key==='pstart'){ playerSpawn.x=0; playerSpawn.z=0; playerSpawn.yaw=0; refreshPlayerSpawnMarker(); }
+  else if(key==='pstart'){ playerSpawn.x=0; playerSpawn.z=0; playerSpawn.y=0; playerSpawn.yaw=0; refreshPlayerSpawnMarker(); }
   else if(key==='extract'){ extractSpot=null; refreshExtractMarker(); }
   else if(key==='player'){ t.state={ s:1, face:0, yoff:0, xoff:0, zoff:0 }; t.apply(); }
   renderEditorFields();
@@ -16967,6 +17024,9 @@ function _prewarmMatchModels(){
   // means buildAvatarVisual shows the placeholder capsule mid-shot until the model pops in.
   try{ const mc=(typeof myCharCfg==='function')?myCharCfg():null; if(mc && mc.url) urls.add(mc.url); }catch(e){}
   if((NET.mode==='host'||NET.mode==='client') && NET.charById){ for(const id in NET.charById){ const c=NET.charById[id]; if(c && c.url) urls.add(c.url); } }
+  // ENEMY models too — these load when an enemy first spawns (often a frame or two into the match), which is
+  // exactly the placeholder-capsule-then-pop the player sees. Warm every enemy type that has a model set.
+  try{ if(typeof enemyModels==='object' && enemyModels){ for(const k in enemyModels){ const em=enemyModels[k]; if(em && em.url) urls.add(em.url); } } }catch(e){}
   urls.forEach(u=>{ try{ loadGLTFCached(u, ()=>{}, ()=>{}); }catch(e){} });
 }
 function startGame(){
@@ -16979,8 +17039,8 @@ function startGame(){
   if(typeof ensurePlayerPreview==='function') ensurePlayerPreview(false);   // drop the editor's stand-in avatar
   initAudio();
   startMusic();
-  player.hp=100; player.maxHp=100; run = { ...RUN0 }; if(typeof closeUpgradePicker==='function') closeUpgradePicker(); player.pos.set(playerSpawn.x, terrainHeightAt(playerSpawn.x, playerSpawn.z)+EYE, playerSpawn.z); player.vel.set(0,0,0);
-  player.yaw=playerSpawn.yaw; player.pitch=0; player.onGround=true;
+  player.hp=100; player.maxHp=100; run = { ...RUN0 }; if(typeof closeUpgradePicker==='function') closeUpgradePicker(); player.pos.set(playerSpawn.x, terrainHeightAt(playerSpawn.x, playerSpawn.z)+(playerSpawn.y||0)+EYE, playerSpawn.z); player.vel.set(0,0,0);
+  player.yaw=playerSpawn.yaw; player.pitch=0; player.onGround=(playerSpawn.y||0)<=0;
   // reset weapons
   owned = ['rifle']; curWep='rifle';
   WEAPONS.rifle.mag=30; WEAPONS.rifle.reserve=90;
