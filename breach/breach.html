@@ -8835,12 +8835,28 @@ function _botDamage(b, tgt, dmg){
   else if(tgt.kind==='client') sendToPlayer(tgt.id, {t:'pvpHit', d:dmg, from:b.id});
   else if(tgt.kind==='bot'){ const o=tgt.bot; if(o&&!o.dead){ o.hp-=dmg; if(o.hp<=0){ registerDuelKill(b.id, o.id); botDie(o); } } }
 }
-function botDie(b){ b.dead=true; b.respawnT=2.5; if(b.mesh) b.mesh.visible=false; if(typeof netDeath==='function') netDeath(b.pos.x,0,b.pos.z); }
+function botDie(b){
+  b.dead=true; b.respawnT=2.5; b._dieT=0;
+  // play the death animation (if the model has a 'die' clip) and let the body linger; the dead-branch fades it.
+  if(b.mesh && b.mesh.userData.visual && b.mesh.userData.visual.userData.stateActions && typeof setEnemyAnimState==='function'){
+    setEnemyAnimState(b.mesh, 'die'); b._dying=true;
+  } else if(b.mesh){ b.mesh.visible=false; b._dying=false; }   // no death clip -> just hide (FX still plays)
+  if(typeof netDeath==='function') netDeath(b.pos.x,b.pos.y||0,b.pos.z);
+}
 function updateBots(dt){
   if(NET.mode!=='host' || !pvpMode() || !gameOn || !bots.length) return;
   const D=botDiff(), koth = NET.gameMode==='cp', lim=ARENA-2, spd=SPEED*D.spd;
   for(const b of bots){
-    if(b.dead){ b.respawnT-=dt; if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,0,sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; b.aiState='engage'; b.aiT=0; b.lkp=null; b.sawTgt=false; b._stuckT=0; if(b.mesh){ b.mesh.visible=true; b.mesh.position.set(sp.x,0,sp.z); } } continue; }
+    if(b.dead){
+      b.respawnT-=dt;
+      if(b._dying && b.mesh){
+        b._dieT=(b._dieT||0)+dt;
+        const fadeStart = Math.max(0, 2.5-0.7);
+        if(b._dieT > fadeStart){ const k=Math.max(0,1-(b._dieT-fadeStart)/0.7); b.mesh.traverse(o=>{ if(o.isMesh && o.material){ const ms=Array.isArray(o.material)?o.material:[o.material]; ms.forEach(m=>{ m.transparent=true; m.opacity=k; }); } }); }
+        if(b._dieT >= 2.5){ b.mesh.visible=false; b._dying=false; }
+      }
+      if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,0,sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; b.aiState='engage'; b.aiT=0; b.lkp=null; b.sawTgt=false; b._stuckT=0; b._dying=false; b._dieT=0;
+        if(b.mesh){ b.mesh.visible=true; b.mesh.traverse(o=>{ if(o.isMesh && o.material){ const ms=Array.isArray(o.material)?o.material:[o.material]; ms.forEach(m=>{ m.opacity=1; }); } }); b.mesh.position.set(sp.x,0,sp.z); if(typeof setEnemyAnimState==='function') setEnemyAnimState(b.mesh,'idle'); } } continue; }
     b.retargetT-=dt;
     if(b.retargetT<=0 || !_botTargetAlive(b.target)){ b.target=_botAcquire(b); b.retargetT=0.4+Math.random()*0.3; }
     const tgt=b.target;
@@ -9083,7 +9099,7 @@ function duelDie(){
   duelDead = true; duelRespawnTimer = 2.5; _kcInit=false; releaseHeld();
   if(shopOpen) closeShop();   // can't respawn while a crate freezes the loop
   choosingUpgrade = false;
-  netDeath(player.pos.x, 0, player.pos.z);   // burst where I fell, mirrored to all peers
+  netDeath(player.pos.x, player.pos.y, player.pos.z);   // burst where I fell, mirrored to all peers
   // report the kill to the host (the host is authoritative for score)
   if(NET.mode==='host'){ registerDuelKill(lastDamagedBy, NET.myId); }
   else { try{ NET.conn && NET.conn.send({t:'died', by:lastDamagedBy}); }catch(e){} }
@@ -10759,7 +10775,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 403 · 2026-06-12';
+const BUILD_VERSION = 'build 404 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
