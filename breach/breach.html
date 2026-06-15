@@ -9775,12 +9775,12 @@ function updateBots(dt){
           else { const a=Math.random()*Math.PI*2; sx+=Math.cos(a); sz+=Math.sin(a); near++; }   // EXACTLY stacked -> shove apart in a random dir (else they freeze together)
         }
       }
-      if(near){ const sl=Math.hypot(sx,sz)||1; sx/=sl; sz/=sl; mvx += sx*1.35; mvz += sz*1.35; const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml; }   // separation outweighs the drive when crowded, so they spread instead of grinding
+      if(near){ let sl=Math.hypot(sx,sz); if(sl>1){ sx/=sl; sz/=sl; } mvx += sx*0.85; mvz += sz*0.85; const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml; }   // a gentle declump nudge that never overpowers the drive, so a crowded spawn can't fling bots into the walls
     }
     const ox=b.pos.x, oz=b.pos.z;
     if(b.grounded!==false){   // walk only with feet on a surface; while airborne, momentum carries it
       // stuck recovery: if we've been blocked a while, steer perpendicular for a moment to get around it
-      if(b._stuckT>0.6){ const px=-mvz, pz=mvx; mvx=(mvx+px*1.4); mvz=(mvz+pz*1.4); const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml; if(b._stuckT>1.4){ b.strafe*=-1; b._wander=null; } }   // jammed -> flip strafe, reroll wander (timer keeps climbing toward a relocate)
+      if(b._stuckT>0.5){ if(!b._stuckSide) b._stuckSide=(Math.random()<0.5?1:-1); const px=-mvz*b._stuckSide, pz=mvx*b._stuckSide; mvx=mvx*0.5+px*1.2; mvz=mvz*0.5+pz*1.2; const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml; }   // jammed -> follow the wall to ONE consistent side until it slides clear (instead of oscillating in place)
       const step=spd*dt;
       const cx=Math.max(-lim,Math.min(lim, b.pos.x+mvx*step)), cz=Math.max(-lim,Math.min(lim, b.pos.z+mvz*step));
       // The arena walls + props are the only movement boundary; the spawn region never blocks motion, so a
@@ -9794,8 +9794,8 @@ function updateBots(dt){
         else { b.strafe*=-1; }   // boxed in -> reverse strafe and let stuck recovery kick in
       }
       const moved=Math.hypot(b.pos.x-ox, b.pos.z-oz);
-      b._stuckT = (moved < step*0.25) ? (b._stuckT||0)+dt : 0;   // barely moved? accrue stuck time
-      if(b._stuckT>2.2 && typeof randomSpawn==='function'){   // truly boxed in (corner / spawn jam) -> hop to a fresh open spawn rather than stay frozen
+      if(moved < step*0.25){ b._stuckT=(b._stuckT||0)+dt; } else { b._stuckT=0; b._stuckSide=0; }   // accrue stuck time when barely moving; clear the wall-follow side once it's moving again
+      if(b._stuckT>3.5 && typeof randomSpawn==='function'){   // wall-following failed for a long time -> hop to a fresh open spawn rather than stay frozen
         const sp=randomSpawn(); b.pos.set(sp.x,(sp.y||0),sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b._stuckT=0; b._wander=null; b.aiState='engage'; b.aiT=0;
         if(b.mesh) b.mesh.position.set(sp.x,(sp.y||0),sp.z);
       }
@@ -11751,7 +11751,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 460 · 2026-06-12';
+const BUILD_VERSION = 'build 461 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
