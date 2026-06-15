@@ -8783,7 +8783,7 @@ function _migrateJumpPad(z){ return { x:+z.x||0, z:+z.z||0, r:(z.r!=null?+z.r:6)
 let jumpPads = (savedLevel && Array.isArray(savedLevel.jumpPads)) ? savedLevel.jumpPads.map(z=>_migrateJumpPad(z)) : [];
 let selJumpPad = -1;
 // ---- Fire zones: an area that's on fire — deals damage-over-time to any actor inside it (player, bots, enemies) ----
-function _migrateFireZone(z){ return { x:+z.x||0, z:+z.z||0, r:(z.r!=null?+z.r:5), y:(z.y!=null?+z.y:0), h:(z.h!=null?+z.h:3), dps:(z.dps!=null?+z.dps:15), den:(z.den!=null?+z.den:1), psz:(z.psz!=null?+z.psz:1), hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(z.wind!=null?+z.wind:0), spk:(z.spk!==false) }; }
+function _migrateFireZone(z){ return { x:+z.x||0, z:+z.z||0, r:(z.r!=null?+z.r:5), y:(z.y!=null?+z.y:0), h:(z.h!=null?+z.h:3), dps:(z.dps!=null?+z.dps:15), den:(z.den!=null?+z.den:1), psz:(z.psz!=null?+z.psz:1), hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(z.wind!=null?+z.wind:0), spk:(z.spk!==false), sat:(z.sat!=null?+z.sat:1) }; }
 let fireZones = (savedLevel && Array.isArray(savedLevel.fireZones)) ? savedLevel.fireZones.map(z=>_migrateFireZone(z)) : [];
 let selFireZone = -1;
 let audioZoneMarkers = []; const _zoneRT = [];   // editor ring markers + per-zone runtime playback state
@@ -8934,11 +8934,12 @@ function disposeFireZones(){ for(const g of fireZoneFx){ scene.remove(g); g.trav
 function buildFireZoneGroup(z, sel){
   const r=Math.max(1,+z.r||5), baseY=(+z.y||0), h=Math.max(0.5, z.h!=null?+z.h:3);
   const grp=new THREE.Group();
-  // a faint ember-bed glow on the ground (also reads as the hazard footprint while editing)
+  // a faint footprint ring shown ONLY while editing (so you can see/select the zone) — hidden in play so it
+  // never shows under the flames.
   const ring=new THREE.Mesh(new THREE.RingGeometry(Math.max(0.3,r-0.25), r, 56), new THREE.MeshBasicMaterial({ color:0xff7a2a, transparent:true, opacity:sel?0.5:0.22, side:THREE.DoubleSide, depthWrite:false, blending:THREE.AdditiveBlending }));
-  ring.rotation.x=-Math.PI/2; ring.position.y=baseY+0.05; grp.add(ring);
+  ring.rotation.x=-Math.PI/2; ring.position.y=baseY+0.05; ring.userData.editorOnly=true; grp.add(ring);
   const fill=new THREE.Mesh(new THREE.CircleGeometry(r, 44), new THREE.MeshBasicMaterial({ color:0xff6a1a, transparent:true, opacity:0.07, side:THREE.DoubleSide, depthWrite:false, blending:THREE.AdditiveBlending }));
-  fill.rotation.x=-Math.PI/2; fill.position.y=baseY+0.04; grp.add(fill);
+  fill.rotation.x=-Math.PI/2; fill.position.y=baseY+0.04; fill.userData.editorOnly=true; grp.add(fill);
   // soft additive rising fire particles (the real flames)
   const den=(z.den!=null?+z.den:1), psz=(z.psz!=null?+z.psz:1);
   const rise=Math.max(2.2, h*1.3);
@@ -8948,7 +8949,7 @@ function buildFireZoneGroup(z, sel){
   const lcol=new THREE.Color(); { const [lr,lg,lb]=_hueRotate(1,0.42,0.1,(z.hue!=null?+z.hue:30)-30); lcol.setRGB(lr,lg,lb); }
   const light=new THREE.PointLight(lcol.getHex(), 2.4, Math.max(8, r*3)); light.position.set(0, baseY+rise*0.35, 0); grp.add(light);
   grp.userData={ parts:fp.parts, geo:fp.geo, posArr:fp.posArr, colArr:fp.colArr, sizeArr:fp.sizeArr, alphaArr:fp.alphaArr, sizeW:fp.sizeW, light, li:2.4, baseR:r*0.92, baseY, riseH0:rise, emberT:0,
-    hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(+z.wind||0), spk:(z.spk!==false), emberCol:lcol.getHex() };
+    hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(+z.wind||0), spk:(z.spk!==false), sat:(z.sat!=null?+z.sat:1), ground:[ring,fill], emberCol:lcol.getHex() };
   grp.position.set(+z.x||0, _maxTerrainOver(+z.x||0,+z.z||0,0), +z.z||0);
   return grp;
 }
@@ -8963,7 +8964,7 @@ function _animateFire(g, tms, dt){
     const H=(typeof renderer!=='undefined' && renderer.domElement) ? renderer.domElement.height : 800;
     _fireMat.uniforms.uScale.value = (cam && cam.isPerspectiveCamera) ? (H*0.5)/Math.tan((cam.fov*0.5)*Math.PI/180) : H*0.5; }
   const ts=tms*0.001, baseY=u.baseY||0, pos=u.posArr, col=u.colArr, siz=u.sizeArr, alp=u.alphaArr, sw=(u.sizeW||0.6);
-  const turb=(u.turb!=null?u.turb:1), wind=(u.wind||0), hue=(u.hue!=null?u.hue:30), hueD=hue-30, spk=(u.spk!==false);
+  const turb=(u.turb!=null?u.turb:1), wind=(u.wind||0), hue=(u.hue!=null?u.hue:30), hueD=hue-30, spk=(u.spk!==false), sat=(u.sat!=null?u.sat:1);
   for(let i=0;i<u.parts.length;i++){ const p=u.parts[i];
     p.age += dt;
     if(p.age>=p.life){ _seedFireParticle(p, u.baseR, u.riseH0); p.age=0; }
@@ -8982,6 +8983,7 @@ function _animateFire(g, tms, dt){
     else if(f<0.68){ cr=1; cg=0.40; cb=0.08; }
     else { cr=0.72; cg=0.14; cb=0.03; }
     if(hueD){ const hr=_hueRotate(cr,cg,cb,hueD); cr=hr[0]; cg=hr[1]; cb=hr[2]; }
+    if(sat<1){ const L=0.299*cr+0.587*cg+0.114*cb; cr=L+(cr-L)*sat; cg=L+(cg-L)*sat; cb=L+(cb-L)*sat; }   // desaturate -> grey, so a fire element can read as smoke
     col[i*3]=cr; col[i*3+1]=cg; col[i*3+2]=cb;
     let op=(f<0.1)?(f/0.1):(1-(f-0.1)/0.9);                 // quick fade-in, long fade-out ("death speed")
     alp[i]=Math.max(0, op)*0.9*(p.bright||0.8);
@@ -9031,7 +9033,8 @@ function renderFireZonesPanel(){
     mkN('Color hue','hue',0,360,1,null);                          // 30=fire, 210=blue, 120=green, 285=purple
     mkN('Turbulence','turb',0,2.5,0.05,(n)=>Math.max(0,n));       // ~ emit-angle / wind turbulence
     mkN('Wind','wind',-3,3,0.1,null);                            // horizontal drift
-    const hueHint=document.createElement('div'); hueHint.className='hint'; hueHint.style.cssText='font-size:10px;opacity:0.7;margin:1px 0 3px;'; hueHint.textContent='Hue 30 = natural fire \u00b7 210 = blue \u00b7 120 = green \u00b7 285 = purple. Density is the particle count; Wind drifts the flames sideways.'; box.appendChild(hueHint);
+    mkN('Saturation','sat',0,1,0.05,(n)=>Math.max(0,Math.min(1,n)));   // 1 = full fire colour, 0 = grey (smoke)
+    const hueHint=document.createElement('div'); hueHint.className='hint'; hueHint.style.cssText='font-size:10px;opacity:0.7;margin:1px 0 3px;'; hueHint.textContent='Hue 30 = natural fire \u00b7 210 = blue \u00b7 120 = green \u00b7 285 = purple. Density is the particle count; Wind drifts sideways; Saturation 0 turns it into grey smoke.'; box.appendChild(hueHint);
     // Sparks (embers) toggle
     const spkRow=document.createElement('label'); spkRow.style.cssText='display:flex;align-items:center;gap:7px;color:#ffb38a;font-size:11px;margin:2px 0;cursor:pointer;';
     const spkCb=document.createElement('input'); spkCb.type='checkbox'; spkCb.checked=(z.spk!==false); spkCb.style.accentColor='#ff6b3a';
@@ -9051,7 +9054,8 @@ function updateFireZones(dt){
   if(!fireZones.length){ return; }
   const showing = ((typeof gameOn!=='undefined'&&gameOn) && !(typeof gameOver!=='undefined'&&gameOver)) || (typeof editorOpen!=='undefined' && editorOpen);
   const tms=performance.now();
-  for(const g of fireZoneFx){ if(!g) continue; g.visible=showing; if(showing) _animateFire(g, tms, dt); }
+  const _eo=(typeof editorOpen!=='undefined' && editorOpen);
+  for(const g of fireZoneFx){ if(!g) continue; g.visible=showing; if(g.userData.ground){ for(const m of g.userData.ground) m.visible=_eo; } if(showing) _animateFire(g, tms, dt); }
   const live = gameOn && !editorOpen && !gameOver
     && !(typeof _cineActive!=='undefined' && _cineActive)
     && !(typeof _levelLoaderActive!=='undefined' && _levelLoaderActive)
@@ -11731,7 +11735,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 457 · 2026-06-12';
+const BUILD_VERSION = 'build 458 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15078,7 +15082,7 @@ function serializeLevel(){
     audioZones: audioZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, url:z.url||'', vol:+z.vol, loop:!!z.loop })),
     deathZones: deathZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:3) })),
     jumpPads: jumpPads.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:2), power:(+z.power||22) })),
-    fireZones: fireZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:3), dps:(+z.dps||0), den:(+z.den||1), psz:(+z.psz||1), hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(+z.wind||0), spk:(z.spk!==false) })),
+    fireZones: fireZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:3), dps:(+z.dps||0), den:(+z.den||1), psz:(+z.psz||1), hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(+z.wind||0), spk:(z.spk!==false), sat:(z.sat!=null?+z.sat:1) })),
     fx: Object.assign({}, fxCfg),
     deathFx: Object.assign({}, deathFxCfg),
     tracer: Object.assign({}, tracerCfg),
