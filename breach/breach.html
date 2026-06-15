@@ -8783,7 +8783,7 @@ function _migrateJumpPad(z){ return { x:+z.x||0, z:+z.z||0, r:(z.r!=null?+z.r:6)
 let jumpPads = (savedLevel && Array.isArray(savedLevel.jumpPads)) ? savedLevel.jumpPads.map(z=>_migrateJumpPad(z)) : [];
 let selJumpPad = -1;
 // ---- Fire zones: an area that's on fire — deals damage-over-time to any actor inside it (player, bots, enemies) ----
-function _migrateFireZone(z){ return { x:+z.x||0, z:+z.z||0, r:(z.r!=null?+z.r:5), y:(z.y!=null?+z.y:0), h:(z.h!=null?+z.h:3), dps:(z.dps!=null?+z.dps:15), den:(z.den!=null?+z.den:1), psz:(z.psz!=null?+z.psz:1), hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(z.wind!=null?+z.wind:0), spk:(z.spk!==false), sat:(z.sat!=null?+z.sat:1) }; }
+function _migrateFireZone(z){ return { x:+z.x||0, z:+z.z||0, r:(z.r!=null?+z.r:5), y:(z.y!=null?+z.y:0), h:(z.h!=null?+z.h:3), dps:(z.dps!=null?+z.dps:15), den:(z.den!=null?+z.den:1), psz:(z.psz!=null?+z.psz:1), hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(z.wind!=null?+z.wind:0), spk:(z.spk!==false), sat:(z.sat!=null?+z.sat:1), smoke:(z.smoke===true) }; }
 let fireZones = (savedLevel && Array.isArray(savedLevel.fireZones)) ? savedLevel.fireZones.map(z=>_migrateFireZone(z)) : [];
 let selFireZone = -1;
 let audioZoneMarkers = []; const _zoneRT = [];   // editor ring markers + per-zone runtime playback state
@@ -8887,24 +8887,32 @@ function fireSoftTex(){
 // One shared shader material for ALL fire (zones + props). Per-particle size/colour/alpha come from buffer
 // attributes, so we can have hundreds of small, size-varied particles that overlap into a continuous flame
 // (a single PointsMaterial size made every particle an identical disc -> the "floating balls" look).
-let _fireMat=null;
+let _fireUniforms=null, _fireMat=null, _fireMatSmoke=null;
+const _FIRE_VERT =
+  'attribute float aSize; attribute vec3 aColor; attribute float aAlpha;\n'+
+  'uniform float uScale; varying vec3 vColor; varying float vAlpha;\n'+
+  'void main(){ vColor=aColor; vAlpha=aAlpha;\n'+
+  '  vec4 mv = modelViewMatrix * vec4(position, 1.0);\n'+
+  '  gl_PointSize = clamp( aSize * ( uScale / max(0.001, -mv.z) ), 1.0, 128.0 );\n'+
+  '  gl_Position = projectionMatrix * mv; }';
+function _fireUni(){ if(!_fireUniforms) _fireUniforms={ map:{ value:fireSoftTex() }, uScale:{ value:600 } }; return _fireUniforms; }
+// FIRE: additive (overlapping particles glow brighter). Both materials SHARE the uniforms so uScale updates once.
 function _getFireMat(){
   if(_fireMat) return _fireMat;
-  _fireMat=new THREE.ShaderMaterial({
-    uniforms:{ map:{ value:fireSoftTex() }, uScale:{ value:600 } },
-    vertexShader:
-      'attribute float aSize; attribute vec3 aColor; attribute float aAlpha;\n'+
-      'uniform float uScale; varying vec3 vColor; varying float vAlpha;\n'+
-      'void main(){ vColor=aColor; vAlpha=aAlpha;\n'+
-      '  vec4 mv = modelViewMatrix * vec4(position, 1.0);\n'+
-      '  gl_PointSize = clamp( aSize * ( uScale / max(0.001, -mv.z) ), 1.0, 128.0 );\n'+
-      '  gl_Position = projectionMatrix * mv; }',
-    fragmentShader:
-      'uniform sampler2D map; varying vec3 vColor; varying float vAlpha;\n'+
+  _fireMat=new THREE.ShaderMaterial({ uniforms:_fireUni(), vertexShader:_FIRE_VERT,
+    fragmentShader:'uniform sampler2D map; varying vec3 vColor; varying float vAlpha;\n'+
       'void main(){ vec4 t = texture2D(map, gl_PointCoord); gl_FragColor = vec4( vColor * t.a * vAlpha, 1.0 ); }',
-    transparent:true, depthWrite:false, depthTest:true, blending:THREE.AdditiveBlending
-  });
+    transparent:true, depthWrite:false, depthTest:true, blending:THREE.AdditiveBlending });
   return _fireMat;
+}
+// SMOKE: normal alpha blending (overlapping particles OCCLUDE -> a real dark, opaque-ish plume, not a glow).
+function _getFireMatSmoke(){
+  if(_fireMatSmoke) return _fireMatSmoke;
+  _fireMatSmoke=new THREE.ShaderMaterial({ uniforms:_fireUni(), vertexShader:_FIRE_VERT,
+    fragmentShader:'uniform sampler2D map; varying vec3 vColor; varying float vAlpha;\n'+
+      'void main(){ vec4 t = texture2D(map, gl_PointCoord); gl_FragColor = vec4( vColor, t.a * vAlpha ); }',
+    transparent:true, depthWrite:false, depthTest:true, blending:THREE.NormalBlending });
+  return _fireMatSmoke;
 }
 // (Re)seed one fire particle within a radius, rising to ~riseH, with turbulence + a randomized lifetime.
 function _seedFireParticle(p, rad, riseH){
@@ -8917,7 +8925,7 @@ function _seedFireParticle(p, rad, riseH){
   p.size0=0.55+Math.random()*0.95;    // per-particle SIZE variance (key to a flame vs. uniform discs)
 }
 // Build `count` additive soft-sprite fire particles into `grp` (each its own material so it can ramp colour).
-function _addFireParticles(grp, count, rad, riseH, sizeW){
+function _addFireParticles(grp, count, rad, riseH, sizeW, smoke){
   const geo=new THREE.BufferGeometry();
   const posArr=new Float32Array(count*3), colArr=new Float32Array(count*3), sizeArr=new Float32Array(count), alphaArr=new Float32Array(count);
   const parts=[];
@@ -8927,7 +8935,7 @@ function _addFireParticles(grp, count, rad, riseH, sizeW){
   geo.setAttribute('aColor',   new THREE.BufferAttribute(colArr, 3));
   geo.setAttribute('aSize',    new THREE.BufferAttribute(sizeArr, 1));
   geo.setAttribute('aAlpha',   new THREE.BufferAttribute(alphaArr, 1));
-  const pts=new THREE.Points(geo, _getFireMat()); pts.frustumCulled=false; pts.renderOrder=9; grp.add(pts);
+  const pts=new THREE.Points(geo, smoke ? _getFireMatSmoke() : _getFireMat()); pts.frustumCulled=false; pts.renderOrder=9; grp.add(pts);
   return { parts, geo, posArr, colArr, sizeArr, alphaArr, sizeW:(sizeW||0.6), points:pts };
 }
 function disposeFireZones(){ for(const g of fireZoneFx){ scene.remove(g); g.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material)o.material.dispose && o.material.dispose(); }); } fireZoneFx.length=0; }
@@ -8945,11 +8953,11 @@ function buildFireZoneGroup(z, sel){
   const rise=Math.max(2.2, h*1.3);
   const count=Math.max(160, Math.min(1600, Math.round(r*r*22*den)));   // dense: many small particles overlap into flame
   const sizeW=Math.max(0.18, Math.min(1.8, (0.5+r*0.05)*psz));
-  const fp=_addFireParticles(grp, count, r*0.92, rise, sizeW);
+  const fp=_addFireParticles(grp, count, r*0.92, rise, sizeW, (z.smoke===true));
   const lcol=new THREE.Color(); { const [lr,lg,lb]=_hueRotate(1,0.42,0.1,(z.hue!=null?+z.hue:30)-30); lcol.setRGB(lr,lg,lb); }
   const light=new THREE.PointLight(lcol.getHex(), 2.4, Math.max(8, r*3)); light.position.set(0, baseY+rise*0.35, 0); grp.add(light);
   grp.userData={ parts:fp.parts, geo:fp.geo, posArr:fp.posArr, colArr:fp.colArr, sizeArr:fp.sizeArr, alphaArr:fp.alphaArr, sizeW:fp.sizeW, light, li:2.4, baseR:r*0.92, baseY, riseH0:rise, emberT:0,
-    hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(+z.wind||0), spk:(z.spk!==false), sat:(z.sat!=null?+z.sat:1), ground:[ring,fill], emberCol:lcol.getHex() };
+    hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(+z.wind||0), spk:(z.spk!==false), sat:(z.sat!=null?+z.sat:1), smoke:(z.smoke===true), ground:[ring,fill], emberCol:lcol.getHex() };
   grp.position.set(+z.x||0, _maxTerrainOver(+z.x||0,+z.z||0,0), +z.z||0);
   return grp;
 }
@@ -8960,11 +8968,11 @@ function refreshFireZones(){
 function _animateFire(g, tms, dt){
   const u=g.userData; if(!u||!u.parts||!u.posArr) return;
   // keep the shader's point-size attenuation matched to the active camera + viewport height
-  if(_fireMat){ const cam=(typeof activeCam==='function'?activeCam():(typeof camera!=='undefined'?camera:null));
+  if(_fireUniforms){ const cam=(typeof activeCam==='function'?activeCam():(typeof camera!=='undefined'?camera:null));
     const H=(typeof renderer!=='undefined' && renderer.domElement) ? renderer.domElement.height : 800;
-    _fireMat.uniforms.uScale.value = (cam && cam.isPerspectiveCamera) ? (H*0.5)/Math.tan((cam.fov*0.5)*Math.PI/180) : H*0.5; }
+    _fireUniforms.uScale.value = (cam && cam.isPerspectiveCamera) ? (H*0.5)/Math.tan((cam.fov*0.5)*Math.PI/180) : H*0.5; }
   const ts=tms*0.001, baseY=u.baseY||0, pos=u.posArr, col=u.colArr, siz=u.sizeArr, alp=u.alphaArr, sw=(u.sizeW||0.6);
-  const turb=(u.turb!=null?u.turb:1), wind=(u.wind||0), hue=(u.hue!=null?u.hue:30), hueD=hue-30, spk=(u.spk!==false), sat=(u.sat!=null?u.sat:1);
+  const turb=(u.turb!=null?u.turb:1), wind=(u.wind||0), hue=(u.hue!=null?u.hue:30), hueD=hue-30, spk=(u.spk!==false), sat=(u.sat!=null?u.sat:1), smoke=(u.smoke===true);
   for(let i=0;i<u.parts.length;i++){ const p=u.parts[i];
     p.age += dt;
     if(p.age>=p.life){ _seedFireParticle(p, u.baseR, u.riseH0); p.age=0; }
@@ -8976,17 +8984,17 @@ function _animateFire(g, tms, dt){
     // per-particle size: small at birth, swells, tapers to nothing at the top (this is what reads as flame)
     let szp; if(f<0.2) szp=0.35 + (f/0.2)*0.75; else szp=1.1 - ((f-0.2)/0.8)*0.92;
     siz[i]=sw*(p.size0||1)*Math.max(0.04, szp);
-    // hot white core -> yellow -> orange -> deep red as it ages
     let cr,cg,cb;
-    if(f<0.16){ cr=1; cg=0.95; cb=0.66; }
+    if(smoke){ const v=0.06 + 0.18*(1-f); cr=v*1.0; cg=v*0.96; cb=v*0.92; }   // dark, faintly-warm grey that darkens as it rises
+    else if(f<0.16){ cr=1; cg=0.95; cb=0.66; }              // hot white core -> yellow -> orange -> deep red
     else if(f<0.4){ cr=1; cg=0.70; cb=0.20; }
     else if(f<0.68){ cr=1; cg=0.40; cb=0.08; }
     else { cr=0.72; cg=0.14; cb=0.03; }
     if(hueD){ const hr=_hueRotate(cr,cg,cb,hueD); cr=hr[0]; cg=hr[1]; cb=hr[2]; }
-    if(sat<1){ const L=0.299*cr+0.587*cg+0.114*cb; cr=L+(cr-L)*sat; cg=L+(cg-L)*sat; cb=L+(cb-L)*sat; }   // desaturate -> grey, so a fire element can read as smoke
+    if(sat<1){ const L=0.299*cr+0.587*cg+0.114*cb; cr=L+(cr-L)*sat; cg=L+(cg-L)*sat; cb=L+(cb-L)*sat; }   // desaturate -> grey
     col[i*3]=cr; col[i*3+1]=cg; col[i*3+2]=cb;
     let op=(f<0.1)?(f/0.1):(1-(f-0.1)/0.9);                 // quick fade-in, long fade-out ("death speed")
-    alp[i]=Math.max(0, op)*0.9*(p.bright||0.8);
+    alp[i]=Math.max(0, op)*(smoke?0.5:0.9)*(p.bright||0.8); // smoke is semi-transparent so layers occlude into a plume
   }
   u.geo.attributes.position.needsUpdate=true; u.geo.attributes.aColor.needsUpdate=true; u.geo.attributes.aSize.needsUpdate=true; u.geo.attributes.aAlpha.needsUpdate=true;
   if(u.light) u.light.intensity = u.li*(0.62 + 0.5*Math.abs(Math.sin(ts*7.3)) + 0.12*Math.sin(ts*23.1));
@@ -9041,6 +9049,12 @@ function renderFireZonesPanel(){
     spkCb.onchange=()=>{ pushUndoSnapshot(); z.spk=spkCb.checked; refreshFireZones(); };
     const spkSp=document.createElement('span'); spkSp.innerHTML='<b>Sparks</b> \u2014 rising embers';
     spkRow.appendChild(spkCb); spkRow.appendChild(spkSp); box.appendChild(spkRow);
+    // Smoke material: switch from additive glow to alpha-blended occluding particles (a real dark plume)
+    const smkRow=document.createElement('label'); smkRow.style.cssText='display:flex;align-items:center;gap:7px;color:#c9d4da;font-size:11px;margin:2px 0;cursor:pointer;';
+    const smkCb=document.createElement('input'); smkCb.type='checkbox'; smkCb.checked=(z.smoke===true); smkCb.style.accentColor='#9aa7ae';
+    smkCb.onchange=()=>{ pushUndoSnapshot(); z.smoke=smkCb.checked; refreshFireZones(); };
+    const smkSp=document.createElement('span'); smkSp.innerHTML='<b>Smoke</b> \u2014 dark, occluding plume instead of glowing fire';
+    smkRow.appendChild(smkCb); smkRow.appendChild(smkSp); box.appendChild(smkRow);
     host.appendChild(box);
   });
 }
@@ -9692,7 +9706,7 @@ function updateBots(dt){
         if(b._dieT > fadeStart){ const k=Math.max(0,1-(b._dieT-fadeStart)/0.7); b.mesh.traverse(o=>{ if(o.isMesh && o.material){ const ms=Array.isArray(o.material)?o.material:[o.material]; ms.forEach(m=>{ m.transparent=true; m.opacity=k; }); } }); }
         if(b._dieT >= 2.5){ b.mesh.visible=false; b._dying=false; }
       }
-      if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,(sp.y||0),sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; b.aiState='engage'; b.aiT=0; b.lkp=null; b.sawTgt=false; b._stuckT=0; b._dying=false; b._dieT=0;
+      if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,(sp.y||0),sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; b.aiState='engage'; b.aiT=0; b.lkp=null; b.lkpFresh=0; b.sawTgt=false; b._stuckT=0; b._dying=false; b._dieT=0;
         if(b.mesh){ b.mesh.visible=true; b.mesh.traverse(o=>{ if(o.isMesh && o.material){ const ms=Array.isArray(o.material)?o.material:[o.material]; ms.forEach(m=>{ m.opacity=1; }); } }); b.mesh.position.set(sp.x,(sp.y||0),sp.z); if(typeof setEnemyAnimState==='function') setEnemyAnimState(b.mesh,'idle'); } } continue; }
     b.retargetT-=dt;
     if(b.retargetT<=0 || !_botTargetAlive(b.target)){ b.target=_botAcquire(b); b.retargetT=0.4+Math.random()*0.3; }
@@ -9702,7 +9716,7 @@ function updateBots(dt){
     const hasLOS = !!(tgt && _botLOS(b.pos.x,b.pos.z, tgt.pos.x,tgt.pos.z, b.pos.y));
     const tgtDist = tgt ? Math.hypot(tgt.pos.x-b.pos.x, tgt.pos.z-b.pos.z) : Infinity;
     if(hasLOS && tgt){ b.lkp = b.lkp||{x:0,z:0}; b.lkp.x=tgt.pos.x; b.lkp.z=tgt.pos.z; b.lkpFresh=2.5; b.sawTgt=true; }   // refresh while visible
-    else { b.lkpFresh=Math.max(0, b.lkpFresh-dt); }
+    else { b.lkpFresh=Math.max(0, (b.lkpFresh||0)-dt); }
     const hpFrac = b.hp/(b.maxHp||1);
 
     // ---- state machine: engage / hunt / flank / retreat ----
@@ -9735,8 +9749,10 @@ function updateBots(dt){
       wantFire=false;   // can't see it; don't fire blind
     }
     else if(b.aiState==='search'){
-      if(!b._wander || b.aiT<=0){ b._wander={ x:b.pos.x+(Math.random()*2-1)*16, z:b.pos.z+(Math.random()*2-1)*16 }; }
-      destX=Math.max(-lim,Math.min(lim,b._wander.x)); destZ=Math.max(-lim,Math.min(lim,b._wander.z)); wantFire=false;
+      if(tgt){ destX=tgt.pos.x; destZ=tgt.pos.z; }   // there's a live enemy somewhere -> go hunt it down (free-roam deathmatch, not idle wandering)
+      else { if(!b._wander || b.aiT<=0){ b._wander={ x:b.pos.x+(Math.random()*2-1)*16, z:b.pos.z+(Math.random()*2-1)*16 }; }   // truly no enemies left -> roam
+        destX=Math.max(-lim,Math.min(lim,b._wander.x)); destZ=Math.max(-lim,Math.min(lim,b._wander.z)); }
+      wantFire=false;   // moving toward where it last knows the enemy is; only fires once it actually has line-of-sight
     }
     else if(tgt){ destX=tgt.pos.x; destZ=tgt.pos.z; }   // engage
     else { const h=_botHome(); destX=h.x; destZ=h.z; }   // no target -> head to the play space (region center, not arena origin)
@@ -11735,7 +11751,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 458 · 2026-06-12';
+const BUILD_VERSION = 'build 460 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15082,7 +15098,7 @@ function serializeLevel(){
     audioZones: audioZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, url:z.url||'', vol:+z.vol, loop:!!z.loop })),
     deathZones: deathZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:3) })),
     jumpPads: jumpPads.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:2), power:(+z.power||22) })),
-    fireZones: fireZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:3), dps:(+z.dps||0), den:(+z.den||1), psz:(+z.psz||1), hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(+z.wind||0), spk:(z.spk!==false), sat:(z.sat!=null?+z.sat:1) })),
+    fireZones: fireZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:3), dps:(+z.dps||0), den:(+z.den||1), psz:(+z.psz||1), hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(+z.wind||0), spk:(z.spk!==false), sat:(z.sat!=null?+z.sat:1), smoke:(z.smoke===true?1:0) })),
     fx: Object.assign({}, fxCfg),
     deathFx: Object.assign({}, deathFxCfg),
     tracer: Object.assign({}, tracerCfg),
