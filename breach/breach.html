@@ -8039,6 +8039,7 @@ document.addEventListener('mousemove', e=>{
   if(editorOpen){
     if(_brushing){ _brushStroke(e); editorDragMoved = true; return; }    // painting the terrain
     if(gizmoDrag){ gizmoDragMove(e); editorDragMoved = true; return; }   // dragging an axis handle
+    if(_altDupActive){ if(_altDup){ const gp = groundPointUnderPointer(e); if(gp){ _altDup.position.x = gp.x; _altDup.position.z = gp.z; } } editorDragMoved = true; return; }   // Alt-drag: move the fresh duplicate under the cursor
     if(editorDragPan && editorTopView){
       const wpp = (2*topZoom)/innerHeight;   // world units per pixel at current zoom
       topPanX -= e.movementX * wpp;
@@ -8069,9 +8070,10 @@ renderer.domElement.addEventListener('mousedown', e=>{
   editorDragMoved = false;
   if(terrainBrush.on && terrainPointUnderPointer(e)){ pushUndoSnapshot(); _brushStroke(e); _brushing = true; editorDragMoved = true; return; }   // sculpt instead of select/look
   if(tryGizmoGrab(e)){ editorDragMoved = true; return; }   // grabbing an axis handle (suppresses select)
+  if(e.altKey){ const o=_pickPropAt(e); if(o){ e.preventDefault(); pushUndoSnapshot(); _dupPropForDrag(o); _altDupActive = true; editorDragMoved = true; return; } }   // Alt+drag = duplicate the prop under the cursor and drag the copy
   if(editorTopView) editorDragPan = true; else editorDragLook = true;
 });
-addEventListener('mouseup', e=>{ if(e.button===0){ if(_brushing){ _brushing = false; editorDragMoved = true; } editorDragLook = false; editorDragPan = false; const _wg=gizmoDrag; gizmoDrag = null; if(_wg){ const tg=editorTargets[editorActive]; if(tg && typeof tg.sync==='function') tg.sync(); if(typeof updateFieldDisplays==='function') updateFieldDisplays(); } } });
+addEventListener('mouseup', e=>{ if(e.button===0){ if(_altDupActive){ _altDupActive = false; _altDup = null; const tg=editorTargets[editorActive]; if(tg && typeof tg.sync==='function') tg.sync(); if(typeof updateFieldDisplays==='function') updateFieldDisplays(); if(typeof renderEditorFields==='function') renderEditorFields(); } if(_brushing){ _brushing = false; editorDragMoved = true; } editorDragLook = false; editorDragPan = false; const _wg=gizmoDrag; gizmoDrag = null; if(_wg){ const tg=editorTargets[editorActive]; if(tg && typeof tg.sync==='function') tg.sync(); if(typeof updateFieldDisplays==='function') updateFieldDisplays(); } } });
 
 // ---------- Weapon (viewmodel) ----------
 // The `gun` group is what the render loop animates (sway, recoil, ADS). We load a hosted
@@ -11226,7 +11228,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 440 · 2026-06-12';
+const BUILD_VERSION = 'build 441 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14412,6 +14414,29 @@ function deleteSelectedLight(){
 // Duplicate the selected object: an exact copy (same model/src + full non-uniform transform),
 // nudged a couple units so it's visible, then selected so you can drag it into a row.
 const DUP_OFFSET = 2;   // world units the copy is shifted (along +X) so it isn't hidden inside the original
+// ---------- Alt + click-drag to duplicate a prop ----------
+let _altDup = null, _altDupActive = false;
+// Raycast just the props under the pointer; return the prop root (or null).
+function _pickPropAt(e){
+  const r = renderer.domElement.getBoundingClientRect();
+  const nx = ((e.clientX - r.left)/r.width)*2 - 1, ny = -((e.clientY - r.top)/r.height)*2 + 1;
+  raycaster.setFromCamera(new THREE.Vector2(nx, ny), activeCam());
+  const targets = []; for(const p of propModels){ if(p) targets.push(p); }
+  if(!targets.length) return null;
+  const hits = raycaster.intersectObjects(targets, true);
+  if(!hits.length) return null;
+  let root = hits[0].object;
+  while(root){ if(propModels.indexOf(root)>=0) return root; root = root.parent; }
+  return null;
+}
+// Clone a prop at its EXACT position (no offset) and hand the new object to the drag.
+function _dupPropForDrag(o){
+  const srcUrl = o.userData.src || PROP_MODEL_URL;
+  const t = [ o.position.x, o.position.y, o.position.z, o.rotation.x, o.rotation.y, o.rotation.z, o.scale.x, o.scale.y, o.scale.z ];
+  const wasDyn = !!o.userData.phys;
+  _altDup = null;
+  spawnProp(srcUrl, t, (obj)=>{ if(wasDyn) setPropDynamic(obj, true); _altDup = obj; editorActive='props'; editorTargets.props.idx = propModels.indexOf(obj); selProps=[obj]; if(typeof renderEditorFields==='function') renderEditorFields(); if(typeof updateSelectionHighlight==='function') updateSelectionHighlight(); }, undefined, o.userData.animMode || 'loop', propMaterialDesc(o));
+}
 function duplicateSelectedProp(){
   const i = editorTargets.props.idx;
   const o = propModels[i]; if(!o) return;
@@ -15169,7 +15194,7 @@ function buildEditorPanel(){
       + '<button id="edDock" title="Move panel to the other side">\u21c4</button>'
       + '<button id="edCollapse" title="Collapse panel">\u2304</button>'
     + '</div>'
-    + '<div class="hint">Click an object to select it. <b>Shift+click</b> props to multi-select. Use <b>Move / Rotate / Scale</b> + the handles, or type values. <b>Shift+D</b> duplicates, <b>Delete</b> removes. Drag the left edge to resize. Press <b>P</b> to close.</div>'
+    + '<div class="hint">Click an object to select it. <b>Shift+click</b> props to multi-select. Use <b>Move / Rotate / Scale</b> + the handles, or type values. <b>Shift+D</b> duplicates (or <b>Alt+drag</b> a prop to clone it in place), <b>Delete</b> removes. Drag the left edge to resize. Press <b>P</b> to close.</div>'
     + '<div class="row2" style="margin:0 0 8px"><button id="edPlay" style="background:#38f5b5;color:#05070a;font-weight:700;border:none">▶ Play level</button><button id="edMenu" style="background:rgba(255,140,60,.14);color:#ffd9a8;font-weight:700;border:1px solid rgba(255,150,70,.55)">⌂ Main menu</button></div>'
     + '<div class="row2" id="edView" style="margin-bottom:10px"></div>'
     + '<div class="edModes" id="edModes"></div>'
