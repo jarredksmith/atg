@@ -8880,9 +8880,31 @@ function fireSoftTex(){
   if(_fireSoftTex) return _fireSoftTex;
   const c=document.createElement('canvas'); c.width=c.height=64; const x=c.getContext('2d');
   const g=x.createRadialGradient(32,32,0, 32,32,32);
-  g.addColorStop(0,'rgba(255,255,255,1)'); g.addColorStop(0.2,'rgba(255,255,255,0.85)'); g.addColorStop(0.5,'rgba(255,255,255,0.3)'); g.addColorStop(1,'rgba(255,255,255,0)');
+  g.addColorStop(0,'rgba(255,255,255,0.9)'); g.addColorStop(0.22,'rgba(255,255,255,0.45)'); g.addColorStop(0.55,'rgba(255,255,255,0.12)'); g.addColorStop(1,'rgba(255,255,255,0)');
   x.fillStyle=g; x.fillRect(0,0,64,64);
   const t=new THREE.CanvasTexture(c); t.needsUpdate=true; _fireSoftTex=t; return t;
+}
+// One shared shader material for ALL fire (zones + props). Per-particle size/colour/alpha come from buffer
+// attributes, so we can have hundreds of small, size-varied particles that overlap into a continuous flame
+// (a single PointsMaterial size made every particle an identical disc -> the "floating balls" look).
+let _fireMat=null;
+function _getFireMat(){
+  if(_fireMat) return _fireMat;
+  _fireMat=new THREE.ShaderMaterial({
+    uniforms:{ map:{ value:fireSoftTex() }, uScale:{ value:600 } },
+    vertexShader:
+      'attribute float aSize; attribute vec3 aColor; attribute float aAlpha;\n'+
+      'uniform float uScale; varying vec3 vColor; varying float vAlpha;\n'+
+      'void main(){ vColor=aColor; vAlpha=aAlpha;\n'+
+      '  vec4 mv = modelViewMatrix * vec4(position, 1.0);\n'+
+      '  gl_PointSize = aSize * ( uScale / max(0.001, -mv.z) );\n'+
+      '  gl_Position = projectionMatrix * mv; }',
+    fragmentShader:
+      'uniform sampler2D map; varying vec3 vColor; varying float vAlpha;\n'+
+      'void main(){ vec4 t = texture2D(map, gl_PointCoord); gl_FragColor = vec4( vColor * t.a * vAlpha, 1.0 ); }',
+    transparent:true, depthWrite:false, depthTest:true, blending:THREE.AdditiveBlending
+  });
+  return _fireMat;
 }
 // (Re)seed one fire particle within a radius, rising to ~riseH, with turbulence + a randomized lifetime.
 function _seedFireParticle(p, rad, riseH){
@@ -8891,20 +8913,22 @@ function _seedFireParticle(p, rad, riseH){
   p.riseH=riseH*(0.75+Math.random()*0.6);
   p.sway=Math.random()*Math.PI*2; p.swaySpd=1.4+Math.random()*2.2; p.swayAmp=0.08+Math.random()*0.16+rad*0.03;
   p.life=0.5+Math.random()*0.6; p.age=Math.random()*p.life;   // stagger so they don't pulse in sync
-  p.bright=0.6+Math.random()*0.5;   // per-particle brightness (fakes size/intensity variance)
+  p.bright=0.55+Math.random()*0.55;   // per-particle intensity variance
+  p.size0=0.55+Math.random()*0.95;    // per-particle SIZE variance (key to a flame vs. uniform discs)
 }
 // Build `count` additive soft-sprite fire particles into `grp` (each its own material so it can ramp colour).
 function _addFireParticles(grp, count, rad, riseH, sizeW){
   const geo=new THREE.BufferGeometry();
-  const posArr=new Float32Array(count*3), colArr=new Float32Array(count*3);
+  const posArr=new Float32Array(count*3), colArr=new Float32Array(count*3), sizeArr=new Float32Array(count), alphaArr=new Float32Array(count);
   const parts=[];
   for(let i=0;i<count;i++){ const p={}; _seedFireParticle(p, rad, riseH); parts.push(p);
-    posArr[i*3]=p.bx; posArr[i*3+1]=0; posArr[i*3+2]=p.bz; colArr[i*3]=colArr[i*3+1]=colArr[i*3+2]=0; }
+    posArr[i*3]=p.bx; posArr[i*3+1]=0; posArr[i*3+2]=p.bz; colArr[i*3]=colArr[i*3+1]=colArr[i*3+2]=0; sizeArr[i]=0; alphaArr[i]=0; }
   geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
-  geo.setAttribute('color',    new THREE.BufferAttribute(colArr, 3));
-  const mat=new THREE.PointsMaterial({ size:(sizeW||0.85), map:fireSoftTex(), vertexColors:true, transparent:true, depthWrite:false, blending:THREE.AdditiveBlending, sizeAttenuation:true });
-  const pts=new THREE.Points(geo, mat); pts.frustumCulled=false; pts.renderOrder=9; grp.add(pts);
-  return { parts, geo, posArr, colArr, points:pts };
+  geo.setAttribute('aColor',   new THREE.BufferAttribute(colArr, 3));
+  geo.setAttribute('aSize',    new THREE.BufferAttribute(sizeArr, 1));
+  geo.setAttribute('aAlpha',   new THREE.BufferAttribute(alphaArr, 1));
+  const pts=new THREE.Points(geo, _getFireMat()); pts.frustumCulled=false; pts.renderOrder=9; grp.add(pts);
+  return { parts, geo, posArr, colArr, sizeArr, alphaArr, sizeW:(sizeW||0.6), points:pts };
 }
 function disposeFireZones(){ for(const g of fireZoneFx){ scene.remove(g); g.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material)o.material.dispose && o.material.dispose(); }); } fireZoneFx.length=0; }
 function buildFireZoneGroup(z, sel){
@@ -8918,12 +8942,12 @@ function buildFireZoneGroup(z, sel){
   // soft additive rising fire particles (the real flames)
   const den=(z.den!=null?+z.den:1), psz=(z.psz!=null?+z.psz:1);
   const rise=Math.max(2.2, h*1.3);
-  const count=Math.max(40, Math.min(620, Math.round(r*r*7*den)));   // area fire -> density scales with area * Density
-  const sizeW=Math.max(0.22, Math.min(2.4, r*0.16*psz));
+  const count=Math.max(160, Math.min(1600, Math.round(r*r*22*den)));   // dense: many small particles overlap into flame
+  const sizeW=Math.max(0.18, Math.min(1.8, (0.5+r*0.05)*psz));
   const fp=_addFireParticles(grp, count, r*0.92, rise, sizeW);
   const lcol=new THREE.Color(); { const [lr,lg,lb]=_hueRotate(1,0.42,0.1,(z.hue!=null?+z.hue:30)-30); lcol.setRGB(lr,lg,lb); }
   const light=new THREE.PointLight(lcol.getHex(), 2.4, Math.max(8, r*3)); light.position.set(0, baseY+rise*0.35, 0); grp.add(light);
-  grp.userData={ parts:fp.parts, geo:fp.geo, posArr:fp.posArr, colArr:fp.colArr, light, li:2.4, baseR:r*0.92, baseY, riseH0:rise, emberT:0,
+  grp.userData={ parts:fp.parts, geo:fp.geo, posArr:fp.posArr, colArr:fp.colArr, sizeArr:fp.sizeArr, alphaArr:fp.alphaArr, sizeW:fp.sizeW, light, li:2.4, baseR:r*0.92, baseY, riseH0:rise, emberT:0,
     hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(+z.wind||0), spk:(z.spk!==false), emberCol:lcol.getHex() };
   grp.position.set(+z.x||0, _maxTerrainOver(+z.x||0,+z.z||0,0), +z.z||0);
   return grp;
@@ -8934,16 +8958,23 @@ function refreshFireZones(){
 }
 function _animateFire(g, tms, dt){
   const u=g.userData; if(!u||!u.parts||!u.posArr) return;
-  const ts=tms*0.001, baseY=u.baseY||0, pos=u.posArr, col=u.colArr;
+  // keep the shader's point-size attenuation matched to the active camera + viewport height
+  if(_fireMat){ const cam=(typeof activeCam==='function'?activeCam():(typeof camera!=='undefined'?camera:null));
+    const H=(typeof renderer!=='undefined' && renderer.domElement) ? renderer.domElement.height : 800;
+    _fireMat.uniforms.uScale.value = (cam && cam.isPerspectiveCamera) ? (H*0.5)/Math.tan((cam.fov*0.5)*Math.PI/180) : H*0.5; }
+  const ts=tms*0.001, baseY=u.baseY||0, pos=u.posArr, col=u.colArr, siz=u.sizeArr, alp=u.alphaArr, sw=(u.sizeW||0.6);
   const turb=(u.turb!=null?u.turb:1), wind=(u.wind||0), hue=(u.hue!=null?u.hue:30), hueD=hue-30, spk=(u.spk!==false);
   for(let i=0;i<u.parts.length;i++){ const p=u.parts[i];
     p.age += dt;
     if(p.age>=p.life){ _seedFireParticle(p, u.baseR, u.riseH0); p.age=0; }
     const f=p.age/p.life;                                   // 0 = born at the base, 1 = spent at the top
-    const conv=1-0.5*f;                                     // pull inward as it rises -> tapered flame
+    const conv=1-0.55*f;                                    // pull inward as it rises -> tapered flame
     const swx=Math.sin(ts*p.swaySpd + p.sway)*p.swayAmp*turb*(0.4+f);
     const swz=Math.cos(ts*p.swaySpd*0.9 + p.sway)*p.swayAmp*turb*(0.4+f);
     pos[i*3]=p.bx*conv + swx + wind*f*1.4; pos[i*3+1]=baseY + f*p.riseH; pos[i*3+2]=p.bz*conv + swz;
+    // per-particle size: small at birth, swells, tapers to nothing at the top (this is what reads as flame)
+    let szp; if(f<0.2) szp=0.35 + (f/0.2)*0.75; else szp=1.1 - ((f-0.2)/0.8)*0.92;
+    siz[i]=sw*(p.size0||1)*Math.max(0.04, szp);
     // hot white core -> yellow -> orange -> deep red as it ages
     let cr,cg,cb;
     if(f<0.16){ cr=1; cg=0.95; cb=0.66; }
@@ -8951,11 +8982,11 @@ function _animateFire(g, tms, dt){
     else if(f<0.68){ cr=1; cg=0.40; cb=0.08; }
     else { cr=0.72; cg=0.14; cb=0.03; }
     if(hueD){ const hr=_hueRotate(cr,cg,cb,hueD); cr=hr[0]; cg=hr[1]; cb=hr[2]; }
+    col[i*3]=cr; col[i*3+1]=cg; col[i*3+2]=cb;
     let op=(f<0.1)?(f/0.1):(1-(f-0.1)/0.9);                 // quick fade-in, long fade-out ("death speed")
-    op=Math.max(0, op)*0.9*(p.bright||0.8);                 // additive: scaling colour = scaling brightness
-    col[i*3]=cr*op; col[i*3+1]=cg*op; col[i*3+2]=cb*op;
+    alp[i]=Math.max(0, op)*0.9*(p.bright||0.8);
   }
-  u.geo.attributes.position.needsUpdate=true; u.geo.attributes.color.needsUpdate=true;
+  u.geo.attributes.position.needsUpdate=true; u.geo.attributes.aColor.needsUpdate=true; u.geo.attributes.aSize.needsUpdate=true; u.geo.attributes.aAlpha.needsUpdate=true;
   if(u.light) u.light.intensity = u.li*(0.62 + 0.5*Math.abs(Math.sin(ts*7.3)) + 0.12*Math.sin(ts*23.1));
   u.emberT -= dt;
   if(spk && u.emberT<=0 && typeof spark==='function'){ u.emberT = 0.16+Math.random()*0.22; const a=Math.random()*Math.PI*2, rr=Math.sqrt(Math.random())*u.baseR*0.8; spark({ x:g.position.x+Math.cos(a)*rr, y:g.position.y+baseY+0.4, z:g.position.z+Math.sin(a)*rr }, (u.emberCol||0xff8a2a)); }
@@ -9043,11 +9074,11 @@ function buildPropFireGroup(o){
   const rad=Math.max(0.4, Math.max(sz.x,sz.z)*0.5), top=Math.max(0.7, sz.y*1.1);
   const grp=new THREE.Group();
   const rise=Math.max(1.4, top*1.25);
-  const count=Math.max(70, Math.min(200, Math.round(rad*120)));
-  const sizeW=Math.max(0.28, Math.min(0.6, rad*0.4));
+  const count=Math.max(140, Math.min(420, Math.round(rad*260)));
+  const sizeW=Math.max(0.16, Math.min(0.5, rad*0.34));
   const fp=_addFireParticles(grp, count, rad*0.85, rise, sizeW);
   const light=new THREE.PointLight(0xff6a1a, 2.0, Math.max(6, rad*5)); light.position.y=rise*0.4; grp.add(light);
-  grp.userData={ parts:fp.parts, geo:fp.geo, posArr:fp.posArr, colArr:fp.colArr, light, li:2.0, baseR:rad*0.85, baseY:0, riseH0:rise, emberT:0 };
+  grp.userData={ parts:fp.parts, geo:fp.geo, posArr:fp.posArr, colArr:fp.colArr, sizeArr:fp.sizeArr, alphaArr:fp.alphaArr, sizeW:fp.sizeW, light, li:2.0, baseR:rad*0.85, baseY:0, riseH0:rise, emberT:0 };
   return grp;
 }
 function _propFireVisual(o){ if(o.userData._fireGroup) return; const g=buildPropFireGroup(o); g.position.copy(o.position); scene.add(g); o.userData._fireGroup=g; }
@@ -11691,7 +11722,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 455 · 2026-06-12';
+const BUILD_VERSION = 'build 456 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
