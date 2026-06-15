@@ -7575,6 +7575,14 @@ let gameCfg = {
     r:  (savedLevel && savedLevel.game && savedLevel.game.spawnRegion && savedLevel.game.spawnRegion.r!=null) ? +savedLevel.game.spawnRegion.r : 30,
     poly: (savedLevel && savedLevel.game && savedLevel.game.spawnRegion && Array.isArray(savedLevel.game.spawnRegion.poly)) ? savedLevel.game.spawnRegion.poly.map(p=>({ x:+p.x||0, z:+p.z||0 })) : [],
   },
+  // Fall damage: hurt the player and/or AI when they hit the ground hard. Off by default.
+  fallDamage: {
+    on:      !!(savedLevel && savedLevel.game && savedLevel.game.fallDamage && savedLevel.game.fallDamage.on),
+    player:  (savedLevel && savedLevel.game && savedLevel.game.fallDamage && savedLevel.game.fallDamage.player!=null) ? !!savedLevel.game.fallDamage.player : true,
+    ai:      (savedLevel && savedLevel.game && savedLevel.game.fallDamage && savedLevel.game.fallDamage.ai!=null) ? !!savedLevel.game.fallDamage.ai : true,
+    minSpeed:(savedLevel && savedLevel.game && savedLevel.game.fallDamage && savedLevel.game.fallDamage.minSpeed!=null) ? +savedLevel.game.fallDamage.minSpeed : 24,   // safe landing speed; no damage below this
+    perUnit: (savedLevel && savedLevel.game && savedLevel.game.fallDamage && savedLevel.game.fallDamage.perUnit!=null) ? +savedLevel.game.fallDamage.perUnit : 1.4,   // damage per (units/s) above the safe speed
+  },
 };
 
 // ---------- Player start (where you/co-op players spawn each run; authored in-editor) ----------
@@ -9081,6 +9089,14 @@ function allPlayers(){
   }
   return list;
 }
+// Fall damage: convert a downward impact speed into damage (0 if disabled or below the safe speed).
+let _playerWasAir = false;
+function _fallDamageFor(impactSpeed){
+  const fd = (typeof gameCfg!=='undefined') && gameCfg.fallDamage;
+  if(!fd || !fd.on) return 0;
+  const over = impactSpeed - (+fd.minSpeed||0);
+  return over > 0 ? over * (+fd.perUnit||0) : 0;
+}
 function applyEnemyDamageToSelf(dmg, sx, sz){
   if(buffs.shield>0){ const a=Math.min(buffs.shield,dmg); buffs.shield-=a; dmg-=a; }
   player.hp -= dmg; flashDamage(); SFX.hurt(); addShake(Math.min(0.5, dmg/55)); if(sx!=null) hurtDir(sx,sz); updateHUD();
@@ -9286,7 +9302,7 @@ function updateBots(dt){
     }
     { const top=(typeof surfaceTopAt==='function')?surfaceTopAt(b.pos.x,b.pos.z):-Infinity;   // gravity + land on the floor or a prop top under the feet
       const _bg=terrainHeightAt(b.pos.x,b.pos.z); const groundY=(top>-Infinity && top<=b.pos.y+STEP)?Math.max(_bg,top):_bg;
-      if(b.pos.y>groundY+0.04 || (b.vy||0)>0){ b.vy=(b.vy||0)-GRAV*dt; b.pos.y+=b.vy*dt; if(b.vy<=0 && b.pos.y<=groundY){ b.pos.y=groundY; b.vy=0; b.grounded=true; } else b.grounded=false; }
+      if(b.pos.y>groundY+0.04 || (b.vy||0)>0){ b.vy=(b.vy||0)-GRAV*dt; b.pos.y+=b.vy*dt; if(b.vy<=0 && b.pos.y<=groundY){ const _imp=-(b.vy||0); b.pos.y=groundY; b.vy=0; b.grounded=true; if(gameCfg.fallDamage && gameCfg.fallDamage.on && gameCfg.fallDamage.ai && !b.dead){ const dmg=_fallDamageFor(_imp); if(dmg>0.5){ b.hp-=dmg; if(b.hp<=0) botDie(b); } } } else b.grounded=false; }
       else { b.pos.y=groundY; b.vy=0; b.grounded=true; }
     }
     b.yaw = (tgt && hasLOS) ? Math.atan2(-(tgt.pos.x-b.pos.x), -(tgt.pos.z-b.pos.z)) : Math.atan2(-mvx,-mvz);   // face the target only while it's visible; otherwise face where we're moving (no x-ray tracking)
@@ -11228,7 +11244,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 441 · 2026-06-12';
+const BUILD_VERSION = 'build 442 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11737,8 +11753,15 @@ function moveKCC(dt){
   playerCtrl.computeColliderMovement(playerCollider, desired);
   const mv = playerCtrl.computedMovement();
   player.pos.x += mv.x; player.pos.y += mv.y; player.pos.z += mv.z;
-  if(playerCtrl.computedGrounded()){ player.onGround = true; if(player.vel.y < 0) player.vel.y = 0; }
+  if(playerCtrl.computedGrounded()){
+    if(_playerWasAir && gameCfg.fallDamage && gameCfg.fallDamage.on && gameCfg.fallDamage.player && gameOn && (player.hp==null || player.hp>0)){
+      const dmg = _fallDamageFor(-player.vel.y);   // vel.y is negative while falling
+      if(dmg > 0.5) applyEnemyDamageToSelf(dmg);
+    }
+    player.onGround = true; if(player.vel.y < 0) player.vel.y = 0;
+  }
   else player.onGround = false;
+  _playerWasAir = !playerCtrl.computedGrounded();
   // hard floor: the terrain trimesh is one-sided (no interior), so a capsule that ever gets under it
   // falls forever. Mirror the classic resolver's guarantee: if the feet end up well below the sampled
   // surface, snap back on top. 0.75 leaves room for the legit center-foot dip on max-steep (55°) slopes.
@@ -13838,7 +13861,7 @@ function loop(){
       }
       // trap launch: horizontal momentum + a vertical pop that arcs under gravity and settles back to the hover height
       if(en.evx||en.evz){ en.mesh.position.x+=en.evx*dt; en.mesh.position.z+=en.evz*dt; const kd=Math.max(0,1-((en.grounded?6:0.6))*dt); en.evx*=kd; en.evz*=kd; if(Math.abs(en.evx)<0.05)en.evx=0; if(Math.abs(en.evz)<0.05)en.evz=0; }
-      if((en.launchY||0)>0 || (en.vy||0)>0){ en.vy=(en.vy||0)-GRAV*dt; en.launchY=(en.launchY||0)+en.vy*dt; if(en.launchY<=0){ en.launchY=0; en.vy=0; en.grounded=true; } else en.grounded=false; }
+      if((en.launchY||0)>0 || (en.vy||0)>0){ en.vy=(en.vy||0)-GRAV*dt; en.launchY=(en.launchY||0)+en.vy*dt; if(en.launchY<=0){ const _imp=-(en.vy||0); en.launchY=0; en.vy=0; en.grounded=true; if(gameCfg.fallDamage && gameCfg.fallDamage.on && gameCfg.fallDamage.ai && en.hp>0){ const dmg=_fallDamageFor(_imp); if(dmg>0.5){ en.hp-=dmg; if(en.hp<=0) killEnemy(en); } } } else en.grounded=false; }
       else { en.launchY=0; en.vy=0; en.grounded=true; }
       // keep inside arena
       const elim = ARENA - 2;
@@ -14540,7 +14563,7 @@ function serializeLevel(){
     roster: charRoster.map(c=>({ name:c.name, url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, thumb:c.thumb||'', clips:Object.assign({},c.clips||{}), clipSpeed:Object.assign({},c.clipSpeed||{}), clipHold:Object.assign({},c.clipHold||{}) })),
     pickupModels: Object.keys(pickupModels).reduce((a,k)=>{ const m=pickupModels[k]; if(m&&m.url){ a[k]={ url:m.url, scale:m.scale||1 }; } return a; }, {}),
     keyNames: Object.keys(keyNames).reduce((a,k)=>{ const n=(keyNames[k]||'').trim(); if(n) a[k]=n; return a; }, {}),
-    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave, noRespawn: !!gameCfg.noRespawn, spawnRegion: { on: !!gameCfg.spawnRegion.on, shape: gameCfg.spawnRegion.shape||'circle', x: +gameCfg.spawnRegion.x, z: +gameCfg.spawnRegion.z, r: +gameCfg.spawnRegion.r, poly: (gameCfg.spawnRegion.poly||[]).map(p=>({ x:+p.x, z:+p.z })) } },
+    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave, noRespawn: !!gameCfg.noRespawn, spawnRegion: { on: !!gameCfg.spawnRegion.on, shape: gameCfg.spawnRegion.shape||'circle', x: +gameCfg.spawnRegion.x, z: +gameCfg.spawnRegion.z, r: +gameCfg.spawnRegion.r, poly: (gameCfg.spawnRegion.poly||[]).map(p=>({ x:+p.x, z:+p.z })) } , fallDamage: { on: !!gameCfg.fallDamage.on, player: gameCfg.fallDamage.player!==false, ai: gameCfg.fallDamage.ai!==false, minSpeed: +gameCfg.fallDamage.minSpeed, perUnit: +gameCfg.fallDamage.perUnit } },
     dmgNum:  { on: dmgNumCfg.on !== false, size: dmgNumCfg.size, hit: dmgNumCfg.hitColor, kill: dmgNumCfg.killColor },
     pstart:  { x: playerSpawn.x, y: playerSpawn.y||0, z: playerSpawn.z, yaw: playerSpawn.yaw },
     extract: extractSpot ? { x: +extractSpot.x.toFixed(3), z: +extractSpot.z.toFixed(3) } : null,
@@ -15800,6 +15823,33 @@ function renderEditorFields(){
     const obBtn=(key,txt)=>{ const b=document.createElement('button'); b.textContent=txt; if(objectiveActive()===key){ b.style.background='rgba(56,245,181,0.30)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); gameCfg.objective=key; renderEditorFields(); }; return b; };
     obRow.appendChild(obBtn('eliminate','🎯 Eliminate')); obRow.appendChild(obBtn('survival','⏱ Survival')); obRow.appendChild(obBtn('extraction','📦 Extraction')); obRow.appendChild(obBtn('defend','🛡 Defend')); obRow.appendChild(obBtn('destroy','💥 Destroy')); obRow.appendChild(obBtn('escort','🚚 Escort'));
     gHost.appendChild(obRow);
+    // ---- Fall damage ----
+    if(!gameCfg.fallDamage) gameCfg.fallDamage = { on:false, player:true, ai:true, minSpeed:24, perUnit:1.4 };
+    hint(gHost, '<b>Fall damage</b> — hurt anything that lands hard', '10px 0 4px');
+    const fdToggle=(label, get, set)=>{
+      const lab=document.createElement('label'); lab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;cursor:pointer;margin:3px 0;';
+      const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!!get(); cb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;flex:none;';
+      cb.onchange=()=>{ pushUndoSnapshot(); set(cb.checked); renderEditorFields(); };
+      const sp=document.createElement('span'); sp.innerHTML=label; lab.appendChild(cb); lab.appendChild(sp); gHost.appendChild(lab);
+    };
+    fdToggle('<b>Enable fall damage</b>', ()=>gameCfg.fallDamage.on, v=>gameCfg.fallDamage.on=v);
+    if(gameCfg.fallDamage.on){
+      fdToggle('Affects the player', ()=>gameCfg.fallDamage.player, v=>gameCfg.fallDamage.player=v);
+      fdToggle('Affects enemies / bots', ()=>gameCfg.fallDamage.ai, v=>gameCfg.fallDamage.ai=v);
+      const fdNum=(label, get, set, min, max, step, hintTxt)=>{
+        const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;';
+        const s=document.createElement('span'); s.textContent=label; s.style.minWidth='92px';
+        const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=get(); rng.style.cssText='flex:1;accent-color:#38f5b5;';
+        const nm=document.createElement('input'); nm.type='number'; nm.step=step; nm.value=+(+get()).toFixed(2); nm.style.cssText='width:60px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+        const ap=(v)=>{ let n=parseFloat(v); if(!isFinite(n)) n=min; n=Math.max(min,Math.min(max,n)); set(n); rng.value=n; nm.value=+n.toFixed(2); };
+        rng.addEventListener('mousedown',()=>pushUndoSnapshot()); nm.addEventListener('focus',()=>pushUndoSnapshot());
+        rng.oninput=()=>ap(rng.value); nm.onchange=()=>ap(nm.value);
+        row.appendChild(s); row.appendChild(rng); row.appendChild(nm); gHost.appendChild(row);
+        if(hintTxt) hint(gHost, hintTxt, '0 0 4px');
+      };
+      fdNum('Safe speed', ()=>gameCfg.fallDamage.minSpeed, v=>gameCfg.fallDamage.minSpeed=v, 0, 80, 1, 'Landings slower than this do no damage (higher = more forgiving).');
+      fdNum('Damage', ()=>gameCfg.fallDamage.perUnit, v=>gameCfg.fallDamage.perUnit=v, 0, 8, 0.1, 'Damage dealt per unit of speed above the safe speed.');
+    }
     hint(gHost, '', '3px 0 6px').textContent = (objectiveActive()==='survival')
       ? 'Survival: hostiles spawn endlessly — outlast the countdown to win.'
       : (objectiveActive()==='extraction')
