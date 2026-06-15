@@ -8068,6 +8068,7 @@ addEventListener('keydown', e=>{
     return;
   }
   if(e.code==='KeyM'){ const m=toggleMute(); if(typeof flashToast==='function') flashToast(m?'Muted':'Sound on'); return; }
+  if(e.code==='KeyN' && !e.repeat){ navOverlayToggle(); e.preventDefault(); return; }   // debug: toggle the bot nav grid overlay
   if(editorOpen) return;   // ignore gameplay keys while editing
   if(e.code==='KeyR') reload();
   if(e.code==='KeyV') meleeAttack();
@@ -9458,6 +9459,55 @@ function _polyCentroid(poly){ let x=0,z=0; for(const p of poly){ x+=p.x; z+=p.z;
 // Where bots should head when they have no enemy in sight. With a confined spawn region, that's the region's
 // center (where the play space is) — NOT the arena origin (CP_POS), which may be outside the region and walled
 // off, causing every targetless bot to grind into the perimeter rocks.
+// ---------- Navigation grid (Step 1: build + debug overlay; pathfinding builds on this) ----------
+// A coarse walkable-cell grid sampled with the SAME collision helpers the player uses, so "walkable" means a
+// bot could actually stand there. Toggle the green overlay with N to confirm it matches the real geometry
+// before any pathfinding is layered on. Rebuilt on each toggle-on so it reflects the current arena.
+const NAV = { cell:1.5, nx:0, nz:0, ox:0, oz:0, walk:null, y:null, built:false, overlay:null, show:false };
+function navIdx(gx,gz){ return gx*NAV.nz + gz; }
+function navCellOf(x,z){ return { gx:Math.floor((x-NAV.ox)/NAV.cell), gz:Math.floor((z-NAV.oz)/NAV.cell) }; }
+function navWalkable(x,z){   // can a bot stand at this column? (surface present, not embedded, body band clear)
+  if(typeof surfaceTopAt!=='function' || typeof clearAt!=='function') return false;
+  const gy=surfaceTopAt(x,z); const ty=(typeof terrainHeightAt==='function')?terrainHeightAt(x,z):0;
+  const standY=(gy>-Infinity)?Math.max(gy,ty):ty;
+  if(!isFinite(standY)) return false;
+  if(typeof insideSolid==='function' && insideSolid(x,z,standY)) return false;
+  return { ok: clearAt(x,z,standY), y: standY };
+}
+function buildNavGrid(){
+  if(typeof clearAt!=='function') return;
+  const lim = ARENA - 1.5;
+  NAV.ox = -lim; NAV.oz = -lim;
+  NAV.nx = Math.max(1, Math.min(160, Math.ceil((2*lim)/NAV.cell)));
+  NAV.nz = NAV.nx;
+  const N = NAV.nx*NAV.nz;
+  NAV.walk = new Uint8Array(N); NAV.y = new Float32Array(N);
+  for(let gx=0; gx<NAV.nx; gx++){
+    for(let gz=0; gz<NAV.nz; gz++){
+      const x = NAV.ox + (gx+0.5)*NAV.cell, z = NAV.oz + (gz+0.5)*NAV.cell;
+      const w = navWalkable(x,z); const idx = navIdx(gx,gz);
+      if(w && w.ok){ NAV.walk[idx]=1; NAV.y[idx]=w.y; } else { NAV.walk[idx]=0; NAV.y[idx]=(w&&isFinite(w.y))?w.y:0; }
+    }
+  }
+  NAV.built = true;
+}
+function _clearNavOverlay(){ if(NAV.overlay){ scene.remove(NAV.overlay); if(NAV.overlay.geometry) NAV.overlay.geometry.dispose(); if(NAV.overlay.material && NAV.overlay.material.dispose) NAV.overlay.material.dispose(); NAV.overlay=null; } }
+function buildNavOverlay(){
+  _clearNavOverlay();
+  if(!NAV.built) buildNavGrid();
+  if(!NAV.walk) return;
+  let cnt=0; for(let i=0;i<NAV.walk.length;i++) if(NAV.walk[i]) cnt++;
+  if(!cnt){ if(typeof flashToast==='function') flashToast('Nav grid: 0 walkable cells'); return; }
+  const geo=new THREE.PlaneGeometry(NAV.cell*0.86, NAV.cell*0.86); geo.rotateX(-Math.PI/2);
+  const mat=new THREE.MeshBasicMaterial({ color:0x35e0a0, transparent:true, opacity:0.30, depthWrite:false, side:THREE.DoubleSide });
+  const inst=new THREE.InstancedMesh(geo, mat, cnt); inst.frustumCulled=false; inst.renderOrder=8;
+  const m=new THREE.Matrix4(); let k=0;
+  for(let gx=0;gx<NAV.nx;gx++) for(let gz=0;gz<NAV.nz;gz++){ const idx=navIdx(gx,gz); if(!NAV.walk[idx]) continue;
+    const x=NAV.ox+(gx+0.5)*NAV.cell, z=NAV.oz+(gz+0.5)*NAV.cell; m.makeTranslation(x, NAV.y[idx]+0.07, z); inst.setMatrixAt(k++, m); }
+  inst.instanceMatrix.needsUpdate=true; scene.add(inst); NAV.overlay=inst;
+  if(typeof flashToast==='function') flashToast('Nav grid: '+cnt+'/'+(NAV.nx*NAV.nz)+' walkable ('+NAV.cell+'u cells)');
+}
+function navOverlayToggle(){ NAV.show=!NAV.show; if(NAV.show){ NAV.built=false; buildNavOverlay(); } else _clearNavOverlay(); }
 function _botHome(){
   // Where a target-less bot heads: the arena objective/center. The spawn region only controls where bots
   // START — it is NOT a movement boundary — so home is the map center, leaving them free to roam.
@@ -11178,6 +11228,7 @@ function updateGrenades(dt){
 // ---------- Rocket launcher: a projectile that detonates on impact (reuses explodeAt). Host/solo author
 // the damage; a client's rocket is simulated on the host, and everyone sees the rocket fly + the blast. ----------
 const rockets = []; const ROCKET_SPEED = 42;
+const _rkRay = new THREE.Raycaster(); const _rkDir = new THREE.Vector3(); const _rkPrev = new THREE.Vector3();
 function makeRocketMesh(){
   const g=new THREE.Group();
   g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.07,0.5,8), new THREE.MeshBasicMaterial({color:0x552200})));
@@ -11205,10 +11256,16 @@ function updateRockets(dt){
   if(!rockets.length) return;
   const now=performance.now();
   for(let i=rockets.length-1;i>=0;i--){
-    const rk=rockets[i]; rk.mesh.position.addScaledVector(rk.vel, dt); const p=rk.mesh.position;
+    const rk=rockets[i]; _rkPrev.copy(rk.mesh.position); rk.mesh.position.addScaledVector(rk.vel, dt); const p=rk.mesh.position;
     rk.trailT-=dt; if(rk.trailT<=0){ rk.trailT=0.03; spark(p, 0xff9a3a); }
     let impact=(now-rk.born>rk.life) || p.y <= terrainHeightAt(p.x,p.z)+0.18;   // ground-detonate on the terrain, not a flat plane
-    if(!impact){ for(const c of colliders){ const bs=(c.userData && (c.userData.boxes || (c.userData.box && [c.userData.box]))); if(!bs) continue; for(const b of bs){ if(p.x>=b.min.x&&p.x<=b.max.x&&p.y>=b.min.y&&p.y<=b.max.y&&p.z>=b.min.z&&p.z<=b.max.z){ impact=true; break; } } if(impact) break; } }   // use the per-mesh boxes so a rocket inside a hollow arena prop only detonates on real walls/floor, not its overall bounding volume
+    // Detonate against the REAL mesh surface using a swept ray over this frame's travel, NOT the collider's
+    // grid boxes. Those boxes over-occupy the empty space around angled rock faces, so the box test blew
+    // rockets up against an invisible wall in open air. A mesh ray only hits geometry that's actually there
+    // (and sweeping prev->now also stops a fast rocket from tunnelling through a thin wall).
+    if(!impact){ const dx=p.x-_rkPrev.x, dy=p.y-_rkPrev.y, dz=p.z-_rkPrev.z, L=Math.hypot(dx,dy,dz);
+      if(L>1e-5 && colliders.length){ _rkDir.set(dx/L,dy/L,dz/L); _rkRay.set(_rkPrev,_rkDir); _rkRay.far=L+0.05;
+        const hits=_rkRay.intersectObjects(colliders, true); if(hits.length){ p.copy(hits[0].point); impact=true; } } }
     if(!impact){
       if(!pvpMode()){ for(const en of enemies){ if(en.mesh && en.mesh.position.distanceTo(p)<1.0){ impact=true; break; } } }
       else {
@@ -11753,7 +11810,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 463 · 2026-06-12';
+const BUILD_VERSION = 'build 465 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
