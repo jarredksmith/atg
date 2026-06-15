@@ -8783,7 +8783,7 @@ function _migrateJumpPad(z){ return { x:+z.x||0, z:+z.z||0, r:(z.r!=null?+z.r:6)
 let jumpPads = (savedLevel && Array.isArray(savedLevel.jumpPads)) ? savedLevel.jumpPads.map(z=>_migrateJumpPad(z)) : [];
 let selJumpPad = -1;
 // ---- Fire zones: an area that's on fire — deals damage-over-time to any actor inside it (player, bots, enemies) ----
-function _migrateFireZone(z){ return { x:+z.x||0, z:+z.z||0, r:(z.r!=null?+z.r:5), y:(z.y!=null?+z.y:0), h:(z.h!=null?+z.h:3), dps:(z.dps!=null?+z.dps:15) }; }
+function _migrateFireZone(z){ return { x:+z.x||0, z:+z.z||0, r:(z.r!=null?+z.r:5), y:(z.y!=null?+z.y:0), h:(z.h!=null?+z.h:3), dps:(z.dps!=null?+z.dps:15), den:(z.den!=null?+z.den:1), psz:(z.psz!=null?+z.psz:1), hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(z.wind!=null?+z.wind:0), spk:(z.spk!==false) }; }
 let fireZones = (savedLevel && Array.isArray(savedLevel.fireZones)) ? savedLevel.fireZones.map(z=>_migrateFireZone(z)) : [];
 let selFireZone = -1;
 let audioZoneMarkers = []; const _zoneRT = [];   // editor ring markers + per-zone runtime playback state
@@ -8869,6 +8869,13 @@ function setJumpPadMarkersVisible(v){ for(const g of jumpPadMarkers) g.visible=v
 const FIRE_COLS = [0xff7a1a, 0xffb020, 0xff3a0a];
 // A soft radial-gradient sprite (built once, shared) — the building block for the additive fire particles.
 let _fireSoftTex=null;
+// Luminance-preserving RGB hue rotation (deg) — lets a fire be recoloured (blue/green/purple) while keeping
+// its hot-core -> cool-edge brightness structure. deg=0 leaves natural fire untouched.
+function _hueRotate(r,g,b,deg){ if(!deg) return [r,g,b]; const a=deg*Math.PI/180, c=Math.cos(a), s=Math.sin(a);
+  const r2=r*(0.213+c*0.787-s*0.213)+g*(0.715-c*0.715-s*0.715)+b*(0.072-c*0.072+s*0.928);
+  const g2=r*(0.213-c*0.213+s*0.143)+g*(0.715+c*0.285+s*0.140)+b*(0.072-c*0.072-s*0.283);
+  const b2=r*(0.213-c*0.213-s*0.787)+g*(0.715-c*0.715+s*0.715)+b*(0.072+c*0.928+s*0.072);
+  return [Math.max(0,r2),Math.max(0,g2),Math.max(0,b2)]; }
 function fireSoftTex(){
   if(_fireSoftTex) return _fireSoftTex;
   const c=document.createElement('canvas'); c.width=c.height=64; const x=c.getContext('2d');
@@ -8909,12 +8916,15 @@ function buildFireZoneGroup(z, sel){
   const fill=new THREE.Mesh(new THREE.CircleGeometry(r, 44), new THREE.MeshBasicMaterial({ color:0xff6a1a, transparent:true, opacity:0.07, side:THREE.DoubleSide, depthWrite:false, blending:THREE.AdditiveBlending }));
   fill.rotation.x=-Math.PI/2; fill.position.y=baseY+0.04; grp.add(fill);
   // soft additive rising fire particles (the real flames)
+  const den=(z.den!=null?+z.den:1), psz=(z.psz!=null?+z.psz:1);
   const rise=Math.max(2.2, h*1.3);
-  const count=Math.max(120, Math.min(420, Math.round(r*r*7)));   // area fire -> density scales with area
-  const sizeW=Math.max(0.45, Math.min(1.1, r*0.16));
+  const count=Math.max(40, Math.min(620, Math.round(r*r*7*den)));   // area fire -> density scales with area * Density
+  const sizeW=Math.max(0.22, Math.min(2.4, r*0.16*psz));
   const fp=_addFireParticles(grp, count, r*0.92, rise, sizeW);
-  const light=new THREE.PointLight(0xff6a1a, 2.4, Math.max(8, r*3)); light.position.set(0, baseY+rise*0.35, 0); grp.add(light);
-  grp.userData={ parts:fp.parts, geo:fp.geo, posArr:fp.posArr, colArr:fp.colArr, light, li:2.4, baseR:r*0.92, baseY, riseH0:rise, emberT:0 };
+  const lcol=new THREE.Color(); { const [lr,lg,lb]=_hueRotate(1,0.42,0.1,(z.hue!=null?+z.hue:30)-30); lcol.setRGB(lr,lg,lb); }
+  const light=new THREE.PointLight(lcol.getHex(), 2.4, Math.max(8, r*3)); light.position.set(0, baseY+rise*0.35, 0); grp.add(light);
+  grp.userData={ parts:fp.parts, geo:fp.geo, posArr:fp.posArr, colArr:fp.colArr, light, li:2.4, baseR:r*0.92, baseY, riseH0:rise, emberT:0,
+    hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(+z.wind||0), spk:(z.spk!==false), emberCol:lcol.getHex() };
   grp.position.set(+z.x||0, _maxTerrainOver(+z.x||0,+z.z||0,0), +z.z||0);
   return grp;
 }
@@ -8925,20 +8935,22 @@ function refreshFireZones(){
 function _animateFire(g, tms, dt){
   const u=g.userData; if(!u||!u.parts||!u.posArr) return;
   const ts=tms*0.001, baseY=u.baseY||0, pos=u.posArr, col=u.colArr;
+  const turb=(u.turb!=null?u.turb:1), wind=(u.wind||0), hue=(u.hue!=null?u.hue:30), hueD=hue-30, spk=(u.spk!==false);
   for(let i=0;i<u.parts.length;i++){ const p=u.parts[i];
     p.age += dt;
     if(p.age>=p.life){ _seedFireParticle(p, u.baseR, u.riseH0); p.age=0; }
     const f=p.age/p.life;                                   // 0 = born at the base, 1 = spent at the top
     const conv=1-0.5*f;                                     // pull inward as it rises -> tapered flame
-    const swx=Math.sin(ts*p.swaySpd + p.sway)*p.swayAmp*(0.4+f);
-    const swz=Math.cos(ts*p.swaySpd*0.9 + p.sway)*p.swayAmp*(0.4+f);
-    pos[i*3]=p.bx*conv + swx; pos[i*3+1]=baseY + f*p.riseH; pos[i*3+2]=p.bz*conv + swz;
+    const swx=Math.sin(ts*p.swaySpd + p.sway)*p.swayAmp*turb*(0.4+f);
+    const swz=Math.cos(ts*p.swaySpd*0.9 + p.sway)*p.swayAmp*turb*(0.4+f);
+    pos[i*3]=p.bx*conv + swx + wind*f*1.4; pos[i*3+1]=baseY + f*p.riseH; pos[i*3+2]=p.bz*conv + swz;
     // hot white core -> yellow -> orange -> deep red as it ages
     let cr,cg,cb;
     if(f<0.16){ cr=1; cg=0.95; cb=0.66; }
     else if(f<0.4){ cr=1; cg=0.70; cb=0.20; }
     else if(f<0.68){ cr=1; cg=0.40; cb=0.08; }
     else { cr=0.72; cg=0.14; cb=0.03; }
+    if(hueD){ const hr=_hueRotate(cr,cg,cb,hueD); cr=hr[0]; cg=hr[1]; cb=hr[2]; }
     let op=(f<0.1)?(f/0.1):(1-(f-0.1)/0.9);                 // quick fade-in, long fade-out ("death speed")
     op=Math.max(0, op)*0.9*(p.bright||0.8);                 // additive: scaling colour = scaling brightness
     col[i*3]=cr*op; col[i*3+1]=cg*op; col[i*3+2]=cb*op;
@@ -8946,7 +8958,7 @@ function _animateFire(g, tms, dt){
   u.geo.attributes.position.needsUpdate=true; u.geo.attributes.color.needsUpdate=true;
   if(u.light) u.light.intensity = u.li*(0.62 + 0.5*Math.abs(Math.sin(ts*7.3)) + 0.12*Math.sin(ts*23.1));
   u.emberT -= dt;
-  if(u.emberT<=0 && typeof spark==='function'){ u.emberT = 0.16+Math.random()*0.22; const a=Math.random()*Math.PI*2, rr=Math.sqrt(Math.random())*u.baseR*0.8; spark({ x:g.position.x+Math.cos(a)*rr, y:g.position.y+baseY+0.4, z:g.position.z+Math.sin(a)*rr }, 0xff8a2a); }
+  if(spk && u.emberT<=0 && typeof spark==='function'){ u.emberT = 0.16+Math.random()*0.22; const a=Math.random()*Math.PI*2, rr=Math.sqrt(Math.random())*u.baseR*0.8; spark({ x:g.position.x+Math.cos(a)*rr, y:g.position.y+baseY+0.4, z:g.position.z+Math.sin(a)*rr }, (u.emberCol||0xff8a2a)); }
 }
 function addFireZone(){ pushUndoSnapshot(); fireZones.push({ x:+player.pos.x.toFixed(2), z:+player.pos.z.toFixed(2), r:5, y:(typeof surfaceTopAt==='function'&&surfaceTopAt(player.pos.x,player.pos.z)>-Infinity?surfaceTopAt(player.pos.x,player.pos.z):(typeof terrainHeightAt==='function'?terrainHeightAt(player.pos.x,player.pos.z):0)), h:3, dps:15 }); selFireZone=fireZones.length-1; editorActive='firezones'; refreshFireZones(); if(typeof renderFireZonesPanel==='function') renderFireZonesPanel(); if(typeof updateGizmo==='function') updateGizmo(); }
 function removeFireZone(i){ pushUndoSnapshot(); fireZones.splice(i,1); if(selFireZone>=fireZones.length) selFireZone=fireZones.length-1; refreshFireZones(); if(typeof renderFireZonesPanel==='function') renderFireZonesPanel(); }
@@ -8981,6 +8993,20 @@ function renderFireZonesPanel(){
     mkN('Radius','r',1,60,0.5,(n)=>Math.max(1,n));
     mkN('Flame height','h',0.5,40,0.5,(n)=>Math.max(0.5,n));
     mkN('Base Y','y',-20,40,0.5,null);
+    // ---- Particle look (matches the WebGL fire-particle controls) ----
+    const psHdr=document.createElement('div'); psHdr.style.cssText='margin:8px 0 2px;color:#ff8a4a;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.85;'; psHdr.textContent='Particle look'; box.appendChild(psHdr);
+    mkN('Density','den',0.3,2.5,0.05,(n)=>Math.max(0.1,n));        // ~ emit rate
+    mkN('Particle size','psz',0.3,2.4,0.05,(n)=>Math.max(0.1,n));
+    mkN('Color hue','hue',0,360,1,null);                          // 30=fire, 210=blue, 120=green, 285=purple
+    mkN('Turbulence','turb',0,2.5,0.05,(n)=>Math.max(0,n));       // ~ emit-angle / wind turbulence
+    mkN('Wind','wind',-3,3,0.1,null);                            // horizontal drift
+    const hueHint=document.createElement('div'); hueHint.className='hint'; hueHint.style.cssText='font-size:10px;opacity:0.7;margin:1px 0 3px;'; hueHint.textContent='Hue 30 = natural fire \u00b7 210 = blue \u00b7 120 = green \u00b7 285 = purple. Density is the particle count; Wind drifts the flames sideways.'; box.appendChild(hueHint);
+    // Sparks (embers) toggle
+    const spkRow=document.createElement('label'); spkRow.style.cssText='display:flex;align-items:center;gap:7px;color:#ffb38a;font-size:11px;margin:2px 0;cursor:pointer;';
+    const spkCb=document.createElement('input'); spkCb.type='checkbox'; spkCb.checked=(z.spk!==false); spkCb.style.accentColor='#ff6b3a';
+    spkCb.onchange=()=>{ pushUndoSnapshot(); z.spk=spkCb.checked; refreshFireZones(); };
+    const spkSp=document.createElement('span'); spkSp.innerHTML='<b>Sparks</b> \u2014 rising embers';
+    spkRow.appendChild(spkCb); spkRow.appendChild(spkSp); box.appendChild(spkRow);
     host.appendChild(box);
   });
 }
@@ -11665,7 +11691,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 453 · 2026-06-12';
+const BUILD_VERSION = 'build 455 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15012,7 +15038,7 @@ function serializeLevel(){
     audioZones: audioZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, url:z.url||'', vol:+z.vol, loop:!!z.loop })),
     deathZones: deathZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:3) })),
     jumpPads: jumpPads.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:2), power:(+z.power||22) })),
-    fireZones: fireZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:3), dps:(+z.dps||0) })),
+    fireZones: fireZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:3), dps:(+z.dps||0), den:(+z.den||1), psz:(+z.psz||1), hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(+z.wind||0), spk:(z.spk!==false) })),
     fx: Object.assign({}, fxCfg),
     deathFx: Object.assign({}, deathFxCfg),
     tracer: Object.assign({}, tracerCfg),
@@ -15945,7 +15971,7 @@ function renderEditorFields(){
   queueMicrotask(()=>{ try{ if(editorEl) editorEl.scrollTop = _edScroll; }catch(e){} try{ renderLevelIssues(); }catch(e){} });
   if(spawnRouteEdit && (editorActive!=='spawns' || editorTargets.spawns.obj()!==spawnRouteEdit || spawnRouteEdit.userData.mark.mode!=='patrol')) spawnRouteEdit=null;   // route placement only while its patrol spawn stays selected
   editorEl.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.key===editorActive));
-  const tgt = editorTargets[editorActive];
+  const tgt = editorTargets[editorActive] || { obj(){ return null; }, code(){ return ''; } };   // zone targets (fire/jump/death) have no editorTargets entry — render as a no-op selectable
   if(editorActive==='extract') refreshExtractMarker();
   ensurePlayerPreview(editorActive==='player');
   if(extractZone) extractZone.visible = (editorActive==='extract');   // the beacon shows as an editor marker only on its own tab
@@ -17612,6 +17638,7 @@ function renderEditorFields(){
 let editorFieldInputs = [];
 function updateFieldDisplays(){
   const tgt = editorTargets[editorActive];
+  if(!tgt || !tgt.state) return;   // zone targets (fire / jump / death zones) own no transform fields
   for(const f of editorFieldInputs){
     const v = tgt.state[f.k];
     f.rng.value = v; f.num.value = (+v).toFixed(5);
