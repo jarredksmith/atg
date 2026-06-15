@@ -7422,7 +7422,7 @@ function wipeScene(){
   pickupSpots.length=0; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
   lootSpots.length=0; selLoot=-1; if(typeof refreshLootMarkers==='function') refreshLootMarkers();
   if(typeof stopAudioZones==='function') stopAudioZones(); audioZones.length=0; if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers();
-  deathZones.length=0; selDeathZone=-1; if(typeof refreshDeathZoneMarkers==='function') refreshDeathZoneMarkers(); if(typeof refreshSpawnRegionMarker==='function') refreshSpawnRegionMarker();
+  deathZones.length=0; selDeathZone=-1; jumpPads.length=0; selJumpPad=-1; if(typeof refreshDeathZoneMarkers==='function') refreshDeathZoneMarkers(); if(typeof refreshJumpPadMarkers==='function') refreshJumpPadMarkers(); if(typeof refreshSpawnRegionMarker==='function') refreshSpawnRegionMarker();
   // clear selections so the editor doesn't point at a deleted object
   selProps.length=0; selLights.length=0; selSpawns=[]; selPickup=-1;
   if(editorTargets.props) editorTargets.props.idx=-1; if(editorTargets.lights) editorTargets.lights.idx=-1; if(editorTargets.spawns) editorTargets.spawns.idx=-1;
@@ -8777,6 +8777,10 @@ function _migrateDeathZone(z){
   return { x:+z.x||0, z:+z.z||0, r:+z.r||6, y:0, h:3 };   // old infinite -> sensible plane band
 }
 let selDeathZone = -1;
+// ---- Jump pads: a zone that launches any actor (player, bots, wave enemies) straight up by a tuned amount ----
+function _migrateJumpPad(z){ return { x:+z.x||0, z:+z.z||0, r:(z.r!=null?+z.r:6), y:(z.y!=null?+z.y:0), h:(z.h!=null?+z.h:2), power:(z.power!=null?+z.power:22) }; }
+let jumpPads = (savedLevel && Array.isArray(savedLevel.jumpPads)) ? savedLevel.jumpPads.map(z=>_migrateJumpPad(z)) : [];
+let selJumpPad = -1;
 let audioZoneMarkers = []; const _zoneRT = [];   // editor ring markers + per-zone runtime playback state
 let newPickupKind = 'health';
 let pickupsOn = !(savedLevel && savedLevel.pickupsOn === false);   // off => no pickups at all (not even the default fallback set)
@@ -8800,6 +8804,7 @@ function removeLootSpot(i){ pushUndoSnapshot(); lootSpots.splice(i,1); if(selLoo
 function setAudioZoneMarkersVisible(v){ for(const g of audioZoneMarkers) g.visible=v; }
 // ---- Death zones: lethal areas (lava, pits, out-of-bounds) ----
 let deathZoneMarkers = [];
+let jumpPadMarkers = [];
 function disposeDeathZoneMarkers(){ for(const g of deathZoneMarkers){ scene.remove(g); g.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material)o.material.dispose && o.material.dispose(); }); } deathZoneMarkers.length=0; }
 function refreshDeathZoneMarkers(){
   disposeDeathZoneMarkers();
@@ -8827,6 +8832,93 @@ function refreshDeathZoneMarkers(){
   }
 }
 function setDeathZoneMarkersVisible(v){ for(const g of deathZoneMarkers) g.visible=v; }
+const JP_COLOR = 0x46e0a4, JP_COLOR_HI = 0x9bffd9;   // jump-pad green (distinct from the death-zone red)
+function disposeJumpPadMarkers(){ for(const g of jumpPadMarkers){ scene.remove(g); g.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material)o.material.dispose && o.material.dispose(); }); } jumpPadMarkers.length=0; }
+function refreshJumpPadMarkers(){
+  disposeJumpPadMarkers();
+  const vis=(typeof editorOpen!=='undefined' && editorOpen);
+  for(let i=0;i<jumpPads.length;i++){
+    const z=jumpPads[i]; const r=Math.max(1,+z.r||6);
+    const baseY=(+z.y||0), h=Math.max(0.5, z.h!=null?+z.h:2);
+    const grp=new THREE.Group();
+    const sel=(i===selJumpPad);
+    const ring=new THREE.Mesh(new THREE.RingGeometry(Math.max(0.3,r-0.4), r, 56), new THREE.MeshBasicMaterial({ color:JP_COLOR, transparent:true, opacity:sel?0.85:0.55, side:THREE.DoubleSide, depthWrite:false }));
+    ring.rotation.x=-Math.PI/2; ring.position.y=baseY+0.07; grp.add(ring);
+    const fill=new THREE.Mesh(new THREE.CircleGeometry(r, 48), new THREE.MeshBasicMaterial({ color:JP_COLOR, transparent:true, opacity:0.12, side:THREE.DoubleSide, depthWrite:false }));
+    fill.rotation.x=-Math.PI/2; fill.position.y=baseY+0.05; grp.add(fill);
+    // a translucent column showing the trigger band
+    const wall=new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 40, 1, true), new THREE.MeshBasicMaterial({ color:JP_COLOR, transparent:true, opacity:sel?0.16:0.10, side:THREE.DoubleSide, depthWrite:false }));
+    wall.position.y=baseY+h/2; grp.add(wall);
+    // up-arrow motif (a cone pointing up) to read as a launcher, scaled a touch by power
+    const arrowH=Math.min(6, 1.4 + (Math.max(2,+z.power||22))*0.12);
+    const cone=new THREE.Mesh(new THREE.ConeGeometry(Math.min(r*0.5,1.1), arrowH, 18), new THREE.MeshBasicMaterial({ color:sel?JP_COLOR_HI:JP_COLOR, transparent:true, opacity:0.85, depthWrite:false }));
+    cone.position.y=baseY+0.2+arrowH/2; grp.add(cone);
+    const shaft=new THREE.Mesh(new THREE.CylinderGeometry(Math.min(r*0.16,0.28), Math.min(r*0.16,0.28), 0.4, 14), new THREE.MeshBasicMaterial({ color:sel?JP_COLOR_HI:JP_COLOR, transparent:true, opacity:0.8, depthWrite:false }));
+    shaft.position.y=baseY+0.2; grp.add(shaft);
+    grp.position.set(+z.x||0, _maxTerrainOver(+z.x||0,+z.z||0,0), +z.z||0); grp.visible=vis; grp.userData.jumpPadMarker=true;
+    scene.add(grp); jumpPadMarkers.push(grp);
+  }
+}
+function setJumpPadMarkersVisible(v){ for(const g of jumpPadMarkers) g.visible=v; }
+function addJumpPad(){ pushUndoSnapshot(); jumpPads.push({ x:+player.pos.x.toFixed(2), z:+player.pos.z.toFixed(2), r:6, y:(typeof surfaceTopAt==='function'&&surfaceTopAt(player.pos.x,player.pos.z)>-Infinity?surfaceTopAt(player.pos.x,player.pos.z):(typeof terrainHeightAt==='function'?terrainHeightAt(player.pos.x,player.pos.z):0)), h:2, power:22 }); selJumpPad=jumpPads.length-1; editorActive='jumppads'; refreshJumpPadMarkers(); if(typeof renderJumpPadsPanel==='function') renderJumpPadsPanel(); }
+function removeJumpPad(i){ pushUndoSnapshot(); jumpPads.splice(i,1); if(selJumpPad>=jumpPads.length) selJumpPad=jumpPads.length-1; refreshJumpPadMarkers(); if(typeof renderJumpPadsPanel==='function') renderJumpPadsPanel(); }
+function renderJumpPadsPanel(){
+  const host = (editorEl && editorEl.querySelector('#edJumpPads')); if(!host) return;
+  host.innerHTML='';
+  const intro=document.createElement('div'); intro.className='hint'; intro.style.margin='0 0 6px';
+  intro.innerHTML='<b>Jump pads</b> \u2014 stepping onto one launches you (and bots/enemies) straight up. Great for vertical maps + trick jumps. Tune the <b>Bounce</b> per pad; drag a pad\u2019s <b>green dot</b> with the move gizmo to position it. They carry to multiplayer.';
+  host.appendChild(intro);
+  const addB=document.createElement('button'); addB.textContent='+ Add jump pad (at me)'; addB.style.cssText='width:100%;margin-bottom:8px;';
+  addB.onclick=()=>addJumpPad(); host.appendChild(addB);
+  if(!jumpPads.length){ const n=document.createElement('div'); n.className='hint'; n.textContent='None yet. Stand where you want one and click Add.'; host.appendChild(n); return; }
+  jumpPads.forEach((z, i)=>{
+    const box=document.createElement('div'); box.style.cssText='border:1px solid rgba(70,224,164,0.28);border-radius:6px;padding:7px 9px;margin-bottom:6px;background:'+(i===selJumpPad?'rgba(70,224,164,0.08)':'transparent')+';';
+    const hd=document.createElement('div'); hd.style.cssText='display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px;';
+    const tt=document.createElement('span'); tt.style.cssText='font-size:11px;color:#9bffd9;'; tt.textContent='Pad '+(i+1)+'  \u00b7  ('+(+z.x).toFixed(1)+', '+(+z.z).toFixed(1)+')';
+    const selB=document.createElement('button'); selB.textContent=(i===selJumpPad?'selected':'select'); selB.style.cssText='font-size:10px;padding:2px 8px;'; selB.onclick=()=>{ selJumpPad=i; editorActive='jumppads'; refreshJumpPadMarkers(); renderJumpPadsPanel(); if(typeof updateGizmo==='function') updateGizmo(); };
+    const del=document.createElement('button'); del.textContent='\u2715'; del.style.cssText='font-size:10px;padding:2px 8px;'; del.onclick=()=>removeJumpPad(i);
+    const right=document.createElement('div'); right.style.cssText='display:flex;gap:4px;'; right.appendChild(selB); right.appendChild(del);
+    hd.appendChild(tt); hd.appendChild(right); box.appendChild(hd);
+    const mkN=(label,key,min,max,step,onApply)=>{
+      const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:8px;color:#9bffd9;font-size:11px;margin:3px 0;';
+      const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='62px';
+      const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=z[key]; rng.style.cssText='flex:1;accent-color:#46e0a4;';
+      const num=document.createElement('input'); num.type='number'; num.step=step; num.value=z[key]; num.style.cssText='width:58px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:11px;';
+      const ap=(v)=>{ let n=parseFloat(v); if(!isFinite(n)) n=min; if(onApply) n=onApply(n); z[key]=n; rng.value=Math.max(min,Math.min(max,n)); num.value=n; refreshJumpPadMarkers(); };
+      rng.addEventListener('mousedown',()=>pushUndoSnapshot()); num.addEventListener('focus',()=>pushUndoSnapshot());
+      rng.oninput=()=>ap(rng.value); num.onchange=()=>ap(num.value);
+      row.appendChild(sp); row.appendChild(rng); row.appendChild(num); box.appendChild(row);
+    };
+    mkN('Bounce','power',2,50,0.5,(n)=>Math.max(2,n));
+    mkN('Radius','r',1,60,0.5,(n)=>Math.max(1,n));
+    mkN('Band height','h',0.5,40,0.5,(n)=>Math.max(0.5,n));
+    mkN('Base Y','y',-20,40,0.5,null);
+    const hHint=document.createElement('div'); hHint.className='hint'; hHint.style.cssText='font-size:10px;opacity:0.7;margin:1px 0 0;'; hHint.textContent='\u201cBounce\u201d is the upward launch speed (a normal jump is ~13). It fires when feet are within \u201cBand height\u201d above \u201cBase Y\u201d while landing/standing. Base Y auto-sets to the surface when you add it.'; box.appendChild(hHint);
+    host.appendChild(box);
+  });
+}
+// Per-frame: launch any actor standing in / landing on a jump pad. Mirrors updateDeathZones' band test.
+let _jpPlayerCd=0;
+function updateJumpPads(dt){
+  if(!jumpPads.length) return;
+  const live = gameOn && !editorOpen && !gameOver
+    && !(typeof _cineActive!=='undefined' && _cineActive)
+    && !(typeof _levelLoaderActive!=='undefined' && _levelLoaderActive)
+    && !(typeof paused!=='undefined' && paused);
+  if(_jpPlayerCd>0) _jpPlayerCd=Math.max(0,_jpPlayerCd-dt);
+  if(!live) return;
+  const inBand=(feetY,z)=>{ const baseY=(+z.y||0), h=(z.h!=null?+z.h:2); return feetY<=baseY+h && feetY>=baseY-1.0; };
+  for(const z of jumpPads){
+    const r=Math.max(1,+z.r||6), r2=r*r, pw=Math.max(2,+z.power||22);
+    // player
+    if(_jpPlayerCd<=0){ const dx=player.pos.x-(+z.x||0), dz=player.pos.z-(+z.z||0);
+      if(dx*dx+dz*dz<=r2){ const feetY=player.pos.y-EYE; if(inBand(feetY,z) && (player.onGround || player.vel.y<=0.5)){ player.vel.y=pw; player.onGround=false; _jpPlayerCd=0.45; if(typeof SFX!=='undefined' && SFX.jump) SFX.jump(); } } }
+    // bots (host-simulated PvP AI)
+    if(typeof bots!=='undefined'){ for(const b of bots){ if(b.dead) continue; const dx=b.pos.x-(+z.x||0), dz=b.pos.z-(+z.z||0); if(dx*dx+dz*dz>r2) continue; if(!inBand(b.pos.y,z)) continue; if((b._jpCd||0)>0){ b._jpCd=Math.max(0,b._jpCd-dt); continue; } if(b.grounded || (b.vy||0)<=0.5){ b.vy=pw; b.grounded=false; b._jpCd=0.45; } } }
+    // wave enemies (vertical via vy/launchY)
+    if(typeof enemies!=='undefined'){ for(const en of enemies){ if(!en || en.hp<=0 || !en.mesh) continue; const ep=en.mesh.position; const dx=ep.x-(+z.x||0), dz=ep.z-(+z.z||0); if(dx*dx+dz*dz>r2) continue; if(!inBand(ep.y,z)) continue; if((en._jpCd||0)>0){ en._jpCd=Math.max(0,en._jpCd-dt); continue; } if(en.grounded || (en.vy||0)<=0.5){ en.vy=pw; en.grounded=false; en._jpCd=0.45; } } }
+  }
+}
 // ---- Multiplayer spawn-region marker (a ring showing where MP/bot spawns are confined) ----
 let spawnRegionMarker = null;
 function refreshSpawnRegionMarker(){
@@ -8875,7 +8967,7 @@ function refreshSpawnRegionMarker(){
   scene.add(g); spawnRegionMarker=g;
 }
 function setSpawnRegionMarkerVisible(v){ if(spawnRegionMarker) spawnRegionMarker.visible=v; }
-function addDeathZone(){ pushUndoSnapshot(); deathZones.push({ x:+player.pos.x.toFixed(2), z:+player.pos.z.toFixed(2), r:6, y:(typeof surfaceTopAt==='function'&&surfaceTopAt(player.pos.x,player.pos.z)>-Infinity?surfaceTopAt(player.pos.x,player.pos.z):(typeof terrainHeightAt==='function'?terrainHeightAt(player.pos.x,player.pos.z):0)), h:3 }); selDeathZone=deathZones.length-1; refreshDeathZoneMarkers(); if(typeof renderDeathZonesPanel==='function') renderDeathZonesPanel(); }
+function addDeathZone(){ pushUndoSnapshot(); deathZones.push({ x:+player.pos.x.toFixed(2), z:+player.pos.z.toFixed(2), r:6, y:(typeof surfaceTopAt==='function'&&surfaceTopAt(player.pos.x,player.pos.z)>-Infinity?surfaceTopAt(player.pos.x,player.pos.z):(typeof terrainHeightAt==='function'?terrainHeightAt(player.pos.x,player.pos.z):0)), h:3 }); selDeathZone=deathZones.length-1; editorActive='deathzones'; refreshDeathZoneMarkers(); if(typeof renderDeathZonesPanel==='function') renderDeathZonesPanel(); }
 function removeDeathZone(i){ pushUndoSnapshot(); deathZones.splice(i,1); if(selDeathZone>=deathZones.length) selDeathZone=deathZones.length-1; refreshDeathZoneMarkers(); if(typeof renderDeathZonesPanel==='function') renderDeathZonesPanel(); }
 // Per-frame: kill the player if they're inside a lethal zone.
 let _inDeathZone=false;
@@ -9684,7 +9776,7 @@ function loadLevelFromNet(level){
       if(level.game.spawnRegion){ const _sr=level.game.spawnRegion; gameCfg.spawnRegion = { on:!!_sr.on, shape:_sr.shape||'circle', x:+_sr.x||0, z:+_sr.z||0, r:(_sr.r!=null?+_sr.r:30), poly:Array.isArray(_sr.poly)?_sr.poly.map(p=>({x:+p.x||0,z:+p.z||0})):[] }; } else { gameCfg.spawnRegion = { on:false, shape:'circle', x:0, z:0, r:30, poly:[] }; } }
   extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null; if(level.extractFx){ extractFxCfg.color=level.extractFx.color!=null?level.extractFx.color:extractFxCfg.color; extractFxCfg.opacity=level.extractFx.opacity!=null?level.extractFx.opacity:extractFxCfg.opacity; extractFxCfg.height=level.extractFx.height!=null?level.extractFx.height:extractFxCfg.height; extractFxCfg.pillar=level.extractFx.pillar!=null?!!level.extractFx.pillar:extractFxCfg.pillar; if(typeof applyExtractFx==='function') applyExtractFx(); } if(typeof refreshExtractMarker==='function') refreshExtractMarker();   // restore the per-level extraction spot (campaign / co-op load path)
   audioZones = Array.isArray(level.audioZones) ? level.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : [];
-  deathZones = Array.isArray(level.deathZones) ? level.deathZones.map(z=>_migrateDeathZone(z)) : []; if(typeof refreshDeathZoneMarkers==='function') refreshDeathZoneMarkers(); if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
+  deathZones = Array.isArray(level.deathZones) ? level.deathZones.map(z=>_migrateDeathZone(z)) : []; if(typeof refreshDeathZoneMarkers==='function') refreshDeathZoneMarkers(); jumpPads = Array.isArray(level.jumpPads) ? level.jumpPads.map(z=>_migrateJumpPad(z)) : []; if(typeof refreshJumpPadMarkers==='function') refreshJumpPadMarkers(); if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
   fxCfg = _sanitizeFx(level.fx); deathFxCfg = _sanitizeDeathFx(level.deathFx); if(typeof renderImpactFxPanel==='function') renderImpactFxPanel();
   tracerCfg = _sanitizeTracer(level.tracer); if(typeof renderTracerFxPanel==='function') renderTracerFxPanel();
   charRoster = Array.isArray(level.roster) ? level.roster.map(_sanitizeCharCfg) : []; if(typeof renderCharRosterPanel==='function') renderCharRosterPanel();
@@ -11366,7 +11458,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 446 · 2026-06-12';
+const BUILD_VERSION = 'build 448 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13576,7 +13668,7 @@ function loop(){
   if(editorOpen || _cineActive) _dirtyShadows(1);   // authoring + camera moves: keep shadows current
   else { for(const o of propModels){ const a=o&&o.userData&&o.userData.xa; if(a&&a.on&&a.ph>0&&a.ph<1){ _dirtyShadows(1); break; } } }   // a platform/door mid-travel
   if(typeof updateAudioZones==='function') updateAudioZones();   // ambient audio zones: proximity-based volume (silent unless in live play)
-  if(typeof updateDeathZones==='function') updateDeathZones();   // lethal zones (lava / pits / out-of-bounds)
+  if(typeof updateDeathZones==='function') updateDeathZones(); if(typeof updateJumpPads==='function') updateJumpPads(dt);   // lethal zones (lava / pits / out-of-bounds)
   if(_pathPreviewGroup && !editorOpen){ scene.remove(_pathPreviewGroup); try{ _pathPreviewGroup.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); }catch(e){} _pathPreviewGroup=null; }   // editor waypoint markers never linger into play
   if(_cinePreviewGroup && !editorOpen){ scene.remove(_cinePreviewGroup); try{ _cinePreviewGroup.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); }catch(e){} _cinePreviewGroup=null; }   // cine path preview is editor-only
   if(_cineAvatar && _cineAvatar.visible && !editorOpen && !_cineActive){ _hideCineAvatar(); }   // editor authoring body never lingers into play
@@ -14392,10 +14484,10 @@ const PRIM_ICON = {
 };
 const MODE_SECTIONS = {
   build:   ['gizmo','object','material','transform','characters'],
-  scene:   ['world','audiozones','deathzones'],
+  scene:   ['world','audiozones','deathzones','jumppads'],
   enemies: ['enemies','gizmo','object','transform'],   // spawn points live here now; their picker/fields/gizmo sections come along
   rules:   ['game','pickups','loot'],
-  kit:     ['object','transform','impactfx','tracerfx'],   // 'object' carries the weapon model import + per-weapon shoot sound; impact/streak FX; music/SFX live in Scene
+  kit:     ['object','transform','impactfx','tracerfx','crosshair'],   // 'object' carries the weapon model import + per-weapon shoot sound; impact/streak FX; music/SFX live in Scene
   files:   ['levelfile','campaign'],
 };
 const MODE_TARGETS = {
@@ -14707,6 +14799,7 @@ function serializeLevel(){
     extractFx: { color: extractFxCfg.color, opacity: extractFxCfg.opacity, height: extractFxCfg.height, pillar: extractFxCfg.pillar },
     audioZones: audioZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, url:z.url||'', vol:+z.vol, loop:!!z.loop })),
     deathZones: deathZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:3) })),
+    jumpPads: jumpPads.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:2), power:(+z.power||22) })),
     fx: Object.assign({}, fxCfg),
     deathFx: Object.assign({}, deathFxCfg),
     tracer: Object.assign({}, tracerCfg),
@@ -14907,7 +15000,7 @@ function renderDeathZonesPanel(){
     const box=document.createElement('div'); box.style.cssText='border:1px solid rgba(255,59,48,0.25);border-radius:6px;padding:7px 9px;margin-bottom:6px;background:'+(i===selDeathZone?'rgba(255,59,48,0.08)':'transparent')+';';
     const hd=document.createElement('div'); hd.style.cssText='display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px;';
     const tt=document.createElement('span'); tt.style.cssText='font-size:11px;color:#ffb3ae;'; tt.textContent='Zone '+(i+1)+'  ·  ('+(+z.x).toFixed(1)+', '+(+z.z).toFixed(1)+')';
-    const selB=document.createElement('button'); selB.textContent=(i===selDeathZone?'selected':'select'); selB.style.cssText='font-size:10px;padding:2px 8px;'; selB.onclick=()=>{ selDeathZone=i; refreshDeathZoneMarkers(); renderDeathZonesPanel(); };
+    const selB=document.createElement('button'); selB.textContent=(i===selDeathZone?'selected':'select'); selB.style.cssText='font-size:10px;padding:2px 8px;'; selB.onclick=()=>{ selDeathZone=i; editorActive='deathzones'; refreshDeathZoneMarkers(); renderDeathZonesPanel(); if(typeof updateGizmo==='function') updateGizmo(); };
     const del=document.createElement('button'); del.textContent='\u2715'; del.style.cssText='font-size:10px;padding:2px 8px;'; del.onclick=()=>removeDeathZone(i);
     const right=document.createElement('div'); right.style.cssText='display:flex;gap:4px;'; right.appendChild(selB); right.appendChild(del);
     hd.appendChild(tt); hd.appendChild(right); box.appendChild(hd);
@@ -15034,7 +15127,7 @@ function restoreLevel(level){
   refreshPlayerSpawnMarker();
   extractSpot = level.extract ? { x:level.extract.x||0, z:level.extract.z||0 } : null; if(level.extractFx){ extractFxCfg.color=level.extractFx.color!=null?level.extractFx.color:extractFxCfg.color; extractFxCfg.opacity=level.extractFx.opacity!=null?level.extractFx.opacity:extractFxCfg.opacity; extractFxCfg.height=level.extractFx.height!=null?level.extractFx.height:extractFxCfg.height; extractFxCfg.pillar=level.extractFx.pillar!=null?!!level.extractFx.pillar:extractFxCfg.pillar; if(typeof applyExtractFx==='function') applyExtractFx(); }
   audioZones = Array.isArray(level.audioZones) ? level.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : [];
-  deathZones = Array.isArray(level.deathZones) ? level.deathZones.map(z=>_migrateDeathZone(z)) : []; if(typeof refreshDeathZoneMarkers==='function') refreshDeathZoneMarkers(); if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
+  deathZones = Array.isArray(level.deathZones) ? level.deathZones.map(z=>_migrateDeathZone(z)) : []; if(typeof refreshDeathZoneMarkers==='function') refreshDeathZoneMarkers(); jumpPads = Array.isArray(level.jumpPads) ? level.jumpPads.map(z=>_migrateJumpPad(z)) : []; if(typeof refreshJumpPadMarkers==='function') refreshJumpPadMarkers(); if(typeof stopAudioZones==='function') stopAudioZones(); if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
   fxCfg = _sanitizeFx(level.fx); deathFxCfg = _sanitizeDeathFx(level.deathFx); if(typeof renderImpactFxPanel==='function') renderImpactFxPanel();
   tracerCfg = _sanitizeTracer(level.tracer); if(typeof renderTracerFxPanel==='function') renderTracerFxPanel();
   charRoster = Array.isArray(level.roster) ? level.roster.map(_sanitizeCharCfg) : []; if(typeof renderCharRosterPanel==='function') renderCharRosterPanel();
@@ -15383,8 +15476,10 @@ function buildEditorPanel(){
     + sec('Loot', 'loot', '<div id="edLoot"></div>')
     + sec('Audio zones', 'audiozones', '<div id="edAudioZones"></div>')
     + sec('Death zones', 'deathzones', '<div id="edDeathZones"></div>')
+    + sec('Jump pads', 'jumppads', '<div id="edJumpPads"></div>')
     + sec('Impact FX', 'impactfx', '<div id="edImpactFx"></div>')
     + sec('Bullet streak', 'tracerfx', '<div id="edTracerFx"></div>')
+    + sec('Crosshair', 'crosshair', '<div id="edCrosshair"></div>')
     + sec('Characters', 'characters', '<div id="edCharRoster"></div>')
     + sec('Level file', 'levelfile',
         '<div id="edIssues"></div>'
@@ -15462,6 +15557,7 @@ function buildEditorPanel(){
   if(typeof renderCampaignPanel==='function') renderCampaignPanel();
   if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
   if(typeof renderDeathZonesPanel==='function') renderDeathZonesPanel();
+  if(typeof renderJumpPadsPanel==='function') renderJumpPadsPanel();
   if(typeof renderCharRosterPanel==='function') renderCharRosterPanel();
   if(typeof renderImpactFxPanel==='function') renderImpactFxPanel();
   if(typeof renderTracerFxPanel==='function') renderTracerFxPanel();
@@ -15643,6 +15739,7 @@ function renderEditorFields(){
   const worldHost   = editorEl.querySelector('#edWorld');
   const enemyHost   = editorEl.querySelector('#edEnemies');
   const gameHost    = editorEl.querySelector('#edGame');
+  const crosshairHost = editorEl.querySelector('#edCrosshair');
   const lootHost    = editorEl.querySelector('#edLoot');
   const soundHost   = editorEl.querySelector('#edSounds');
   // Sounds relocated: per-weapon shoot sound -> each weapon (Weapons tab); music + global SFX -> Scene > Audio
@@ -15651,6 +15748,7 @@ function renderEditorFields(){
     if(enemyHost) enemyHost.innerHTML = '';
     if(gameHost) gameHost.innerHTML = '';
     if(lootHost) lootHost.innerHTML = '';
+    if(crosshairHost) crosshairHost.innerHTML = '';
     // helpers take an explicit host so they can populate any of the three sections
     const slider = (host, label, key, min, max, step)=>{
       const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:5px 0;';
@@ -16021,13 +16119,14 @@ function renderEditorFields(){
       cdNum('Min speed', ()=>gameCfg.crushDamage.minSpeed, v=>gameCfg.crushDamage.minSpeed=v, 0, 40, 0.5, 'How fast a prop must be moving to deal crush damage.');
       cdNum('Damage', ()=>gameCfg.crushDamage.perUnit, v=>gameCfg.crushDamage.perUnit=v, 0, 12, 0.1, 'Damage per unit of prop speed above the minimum.');
     }
+    if(crosshairHost){
     // ---- Crosshair ----
     if(!gameCfg.crosshair) gameCfg.crosshair = { style:'classic', size:24, thickness:2, gap:3, dot:true, color:'accent' };
-    hint(gHost, '<b>Crosshair</b> — carries to multiplayer players who join your game', '10px 0 4px');
+    hint(crosshairHost, '<b>Crosshair</b> — carries to multiplayer players who join your game', '10px 0 4px');
     const xhRow=document.createElement('div'); xhRow.className='row2'; xhRow.style.flexWrap='wrap';
     const xhBtn=(key,txt)=>{ const b=document.createElement('button'); b.textContent=txt; if((gameCfg.crosshair.style||'classic')===key){ b.style.background='rgba(var(--accent-rgb),0.30)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); gameCfg.crosshair.style=key; if(typeof applyCrosshair==='function') applyCrosshair(gameCfg.crosshair); renderEditorFields(); }; return b; };
     ['classic|✛ Classic','cross|+ Cross','dot|• Dot','circle|◯ Circle','tee|⊤ T-shape','none|∅ None'].forEach(p=>{ const [k,t]=p.split('|'); xhRow.appendChild(xhBtn(k,t)); });
-    gHost.appendChild(xhRow);
+    crosshairHost.appendChild(xhRow);
     if(gameCfg.crosshair.style!=='none'){
       const xhNum=(label, get, set, min, max, step)=>{
         const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;';
@@ -16037,12 +16136,12 @@ function renderEditorFields(){
         const ap=(v)=>{ let n=parseFloat(v); if(!isFinite(n)) n=min; n=Math.max(min,Math.min(max,n)); set(n); rng.value=n; nm.value=+n.toFixed(1); if(typeof applyCrosshair==='function') applyCrosshair(gameCfg.crosshair); };
         rng.addEventListener('mousedown',()=>pushUndoSnapshot()); nm.addEventListener('focus',()=>pushUndoSnapshot());
         rng.oninput=()=>ap(rng.value); nm.onchange=()=>ap(nm.value);
-        row.appendChild(s); row.appendChild(rng); row.appendChild(nm); gHost.appendChild(row);
+        row.appendChild(s); row.appendChild(rng); row.appendChild(nm); crosshairHost.appendChild(row);
       };
       xhNum('Size', ()=>gameCfg.crosshair.size, v=>gameCfg.crosshair.size=v, 6, 60, 1);
       if(gameCfg.crosshair.style!=='dot'){ xhNum('Thickness', ()=>gameCfg.crosshair.thickness, v=>gameCfg.crosshair.thickness=v, 1, 8, 1); }
       if(gameCfg.crosshair.style==='cross' || gameCfg.crosshair.style==='classic' || gameCfg.crosshair.style==='tee'){ xhNum('Gap', ()=>gameCfg.crosshair.gap, v=>gameCfg.crosshair.gap=v, 0, 20, 1); }
-      if(gameCfg.crosshair.style!=='dot'){ fdToggle('Center dot', ()=>gameCfg.crosshair.dot, v=>{ gameCfg.crosshair.dot=v; if(typeof applyCrosshair==='function') applyCrosshair(gameCfg.crosshair); }); }
+      if(gameCfg.crosshair.style!=='dot'){ const dLab=document.createElement('label'); dLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;cursor:pointer;margin:3px 0;'; const dCb=document.createElement('input'); dCb.type='checkbox'; dCb.checked=!!gameCfg.crosshair.dot; dCb.style.cssText='width:15px;height:15px;accent-color:var(--accent);flex:none;'; dCb.onchange=()=>{ pushUndoSnapshot(); gameCfg.crosshair.dot=dCb.checked; if(typeof applyCrosshair==='function') applyCrosshair(gameCfg.crosshair); }; const dSp=document.createElement('span'); dSp.textContent='Center dot'; dLab.appendChild(dCb); dLab.appendChild(dSp); crosshairHost.appendChild(dLab); }
       // colour: accent (themable) or a custom hex
       const xhColRow=document.createElement('label'); xhColRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;';
       const xhColS=document.createElement('span'); xhColS.textContent='Color'; xhColS.style.minWidth='78px';
@@ -16051,11 +16150,12 @@ function renderEditorFields(){
       const xhPick=document.createElement('input'); xhPick.type='color'; xhPick.value=(gameCfg.crosshair.color&&gameCfg.crosshair.color!=='accent')?gameCfg.crosshair.color:'#38f5b5'; xhPick.style.cssText='width:34px;height:24px;border:none;background:none;cursor:pointer;'+(xhAcc.checked?'opacity:0.4;pointer-events:none':'');
       xhAcc.onchange=()=>{ pushUndoSnapshot(); gameCfg.crosshair.color = xhAcc.checked ? 'accent' : xhPick.value; if(typeof applyCrosshair==='function') applyCrosshair(gameCfg.crosshair); renderEditorFields(); };
       xhPick.oninput=()=>{ pushUndoSnapshot(); gameCfg.crosshair.color = xhPick.value; if(typeof applyCrosshair==='function') applyCrosshair(gameCfg.crosshair); };
-      xhColRow.appendChild(xhColS); xhColRow.appendChild(xhAcc); xhColRow.appendChild(xhAccLbl); xhColRow.appendChild(xhPick); gHost.appendChild(xhColRow);
+      xhColRow.appendChild(xhColS); xhColRow.appendChild(xhAcc); xhColRow.appendChild(xhAccLbl); xhColRow.appendChild(xhPick); crosshairHost.appendChild(xhColRow);
     }
-    hint(gHost, 'Tip: open the editor and the crosshair updates live as you tweak it.', '2px 0 6px');
+    hint(crosshairHost, 'Tip: open the editor and the crosshair updates live as you tweak it.', '2px 0 6px');
     if(typeof applyCrosshair==='function') applyCrosshair(gameCfg.crosshair);
     if(crosshairEl) crosshairEl.style.opacity = '1';   // show a live preview while tuning on this tab
+    }
     hint(gHost, '', '3px 0 6px').textContent = (objectiveActive()==='survival')
       ? 'Survival: hostiles spawn endlessly — outlast the countdown to win.'
       : (objectiveActive()==='extraction')
@@ -17409,6 +17509,8 @@ function getSelPos(){
   if(editorActive==='spawns'){ const g=editorTargets.spawns.obj(); return g?g.position:null; }
   if(editorActive==='pstart'){ return playerSpawnMarker?playerSpawnMarker.position:null; }
   if(editorActive==='extract'){ return extractZone?extractZone.position:null; }
+  if(editorActive==='deathzones'){ return (selDeathZone>=0 && deathZoneMarkers[selDeathZone])?deathZoneMarkers[selDeathZone].position:null; }
+  if(editorActive==='jumppads'){ return (selJumpPad>=0 && jumpPadMarkers[selJumpPad])?jumpPadMarkers[selJumpPad].position:null; }
   return null;
 }
 // move the selected object to a world position and sync its editor state + collider
@@ -17441,6 +17543,10 @@ function setSelPos(v){
   } else if(editorActive==='extract'){
     const lim=ARENA*0.85; const x=Math.max(-lim,Math.min(lim,v.x)), z=Math.max(-lim,Math.min(lim,v.z));
     extractSpot={x,z}; extractPos.set(x,0,z); if(extractZone) extractZone.position.set(x, _maxTerrainOver(x, z, gameCfg.extractRadius||3.5), z);   // extraction sits on the terrain
+  } else if(editorActive==='deathzones'){
+    const z=deathZones[selDeathZone]; if(!z) return; z.x=+v.x.toFixed(2); z.z=+v.z.toFixed(2); if(typeof refreshDeathZoneMarkers==='function') refreshDeathZoneMarkers(); if(typeof renderDeathZonesPanel==='function') renderDeathZonesPanel();
+  } else if(editorActive==='jumppads'){
+    const z=jumpPads[selJumpPad]; if(!z) return; z.x=+v.x.toFixed(2); z.z=+v.z.toFixed(2); if(typeof refreshJumpPadMarkers==='function') refreshJumpPadMarkers(); if(typeof renderJumpPadsPanel==='function') renderJumpPadsPanel();
   }
 }
 // --- rotation (Euler, radians) of the selected object, for the rotate gizmo ---
@@ -17550,7 +17656,7 @@ function buildGizmo(){
 function updateGizmo(){
   if(!gizmo) gizmo = buildGizmo();
   const gr = gizmo.userData.groups;
-  const movable = editorOpen && (selPickup>=0 || editorActive==='props' || editorActive==='station' || editorActive==='lights' || editorActive==='spawns' || editorActive==='pstart' || editorActive==='extract');
+  const movable = editorOpen && (selPickup>=0 || editorActive==='props' || editorActive==='station' || editorActive==='lights' || editorActive==='spawns' || editorActive==='pstart' || editorActive==='extract' || (editorActive==='deathzones'&&selDeathZone>=0) || (editorActive==='jumppads'&&selJumpPad>=0));
   const pos = movable ? getSelPos() : null;
   if(!pos){ gr.translate.visible=gr.scale.visible=gr.rotate.visible=false; gizmo.visible = false; return; }
   gizmo.position.copy(pos);
@@ -17561,6 +17667,7 @@ function updateGizmo(){
   if((editorActive==='lights'||editorActive==='spawns'||editorActive==='pstart') && mode==='scale') mode='translate';
   if(selPickup>=0) mode='translate';   // a pickup spot is just an x/z position
   if(editorActive==='extract') mode='translate';   // the extraction point only moves (radius lives in Game / waves)
+  if(editorActive==='deathzones'||editorActive==='jumppads') mode='translate';   // zones move on the floor; size/height live in their panel
   gr.translate.visible = (mode==='translate');
   gr.scale.visible = (mode==='scale');
   gr.rotate.visible = (mode==='rotate');
@@ -17782,12 +17889,15 @@ renderer.domElement.addEventListener('click', (e)=>{
     if(lti>=0){ picked='loot'; selLoot=lti; break; }
     const dzi = deathZoneMarkers.indexOf(root);
     if(dzi>=0){ picked='deathzones'; selDeathZone=dzi; break; }
+    const jpi = jumpPadMarkers.indexOf(root);
+    if(jpi>=0){ picked='jumppads'; selJumpPad=jpi; break; }
     root = root.parent;
   }
   if(picked && picked!=='pickups') selPickup = -1;   // selecting anything else releases a grabbed pickup
   if(picked==='pickups'){ selProps.length=0; selLights.length=0; selSpawns=[]; gizmoMode='translate'; if(typeof renderEditorFields==='function') renderEditorFields(); updateSelectionHighlight(); }
   else if(picked==='loot'){ selProps.length=0; selLights.length=0; selSpawns=[]; selPickup=-1; gizmoMode='translate'; if(typeof refreshLootMarkers==='function') refreshLootMarkers(); if(typeof renderEditorFields==='function') renderEditorFields(); updateSelectionHighlight(); }
-  else if(picked==='deathzones'){ selProps.length=0; selLights.length=0; selSpawns=[]; selPickup=-1; selLoot=-1; gizmoMode='translate'; if(typeof refreshDeathZoneMarkers==='function') refreshDeathZoneMarkers(); if(typeof renderEditorFields==='function') renderEditorFields(); updateSelectionHighlight(); }
+  else if(picked==='deathzones'){ selProps.length=0; selLights.length=0; selSpawns=[]; selPickup=-1; selLoot=-1; gizmoMode='translate'; editorActive='deathzones'; if(typeof refreshDeathZoneMarkers==='function') refreshDeathZoneMarkers(); if(typeof renderEditorFields==='function') renderEditorFields(); if(typeof updateGizmo==='function') updateGizmo(); updateSelectionHighlight(); }
+  else if(picked==='jumppads'){ selProps.length=0; selLights.length=0; selSpawns=[]; selPickup=-1; selLoot=-1; gizmoMode='translate'; editorActive='jumppads'; if(typeof refreshJumpPadMarkers==='function') refreshJumpPadMarkers(); if(typeof renderEditorFields==='function') renderEditorFields(); if(typeof updateGizmo==='function') updateGizmo(); updateSelectionHighlight(); }
   else if(picked==='props'){
     const obj = propModels[editorTargets.props.idx];
     if(e.shiftKey && obj){
@@ -17890,7 +18000,7 @@ function toggleEditor(){
     if(isTouch){ editorFreeFly=true; flyInit=false; }   // mobile: fly-around editing (joystick moves, drag the left side to look)
     for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible = true; }
     if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(true);
-    if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof refreshDeathZoneMarkers==='function') refreshDeathZoneMarkers(); if(typeof refreshSpawnRegionMarker==='function') refreshSpawnRegionMarker();
+    if(typeof refreshAudioZoneMarkers==='function') refreshAudioZoneMarkers(); if(typeof refreshDeathZoneMarkers==='function') refreshDeathZoneMarkers(); if(typeof refreshJumpPadMarkers==='function') refreshJumpPadMarkers(); if(typeof refreshSpawnRegionMarker==='function') refreshSpawnRegionMarker();
     if(typeof refreshCinePreview==='function') refreshCinePreview();   // show the dotted camera path while editing
     const mm=$('minimap'); if(mm) mm.style.display='none';        // declutter combat HUD while editing
     const wp=$('wavePanel'); if(wp) wp.style.display='none';
@@ -18015,9 +18125,9 @@ function startGame(){
   if(typeof selBoxes!=='undefined' && selBoxes) for(const b of selBoxes) b.visible=false;
   if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false);
   if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setLootMarkersVisible==='function') setLootMarkersVisible(false);
-  if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof setDeathZoneMarkersVisible==='function') setDeathZoneMarkersVisible(false); if(typeof setSpawnRegionMarkerVisible==='function') setSpawnRegionMarkerVisible(false); spawnPolyEdit=false;
+  if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof setDeathZoneMarkersVisible==='function') setDeathZoneMarkersVisible(false); if(typeof setJumpPadMarkersVisible==='function') setJumpPadMarkersVisible(false); if(typeof setSpawnRegionMarkerVisible==='function') setSpawnRegionMarkerVisible(false); spawnPolyEdit=false;
   if(typeof lightModels!=='undefined') for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; }
-  if(typeof _cinePreviewGroup!=='undefined' && _cinePreviewGroup) _cinePreviewGroup.visible=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; { const _fb=document.getElementById('edAddFab'); if(_fb) _fb.style.display='none'; }   // the + lives outside the panel — hide it on this direct-close path too gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof _pathPreviewGroup!=='undefined' && _pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; } if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG; if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setLootMarkersVisible==='function') setLootMarkersVisible(false); if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof setDeathZoneMarkersVisible==='function') setDeathZoneMarkersVisible(false); if(typeof setSpawnRegionMarkerVisible==='function') setSpawnRegionMarkerVisible(false); spawnPolyEdit=false; if(typeof gr!=='undefined' && gr){ gr.translate.visible=gr.scale.visible=gr.rotate.visible=false; } if(typeof selBox!=='undefined' && selBox) selBox.visible=false;
+  if(typeof _cinePreviewGroup!=='undefined' && _cinePreviewGroup) _cinePreviewGroup.visible=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; { const _fb=document.getElementById('edAddFab'); if(_fb) _fb.style.display='none'; }   // the + lives outside the panel — hide it on this direct-close path too gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof _pathPreviewGroup!=='undefined' && _pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; } if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG; if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setLootMarkersVisible==='function') setLootMarkersVisible(false); if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof setDeathZoneMarkersVisible==='function') setDeathZoneMarkersVisible(false); if(typeof setJumpPadMarkersVisible==='function') setJumpPadMarkersVisible(false); if(typeof setSpawnRegionMarkerVisible==='function') setSpawnRegionMarkerVisible(false); spawnPolyEdit=false; if(typeof gr!=='undefined' && gr){ gr.translate.visible=gr.scale.visible=gr.rotate.visible=false; } if(typeof selBox!=='undefined' && selBox) selBox.visible=false;
   camera.fov = (worldCfg && worldCfg.fov) || BASE_FOV; camera.updateProjectionMatrix(); camera.rotation.z = 0;
   // clear entities
   enemies.slice().forEach(e=>{ scene.remove(e.mesh); if(e.mesh.userData.mixer){ const mi=mixers.indexOf(e.mesh.userData.mixer); if(mi>=0) mixers.splice(mi,1); } }); enemies.length=0;
@@ -18157,9 +18267,9 @@ function endGame(){
   if(typeof selBoxes!=='undefined' && selBoxes) for(const b of selBoxes) b.visible=false;
   if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false);
   if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setLootMarkersVisible==='function') setLootMarkersVisible(false);
-  if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof setDeathZoneMarkersVisible==='function') setDeathZoneMarkersVisible(false); if(typeof setSpawnRegionMarkerVisible==='function') setSpawnRegionMarkerVisible(false); spawnPolyEdit=false;
+  if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof setDeathZoneMarkersVisible==='function') setDeathZoneMarkersVisible(false); if(typeof setJumpPadMarkersVisible==='function') setJumpPadMarkersVisible(false); if(typeof setSpawnRegionMarkerVisible==='function') setSpawnRegionMarkerVisible(false); spawnPolyEdit=false;
   if(typeof lightModels!=='undefined') for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; }
-  if(typeof _cinePreviewGroup!=='undefined' && _cinePreviewGroup) _cinePreviewGroup.visible=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; { const _fb=document.getElementById('edAddFab'); if(_fb) _fb.style.display='none'; }   // the + lives outside the panel — hide it on this direct-close path too gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof _pathPreviewGroup!=='undefined' && _pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; } if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG; if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setLootMarkersVisible==='function') setLootMarkersVisible(false); if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof setDeathZoneMarkersVisible==='function') setDeathZoneMarkersVisible(false); if(typeof setSpawnRegionMarkerVisible==='function') setSpawnRegionMarkerVisible(false); spawnPolyEdit=false; if(typeof gr!=='undefined' && gr){ gr.translate.visible=gr.scale.visible=gr.rotate.visible=false; } if(typeof selBox!=='undefined' && selBox) selBox.visible=false;
+  if(typeof _cinePreviewGroup!=='undefined' && _cinePreviewGroup) _cinePreviewGroup.visible=false; if(typeof selBox!=='undefined' && selBox) selBox.visible=false; if(typeof editorEl!=='undefined' && editorEl) editorEl.style.display='none'; { const _fb=document.getElementById('edAddFab'); if(_fb) _fb.style.display='none'; }   // the + lives outside the panel — hide it on this direct-close path too gun.visible=true; if(typeof lightModels!=='undefined'){ for(const g of lightModels){ if(g.userData.marker) g.userData.marker.visible=false; } } if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof _pathPreviewGroup!=='undefined' && _pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; } if(typeof clearPreviewEnemy==='function') clearPreviewEnemy(); if(typeof setSceneWireframe!=='undefined') setSceneWireframe(false); if(typeof editorBrightLight!=='undefined') editorBrightLight.intensity=0; if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false; if(typeof SCENE_FOG!=='undefined') scene.fog=SCENE_FOG; if(typeof setSpawnMarkersVisible==='function') setSpawnMarkersVisible(false); if(typeof setPickupMarkersVisible==='function') setPickupMarkersVisible(false); if(typeof setLootMarkersVisible==='function') setLootMarkersVisible(false); if(typeof setAudioZoneMarkersVisible==='function') setAudioZoneMarkersVisible(false); if(typeof setDeathZoneMarkersVisible==='function') setDeathZoneMarkersVisible(false); if(typeof setJumpPadMarkersVisible==='function') setJumpPadMarkersVisible(false); if(typeof setSpawnRegionMarkerVisible==='function') setSpawnRegionMarkerVisible(false); spawnPolyEdit=false; if(typeof gr!=='undefined' && gr){ gr.translate.visible=gr.scale.visible=gr.rotate.visible=false; } if(typeof selBox!=='undefined' && selBox) selBox.visible=false;
   $('shop').classList.add('hidden');
   $('prompt').style.display='none';
   const ov=$('overlay'); ov.classList.remove('hidden');
