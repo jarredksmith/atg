@@ -9698,6 +9698,7 @@ function updateBots(dt){
   if(dt>0.05) dt=0.05;   // clamp the timestep: a frame hitch must never let a bot teleport across the map
   const D=botDiff(), koth = NET.gameMode==='cp', lim=ARENA-2, spd=SPEED*D.spd;
   for(const b of bots){
+    if(!b._exitInit){ b._exitInit=true; b._exitT=1.5; }   // on its very first appearance, walk out of the (possibly cramped) spawn before hunting
     if(b.dead){
       b.respawnT-=dt;
       if(b._dying && b.mesh){
@@ -9706,12 +9707,13 @@ function updateBots(dt){
         if(b._dieT > fadeStart){ const k=Math.max(0,1-(b._dieT-fadeStart)/0.7); b.mesh.traverse(o=>{ if(o.isMesh && o.material){ const ms=Array.isArray(o.material)?o.material:[o.material]; ms.forEach(m=>{ m.transparent=true; m.opacity=k; }); } }); }
         if(b._dieT >= 2.5){ b.mesh.visible=false; b._dying=false; }
       }
-      if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,(sp.y||0),sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; b.aiState='engage'; b.aiT=0; b.lkp=null; b.lkpFresh=0; b.sawTgt=false; b._stuckT=0; b._dying=false; b._dieT=0;
+      if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,(sp.y||0),sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; b.aiState='engage'; b.aiT=0; b.lkp=null; b.lkpFresh=0; b.sawTgt=false; b._stuckT=0; b._exitT=1.5; b._dying=false; b._dieT=0;
         if(b.mesh){ b.mesh.visible=true; b.mesh.traverse(o=>{ if(o.isMesh && o.material){ const ms=Array.isArray(o.material)?o.material:[o.material]; ms.forEach(m=>{ m.opacity=1; }); } }); b.mesh.position.set(sp.x,(sp.y||0),sp.z); if(typeof setEnemyAnimState==='function') setEnemyAnimState(b.mesh,'idle'); } } continue; }
     b.retargetT-=dt;
     if(b.retargetT<=0 || !_botTargetAlive(b.target)){ b.target=_botAcquire(b); b.retargetT=0.4+Math.random()*0.3; }
     const tgt=b.target;
     b.aiT-=dt;
+    if(b._exitT>0) b._exitT-=dt;
     // ---- perception: can this bot currently SEE its target? track last-known position (lkp) ----
     const hasLOS = !!(tgt && _botLOS(b.pos.x,b.pos.z, tgt.pos.x,tgt.pos.z, b.pos.y));
     const tgtDist = tgt ? Math.hypot(tgt.pos.x-b.pos.x, tgt.pos.z-b.pos.z) : Infinity;
@@ -9737,7 +9739,8 @@ function updateBots(dt){
 
     // ---- destination from state ----
     let destX, destZ, wantFire = hasLOS;
-    if(koth && !cpOwnedBy(b.team)){ destX=CP_POS.x; destZ=CP_POS.z; wantFire=hasLOS; }
+    if(b._exitT>0){ const h=_botHome(); destX=h.x; destZ=h.z; wantFire=hasLOS; }   // just spawned -> clear the spawn area toward open ground, but still shoot anyone it sees
+    else if(koth && !cpOwnedBy(b.team)){ destX=CP_POS.x; destZ=CP_POS.z; wantFire=hasLOS; }
     else if(b.aiState==='retreat' && tgt){
       destX = b.pos.x - (tgt.pos.x-b.pos.x); destZ = b.pos.z - (tgt.pos.z-b.pos.z);   // move directly away
       destX=Math.max(-lim,Math.min(lim,destX)); destZ=Math.max(-lim,Math.min(lim,destZ));
@@ -9759,7 +9762,7 @@ function updateBots(dt){
     // (The spawn region is a spawn-only filter, never a movement cage: a bot's destination is left alone so
     // it can pursue/roam anywhere on the map. The arena walls + props are the only boundary.)
     let dx=destX-b.pos.x, dz=destZ-b.pos.z; const dist=Math.hypot(dx,dz)||1; let mvx,mvz;
-    if(b.aiState==='engage' && tgt && hasLOS && dist<Math.max(9,b.prefRange+3) && !(koth && !cpOwnedBy(b.team))){
+    if(!(b._exitT>0) && b.aiState==='engage' && tgt && hasLOS && dist<Math.max(9,b.prefRange+3) && !(koth && !cpOwnedBy(b.team))){
       const radial = dist < b.prefRange-1 ? -0.5 : (dist > b.prefRange+1 ? 0.5 : 0);
       mvx=((-dz/dist)*b.strafe) + (dx/dist)*radial; mvz=((dx/dist)*b.strafe) + (dz/dist)*radial;
       const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml;
@@ -9771,11 +9774,11 @@ function updateBots(dt){
       for(const other of bots){ if(other===b || other.dead) continue;
         const ddx=b.pos.x-other.pos.x, ddz=b.pos.z-other.pos.z, d2=ddx*ddx+ddz*ddz;
         if(d2 < 4.0){   // within ~2.0m
-          if(d2 > 1e-4){ const d=Math.sqrt(d2), w=(2.0-d)/2.0; sx+=(ddx/d)*w; sz+=(ddz/d)*w; near++; }
-          else { const a=Math.random()*Math.PI*2; sx+=Math.cos(a); sz+=Math.sin(a); near++; }   // EXACTLY stacked -> shove apart in a random dir (else they freeze together)
+          if(d2 > 1e-4){ const d=Math.sqrt(d2), w=(d<1.2)?(1.5*(1.2-d)+0.2):(0.18*(2.0-d)); sx+=(ddx/d)*w; sz+=(ddz/d)*w; near++; }   // firm push when overlapping (<1.2m), gentle when merely close
+          else { const a=Math.random()*Math.PI*2; sx+=Math.cos(a)*1.5; sz+=Math.sin(a)*1.5; near++; }   // EXACTLY stacked -> hard random shove apart
         }
       }
-      if(near){ let sl=Math.hypot(sx,sz); if(sl>1){ sx/=sl; sz/=sl; } mvx += sx*0.85; mvz += sz*0.85; const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml; }   // a gentle declump nudge that never overpowers the drive, so a crowded spawn can't fling bots into the walls
+      if(near){ let sl=Math.hypot(sx,sz); const cap=1.3; if(sl>cap){ sx=sx/sl*cap; sz=sz/sl*cap; } mvx += sx; mvz += sz; const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml; }   // strong enough to un-pile, capped so it can't fling a packed spawn into the walls
     }
     const ox=b.pos.x, oz=b.pos.z;
     if(b.grounded!==false){   // walk only with feet on a surface; while airborne, momentum carries it
@@ -9796,7 +9799,7 @@ function updateBots(dt){
       const moved=Math.hypot(b.pos.x-ox, b.pos.z-oz);
       if(moved < step*0.25){ b._stuckT=(b._stuckT||0)+dt; } else { b._stuckT=0; b._stuckSide=0; }   // accrue stuck time when barely moving; clear the wall-follow side once it's moving again
       if(b._stuckT>3.5 && typeof randomSpawn==='function'){   // wall-following failed for a long time -> hop to a fresh open spawn rather than stay frozen
-        const sp=randomSpawn(); b.pos.set(sp.x,(sp.y||0),sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b._stuckT=0; b._wander=null; b.aiState='engage'; b.aiT=0;
+        const sp=randomSpawn(); b.pos.set(sp.x,(sp.y||0),sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b._stuckT=0; b._stuckSide=0; b._wander=null; b.aiState='engage'; b.aiT=0; b._exitT=1.5;
         if(b.mesh) b.mesh.position.set(sp.x,(sp.y||0),sp.z);
       }
     }
@@ -9806,8 +9809,7 @@ function updateBots(dt){
       const kd=Math.max(0, 1-((b.grounded?6:0.6))*dt); b.evx*=kd; b.evz*=kd;
       if(Math.abs(b.evx)<0.05) b.evx=0; if(Math.abs(b.evz)<0.05) b.evz=0;
     }
-    { const top=(typeof surfaceTopAt==='function')?surfaceTopAt(b.pos.x,b.pos.z):-Infinity;   // gravity + land on the floor or a prop top under the feet
-      const _bg=terrainHeightAt(b.pos.x,b.pos.z); const groundY=(top>-Infinity && top<=b.pos.y+STEP)?Math.max(_bg,top):_bg;
+    { const groundY=(typeof groundHeightAt==='function')?groundHeightAt(b.pos.x,b.pos.z,b.pos.y):terrainHeightAt(b.pos.x,b.pos.z);   // land/stand with the SAME walkable-floor + ramp logic as the player (RAMP_RISE), so bots can stand & climb anywhere the player can — fixes bots dropping off a model's floor onto the terrain underneath and getting trapped
       if(b.pos.y>groundY+0.04 || (b.vy||0)>0){ b.vy=(b.vy||0)-GRAV*dt; b.pos.y+=b.vy*dt; if(b.vy<=0 && b.pos.y<=groundY){ const _imp=-(b.vy||0); b.pos.y=groundY; b.vy=0; b.grounded=true; if(gameCfg.fallDamage && gameCfg.fallDamage.on && gameCfg.fallDamage.ai && !b.dead){ const dmg=_fallDamageFor(_imp); if(dmg>0.5){ b.hp-=dmg; if(b.hp<=0) botDie(b); } } } else b.grounded=false; }
       else { b.pos.y=groundY; b.vy=0; b.grounded=true; }
     }
@@ -11751,7 +11753,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 461 · 2026-06-12';
+const BUILD_VERSION = 'build 463 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
