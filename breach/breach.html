@@ -7583,6 +7583,14 @@ let gameCfg = {
     minSpeed:(savedLevel && savedLevel.game && savedLevel.game.fallDamage && savedLevel.game.fallDamage.minSpeed!=null) ? +savedLevel.game.fallDamage.minSpeed : 24,   // safe landing speed; no damage below this
     perUnit: (savedLevel && savedLevel.game && savedLevel.game.fallDamage && savedLevel.game.fallDamage.perUnit!=null) ? +savedLevel.game.fallDamage.perUnit : 1.4,   // damage per (units/s) above the safe speed
   },
+  // Crushing props: a moving physics/animated prop (e.g. a falling box) that hits an actor deals damage. Off by default.
+  crushDamage: {
+    on:      !!(savedLevel && savedLevel.game && savedLevel.game.crushDamage && savedLevel.game.crushDamage.on),
+    player:  (savedLevel && savedLevel.game && savedLevel.game.crushDamage && savedLevel.game.crushDamage.player!=null) ? !!savedLevel.game.crushDamage.player : true,
+    ai:      (savedLevel && savedLevel.game && savedLevel.game.crushDamage && savedLevel.game.crushDamage.ai!=null) ? !!savedLevel.game.crushDamage.ai : true,
+    minSpeed:(savedLevel && savedLevel.game && savedLevel.game.crushDamage && savedLevel.game.crushDamage.minSpeed!=null) ? +savedLevel.game.crushDamage.minSpeed : 7,   // prop must be moving this fast to hurt
+    perUnit: (savedLevel && savedLevel.game && savedLevel.game.crushDamage && savedLevel.game.crushDamage.perUnit!=null) ? +savedLevel.game.crushDamage.perUnit : 2.2,   // damage per (units/s) above the threshold
+  },
 };
 
 // ---------- Player start (where you/co-op players spawn each run; authored in-editor) ----------
@@ -9096,6 +9104,54 @@ function _fallDamageFor(impactSpeed){
   if(!fd || !fd.on) return 0;
   const over = impactSpeed - (+fd.minSpeed||0);
   return over > 0 ? over * (+fd.perUnit||0) : 0;
+}
+// Crush damage: a fast-moving prop overlapping an actor deals damage scaled by the prop's speed.
+function _crushDamageFor(speed){
+  const cd = (typeof gameCfg!=='undefined') && gameCfg.crushDamage;
+  if(!cd || !cd.on) return 0;
+  const over = speed - (+cd.minSpeed||0);
+  return over > 0 ? over * (+cd.perUnit||0) : 0;
+}
+// Does this prop's current world AABB overlap an actor's body cylinder (feet at fy, height h, radius r)?
+function _propBoxHitsActor(box, ax, fy, az, h, r){
+  return ax >= box.min.x - r && ax <= box.max.x + r &&
+         az >= box.min.z - r && az <= box.max.z + r &&
+         box.min.y <= fy + h && box.max.y >= fy;
+}
+const _CRUSH_TMP_BOX = (typeof THREE!=='undefined') ? new THREE.Box3() : null;
+// Apply crush from one moving prop (speed = its current speed) to whatever it overlaps. Per-prop cooldown so a
+// single slam deals one hit, not one per physics substep.
+// Once per frame: any prop that moved fast since last frame can crush actors it overlaps. Tracking the world
+// position delta covers dynamic (physics), kinematic (moving-platform), and purely-animated props uniformly.
+function crushPass(dt){
+  const cd = (typeof gameCfg!=='undefined') && gameCfg.crushDamage;
+  if(!cd || !cd.on || !gameOn || (typeof editorOpen!=='undefined' && editorOpen) || !(dt>0)) return;
+  if(typeof propModels==='undefined') return;
+  const minSp = +cd.minSpeed||0;
+  for(const o of propModels){
+    if(!o) continue;
+    const pp = o.userData._cpp;
+    o.userData._cpp = { x:o.position.x, y:o.position.y, z:o.position.z };
+    if(!pp) continue;   // first frame seen — establish a baseline, no velocity yet
+    if(o === (typeof heldProp!=='undefined' ? heldProp : null)) continue;   // a prop you're carrying doesn't crush
+    const sp = Math.hypot(o.position.x-pp.x, o.position.y-pp.y, o.position.z-pp.z) / dt;
+    if(sp < minSp){ if(o.userData._crushT) o.userData._crushT = Math.max(0, o.userData._crushT - dt); continue; }
+    _applyCrushFromProp(o, sp, dt);
+  }
+}
+function _applyCrushFromProp(obj, speed, dt){
+  const cd = gameCfg.crushDamage; if(!cd || !cd.on) return;
+  const dmg = _crushDamageFor(speed); if(dmg <= 0.5) return;
+  obj.userData._crushT = Math.max(0, (obj.userData._crushT||0) - dt);
+  if(obj.userData._crushT > 0) return;
+  const box = _CRUSH_TMP_BOX.setFromObject(obj);
+  let hit = false;
+  if(cd.player && gameOn && (player.hp==null || player.hp>0) && _propBoxHitsActor(box, player.pos.x, player.pos.y, player.pos.z, EYE, 0.4)){ applyEnemyDamageToSelf(dmg); hit = true; }
+  if(cd.ai){
+    if(typeof bots!=='undefined'){ for(const b of bots){ if(b.dead) continue; if(_propBoxHitsActor(box, b.pos.x, b.pos.y, b.pos.z, 1.7, 0.4)){ b.hp-=dmg; if(b.hp<=0) botDie(b); hit = true; } } }
+    if(typeof enemies!=='undefined'){ for(const en of enemies){ if(!en || en.hp<=0 || !en.mesh) continue; const ep=en.mesh.position; if(_propBoxHitsActor(box, ep.x, ep.y, ep.z, 1.7, 0.4)){ en.hp-=dmg; if(en.hp<=0) killEnemy(en); hit = true; } } }
+  }
+  if(hit) obj.userData._crushT = 0.5;   // brief immunity so one crush = one hit
 }
 function applyEnemyDamageToSelf(dmg, sx, sz){
   if(buffs.shield>0){ const a=Math.min(buffs.shield,dmg); buffs.shield-=a; dmg-=a; }
@@ -11244,7 +11300,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 442 · 2026-06-12';
+const BUILD_VERSION = 'build 443 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13919,7 +13975,7 @@ function loop(){
   }
 
   // physics: host/solo simulate dynamic props; clients receive their transforms via the snapshot.
-  { const _a=perfOn?_pnow():0; if(!editorOpen){ if(NET.mode!=='client'){ updatePhysics(dt); updateThrownDamage(dt); } else if(playerPhysMode && playerBody && physWorld){ stepClientPlayerPhys(dt); } } if(perfOn)_prof.phys+=_pnow()-_a; }
+  { const _a=perfOn?_pnow():0; if(!editorOpen){ if(NET.mode!=='client'){ updatePhysics(dt); updateThrownDamage(dt); crushPass(dt); } else if(playerPhysMode && playerBody && physWorld){ stepClientPlayerPhys(dt); } } if(perfOn)_prof.phys+=_pnow()-_a; }
   if(typeof updateFragments==='function') updateFragments();   // advance/cleanup destruction debris
   updateLightBudget();
 
@@ -14563,7 +14619,7 @@ function serializeLevel(){
     roster: charRoster.map(c=>({ name:c.name, url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, thumb:c.thumb||'', clips:Object.assign({},c.clips||{}), clipSpeed:Object.assign({},c.clipSpeed||{}), clipHold:Object.assign({},c.clipHold||{}) })),
     pickupModels: Object.keys(pickupModels).reduce((a,k)=>{ const m=pickupModels[k]; if(m&&m.url){ a[k]={ url:m.url, scale:m.scale||1 }; } return a; }, {}),
     keyNames: Object.keys(keyNames).reduce((a,k)=>{ const n=(keyNames[k]||'').trim(); if(n) a[k]=n; return a; }, {}),
-    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave, noRespawn: !!gameCfg.noRespawn, spawnRegion: { on: !!gameCfg.spawnRegion.on, shape: gameCfg.spawnRegion.shape||'circle', x: +gameCfg.spawnRegion.x, z: +gameCfg.spawnRegion.z, r: +gameCfg.spawnRegion.r, poly: (gameCfg.spawnRegion.poly||[]).map(p=>({ x:+p.x, z:+p.z })) } , fallDamage: { on: !!gameCfg.fallDamage.on, player: gameCfg.fallDamage.player!==false, ai: gameCfg.fallDamage.ai!==false, minSpeed: +gameCfg.fallDamage.minSpeed, perUnit: +gameCfg.fallDamage.perUnit } },
+    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave, noRespawn: !!gameCfg.noRespawn, spawnRegion: { on: !!gameCfg.spawnRegion.on, shape: gameCfg.spawnRegion.shape||'circle', x: +gameCfg.spawnRegion.x, z: +gameCfg.spawnRegion.z, r: +gameCfg.spawnRegion.r, poly: (gameCfg.spawnRegion.poly||[]).map(p=>({ x:+p.x, z:+p.z })) } , fallDamage: { on: !!gameCfg.fallDamage.on, player: gameCfg.fallDamage.player!==false, ai: gameCfg.fallDamage.ai!==false, minSpeed: +gameCfg.fallDamage.minSpeed, perUnit: +gameCfg.fallDamage.perUnit }, crushDamage: { on: !!gameCfg.crushDamage.on, player: gameCfg.crushDamage.player!==false, ai: gameCfg.crushDamage.ai!==false, minSpeed: +gameCfg.crushDamage.minSpeed, perUnit: +gameCfg.crushDamage.perUnit } },
     dmgNum:  { on: dmgNumCfg.on !== false, size: dmgNumCfg.size, hit: dmgNumCfg.hitColor, kill: dmgNumCfg.killColor },
     pstart:  { x: playerSpawn.x, y: playerSpawn.y||0, z: playerSpawn.z, yaw: playerSpawn.yaw },
     extract: extractSpot ? { x: +extractSpot.x.toFixed(3), z: +extractSpot.z.toFixed(3) } : null,
@@ -15849,6 +15905,27 @@ function renderEditorFields(){
       };
       fdNum('Safe speed', ()=>gameCfg.fallDamage.minSpeed, v=>gameCfg.fallDamage.minSpeed=v, 0, 80, 1, 'Landings slower than this do no damage (higher = more forgiving).');
       fdNum('Damage', ()=>gameCfg.fallDamage.perUnit, v=>gameCfg.fallDamage.perUnit=v, 0, 8, 0.1, 'Damage dealt per unit of speed above the safe speed.');
+    }
+    // ---- Crushing props ----
+    if(!gameCfg.crushDamage) gameCfg.crushDamage = { on:false, player:true, ai:true, minSpeed:7, perUnit:2.2 };
+    hint(gHost, '<b>Crushing props</b> — a moving prop (e.g. a falling box) that hits someone deals damage', '10px 0 4px');
+    fdToggle('<b>Enable crush damage</b>', ()=>gameCfg.crushDamage.on, v=>gameCfg.crushDamage.on=v);
+    if(gameCfg.crushDamage.on){
+      fdToggle('Affects the player', ()=>gameCfg.crushDamage.player, v=>gameCfg.crushDamage.player=v);
+      fdToggle('Affects enemies / bots', ()=>gameCfg.crushDamage.ai, v=>gameCfg.crushDamage.ai=v);
+      const cdNum=(label, get, set, min, max, step, hintTxt)=>{
+        const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;';
+        const s=document.createElement('span'); s.textContent=label; s.style.minWidth='92px';
+        const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=get(); rng.style.cssText='flex:1;accent-color:#38f5b5;';
+        const nm=document.createElement('input'); nm.type='number'; nm.step=step; nm.value=+(+get()).toFixed(2); nm.style.cssText='width:60px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+        const ap=(v)=>{ let n=parseFloat(v); if(!isFinite(n)) n=min; n=Math.max(min,Math.min(max,n)); set(n); rng.value=n; nm.value=+n.toFixed(2); };
+        rng.addEventListener('mousedown',()=>pushUndoSnapshot()); nm.addEventListener('focus',()=>pushUndoSnapshot());
+        rng.oninput=()=>ap(rng.value); nm.onchange=()=>ap(nm.value);
+        row.appendChild(s); row.appendChild(rng); row.appendChild(nm); gHost.appendChild(row);
+        if(hintTxt) hint(gHost, hintTxt, '0 0 4px');
+      };
+      cdNum('Min speed', ()=>gameCfg.crushDamage.minSpeed, v=>gameCfg.crushDamage.minSpeed=v, 0, 40, 0.5, 'How fast a prop must be moving to deal crush damage.');
+      cdNum('Damage', ()=>gameCfg.crushDamage.perUnit, v=>gameCfg.crushDamage.perUnit=v, 0, 12, 0.1, 'Damage per unit of prop speed above the minimum.');
     }
     hint(gHost, '', '3px 0 6px').textContent = (objectiveActive()==='survival')
       ? 'Survival: hostiles spawn endlessly — outlast the countdown to win.'
