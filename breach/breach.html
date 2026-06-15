@@ -8694,7 +8694,7 @@ function setPickupMarkersVisible(v){ for(const m of pickupMarkers) m.visible=v; 
 // ---- Placed loot-box editor markers (mirror of pickup markers) ----
 let lootMarkers = [];
 function refreshLootMarkers(){ for(const m of lootMarkers){ scene.remove(m); } lootMarkers.length=0;
-  for(let i=0;i<lootSpots.length;i++){ const sp=lootSpots[i]; const g=buildChestMesh(sp.x, sp.z); g.position.y=_maxTerrainOver(sp.x,sp.z,0); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.lootMarker=true;
+  for(let i=0;i<lootSpots.length;i++){ const sp=lootSpots[i]; const g=buildChestMesh(sp.x, sp.z, { y:sp.y, glowColor:sp.glowColor, glowI:sp.glowI }); g.position.y=_maxTerrainOver(sp.x,sp.z,0)+(+sp.y||0); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.lootMarker=true;
     if(i===selLoot){ g.scale.multiplyScalar(1.12); g.traverse(o=>{ if(o.isMesh && o.material){ try{ o.material=o.material.clone(); o.material.emissive && o.material.emissive.setHex(0x38f5b5); o.material.emissiveIntensity=0.6; }catch(e){} } }); }
     scene.add(g); lootMarkers.push(g); } }
 function setLootMarkersVisible(v){ for(const m of lootMarkers) m.visible=v; }
@@ -9521,7 +9521,7 @@ function loadLevelFromNet(level){
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns) buildSpawnMarker(sp); } setSpawnMarkersVisible(editorOpen);
   pickupsOn = (level.pickupsOn !== false);
   pickupSpots = Array.isArray(level.pickups) ? level.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : [];
-  lootSpots = Array.isArray(level.loot) ? level.loot.map(s=>({ x:+s.x||0, z:+s.z||0, items:Array.isArray(s.items)?s.items.slice():[] })) : [];
+  lootSpots = Array.isArray(level.loot) ? level.loot.map(s=>({ x:+s.x||0, y:(s.y!=null?+s.y:0), z:+s.z||0, items:Array.isArray(s.items)?s.items.slice():[], glowColor:(s.glowColor!=null?+s.glowColor:0xffd166), glowI:(s.glowI!=null?+s.glowI:8) })) : [];
   if(typeof refreshLootMarkers==='function') refreshLootMarkers(); pickupModels = (level.pickupModels && typeof level.pickupModels==='object') ? JSON.parse(JSON.stringify(level.pickupModels)) : {}; keyNames = (level.keyNames && typeof level.keyNames==='object') ? JSON.parse(JSON.stringify(level.keyNames)) : {}; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
   if(level.world){ worldCfg = Object.assign({}, DEFAULT_WORLD, level.world); _skyHdriUrl = null; applyWorldCfg(); }   // adopt the host's sky / ground / fog (reset the sky guard so each level's sky re-applies cleanly, even mid-campaign)
   if(level.audio && NET.mode!=='client'){ try{ audioSettings.musicUrl=(typeof level.audio.musicUrl==='string')?level.audio.musicUrl:''; audioSettings.sounds=_sanitizeSounds(level.audio.sounds); if(typeof saveAudioSettings==='function') saveAudioSettings(); if(typeof preloadCustomSounds==='function') preloadCustomSounds(); if(_musicOn){ stopMusic(); startMusic(); } }catch(e){ console.warn('level audio apply failed', e); } }
@@ -10606,10 +10606,21 @@ function updateGrenades(dt){
   for(let i=grenades.length-1;i>=0;i--){
     const g = grenades[i];
     g.fuse -= dt; g.vel.y -= 30*dt;
+    const _ppx=g.mesh.position.x, _ppy=g.mesh.position.y, _ppz=g.mesh.position.z;
     g.mesh.position.addScaledVector(g.vel, dt);
-    // bounce off floor
-    const _gy = terrainHeightAt(g.mesh.position.x, g.mesh.position.z) + 0.22;
-    if(g.mesh.position.y < _gy){ g.mesh.position.y=_gy; g.vel.y*=-0.4; g.vel.x*=0.7; g.vel.z*=0.7; }   // bounce off the terrain, not a flat floor
+    // bounce off the floor / any surface beneath (terrain OR a prop top like the arena floor), not a flat plane
+    const _terr = terrainHeightAt(g.mesh.position.x, g.mesh.position.z);
+    const _surf = (typeof surfaceTopAt==='function') ? surfaceTopAt(g.mesh.position.x, g.mesh.position.z) : -Infinity;
+    const _floor = Math.max(_terr, (_surf>-Infinity && _surf<=_ppy+0.3)?_surf:-Infinity) + 0.22;   // only count a surface at/below where it was (don't snap up through a wall)
+    if(g.mesh.position.y < _floor){ g.mesh.position.y=_floor; g.vel.y*=-0.4; g.vel.x*=0.7; g.vel.z*=0.7; }
+    // bounce off solid walls/props: if it moved into solid geometry, undo the step and reflect horizontally
+    if(typeof insideSolid==='function' && insideSolid(g.mesh.position.x, g.mesh.position.z, g.mesh.position.y-0.22)){
+      g.mesh.position.set(_ppx, g.mesh.position.y, _ppz);   // back out of the wall
+      // reflect on whichever axis is now blocked so it ricochets instead of passing through
+      if(insideSolid(_ppx+g.vel.x*dt, _ppz, g.mesh.position.y-0.22)) g.vel.x*=-0.5;
+      if(insideSolid(_ppx, _ppz+g.vel.z*dt, g.mesh.position.y-0.22)) g.vel.z*=-0.5;
+      g.vel.x*=0.85; g.vel.z*=0.85;
+    }   // bounce off the terrain, not a flat floor
     g.mesh.rotation.x += dt*8; g.mesh.rotation.y += dt*6;
     if(g.fuse<=0){ explodeGrenade(g); grenades.splice(i,1); }
   }
@@ -10656,7 +10667,7 @@ function updateRockets(dt){
     const rk=rockets[i]; rk.mesh.position.addScaledVector(rk.vel, dt); const p=rk.mesh.position;
     rk.trailT-=dt; if(rk.trailT<=0){ rk.trailT=0.03; spark(p, 0xff9a3a); }
     let impact=(now-rk.born>rk.life) || p.y <= terrainHeightAt(p.x,p.z)+0.18;   // ground-detonate on the terrain, not a flat plane
-    if(!impact){ for(const c of colliders){ const b=c.userData && c.userData.box; if(!b) continue; if(p.x>=b.min.x&&p.x<=b.max.x&&p.y>=b.min.y&&p.y<=b.max.y&&p.z>=b.min.z&&p.z<=b.max.z){ impact=true; break; } } }
+    if(!impact){ for(const c of colliders){ const bs=(c.userData && (c.userData.boxes || (c.userData.box && [c.userData.box]))); if(!bs) continue; for(const b of bs){ if(p.x>=b.min.x&&p.x<=b.max.x&&p.y>=b.min.y&&p.y<=b.max.y&&p.z>=b.min.z&&p.z<=b.max.z){ impact=true; break; } } if(impact) break; } }   // use the per-mesh boxes so a rocket inside a hollow arena prop only detonates on real walls/floor, not its overall bounding volume
     if(!impact){
       if(!pvpMode()){ for(const en of enemies){ if(en.mesh && en.mesh.position.distanceTo(p)<1.0){ impact=true; break; } } }
       else {
@@ -10743,7 +10754,7 @@ function swapStationModel(url){ stationModelUrl = url; loadStationModel(); }
 const chests = [];
 // PLACED loot boxes: authored positions with chosen contents, like pickups. Empty contents = 3 random items
 // (the classic behavior). Stored as { x, z, items:[itemId,...] }. The random timer spawn still runs alongside.
-let lootSpots = (savedLevel && Array.isArray(savedLevel.loot)) ? savedLevel.loot.map(s=>({ x:+s.x||0, z:+s.z||0, items:Array.isArray(s.items)?s.items.slice():[] })) : [];
+let lootSpots = (savedLevel && Array.isArray(savedLevel.loot)) ? savedLevel.loot.map(s=>({ x:+s.x||0, y:(s.y!=null?+s.y:0), z:+s.z||0, items:Array.isArray(s.items)?s.items.slice():[], glowColor:(s.glowColor!=null?+s.glowColor:0xffd166), glowI:(s.glowI!=null?+s.glowI:8) })) : [];
 let selLoot = -1;
 const ITEM_POOL = [
   { id:'medkit',  name:'MEDKIT',        desc:'Restore 50 integrity',        cost:60,  act:applyHealth },
@@ -10779,10 +10790,12 @@ function buildProceduralChest(){
 let nextChestId = 1;
 // Build the visual container for a loot crate (model or procedural) at (x,z). Shared by the host's
 // spawnChest and the client's snapshot upsert so both render identically.
-function buildChestMesh(px, pz){
+function buildChestMesh(px, pz, opts){
+  const o = opts || {};
   const mesh = new THREE.Group();
-  mesh.position.set(px, 0.7, pz);
-  const beam = new THREE.PointLight(0xffd166, 8, 16); beam.position.y=3; mesh.add(beam);
+  mesh.position.set(px, 0.7 + (+o.y||0), pz);
+  const beam = new THREE.PointLight((o.glowColor!=null?+o.glowColor:0xffd166), (o.glowI!=null?+o.glowI:8), 16); beam.position.y=3; mesh.add(beam);
+  mesh.userData.beam = beam;
   if(chestModelUrl){
     loadGLTFCached(chestModelUrl,
       (gltf)=>{
@@ -10811,7 +10824,7 @@ function _rollLootItems(n){
 function spawnPlacedLoot(){
   if(typeof isClient!=='undefined' && isClient) return;   // host/solo authoritative; clients receive via snapshot
   for(const sp of lootSpots){
-    const mesh = buildChestMesh(sp.x, sp.z);
+    const mesh = buildChestMesh(sp.x, sp.z, { y:sp.y, glowColor:sp.glowColor, glowI:sp.glowI });
     const items = (sp.items && sp.items.length)
       ? sp.items.map(id=>ITEM_POOL.find(it=>it.id===id)).filter(Boolean)
       : _rollLootItems(3);
@@ -11199,7 +11212,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 434 · 2026-06-12';
+const BUILD_VERSION = 'build 436 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14478,7 +14491,7 @@ function serializeLevel(){
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
     pickupsOn: pickupsOn,
     pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind })),
-    loot: lootSpots.map(s=>({ x:+s.x, z:+s.z, items:(s.items||[]).slice() })),
+    loot: lootSpots.map(s=>({ x:+s.x, y:+(s.y||0), z:+s.z, items:(s.items||[]).slice(), glowColor:(s.glowColor!=null?+s.glowColor:0xffd166), glowI:(s.glowI!=null?+s.glowI:8) })),
     extractFx: { color: extractFxCfg.color, opacity: extractFxCfg.opacity, height: extractFxCfg.height, pillar: extractFxCfg.pillar },
     audioZones: audioZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, url:z.url||'', vol:+z.vol, loop:!!z.loop })),
     deathZones: deathZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:3) })),
@@ -15949,6 +15962,26 @@ function renderEditorFields(){
       const del=document.createElement('button'); del.textContent='✕'; del.style.cssText='font-size:10px;padding:2px 8px;'; del.onclick=()=>removeLootSpot(li);
       const right=document.createElement('div'); right.style.cssText='display:flex;gap:4px;'; right.appendChild(sel); right.appendChild(del);
       hd.appendChild(tt); hd.appendChild(right); box.appendChild(hd);
+      // position (x/y/z) + emission (color/intensity)
+      const lootNum=(label,get,set,min,max,step)=>{
+        const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:11px;margin:2px 0;';
+        const s=document.createElement('span'); s.textContent=label; s.style.minWidth='58px';
+        const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=get(); rng.style.cssText='flex:1;accent-color:#38f5b5;';
+        const nm=document.createElement('input'); nm.type='number'; nm.step=step; nm.value=+(+get()).toFixed(2); nm.style.cssText='width:56px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:11px;';
+        const ap=(v)=>{ let n=parseFloat(v); if(!isFinite(n)) n=0; set(n); rng.value=n; nm.value=+(+n).toFixed(2); refreshLootMarkers(); };
+        rng.addEventListener('mousedown',()=>pushUndoSnapshot()); nm.addEventListener('focus',()=>pushUndoSnapshot());
+        rng.oninput=()=>ap(rng.value); nm.onchange=()=>ap(nm.value);
+        row.appendChild(s); row.appendChild(rng); row.appendChild(nm); box.appendChild(row);
+      };
+      lootNum('Pos X', ()=>sp.x, v=>sp.x=v, -200, 200, 0.5);
+      lootNum('Height', ()=>(sp.y||0), v=>sp.y=v, -10, 30, 0.1);
+      lootNum('Pos Z', ()=>sp.z, v=>sp.z=v, -200, 200, 0.5);
+      const emRow=document.createElement('label'); emRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:11px;margin:2px 0;';
+      const emS=document.createElement('span'); emS.textContent='Emission'; emS.style.minWidth='58px';
+      const emC=document.createElement('input'); emC.type='color'; emC.value='#'+(('000000'+(sp.glowColor!=null?sp.glowColor:0xffd166).toString(16)).slice(-6)); emC.style.cssText='width:34px;height:24px;border:none;background:none;cursor:pointer;flex:none;';
+      emC.oninput=()=>{ pushUndoSnapshot(); sp.glowColor=parseInt(emC.value.slice(1),16)||0; refreshLootMarkers(); };
+      emRow.appendChild(emS); emRow.appendChild(emC); box.appendChild(emRow);
+      lootNum('Intensity', ()=>(sp.glowI!=null?sp.glowI:8), v=>sp.glowI=Math.max(0,v), 0, 30, 0.5);
       const cap=document.createElement('div'); cap.className='hint'; cap.style.cssText='font-size:10px;opacity:0.75;margin-bottom:4px;'; cap.textContent=(sp.items&&sp.items.length)?('Contains: '+sp.items.length+' chosen item(s)'):'Contains: 3 random items (none chosen)'; box.appendChild(cap);
       const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:1fr 1fr;gap:3px;';
       ITEM_POOL.forEach(it=>{
