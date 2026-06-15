@@ -9174,8 +9174,8 @@ function _polyCentroid(poly){ let x=0,z=0; for(const p of poly){ x+=p.x; z+=p.z;
 // center (where the play space is) — NOT the arena origin (CP_POS), which may be outside the region and walled
 // off, causing every targetless bot to grind into the perimeter rocks.
 function _botHome(){
-  const sr = (gameCfg && gameCfg.spawnRegion && gameCfg.spawnRegion.on) ? gameCfg.spawnRegion : null;
-  if(sr){ if(sr.shape==='poly' && sr.poly && sr.poly.length>=3){ const c=_polyCentroid(sr.poly); return { x:c.x, z:c.z }; } return { x:+sr.x||0, z:+sr.z||0 }; }
+  // Where a target-less bot heads: the arena objective/center. The spawn region only controls where bots
+  // START — it is NOT a movement boundary — so home is the map center, leaving them free to roam.
   return { x:CP_POS.x, z:CP_POS.z };
 }
 // Clamp a wander target to stay inside the confined spawn region (so searching bots don't drift into walls
@@ -9463,14 +9463,13 @@ function updateBots(dt){
       wantFire=false;   // can't see it; don't fire blind
     }
     else if(b.aiState==='search'){
-      if(!b._wander || b.aiT<=0){ const w=_clampToRegion(b.pos.x+(Math.random()*2-1)*16, b.pos.z+(Math.random()*2-1)*16); b._wander={ x:w.x, z:w.z }; }
+      if(!b._wander || b.aiT<=0){ b._wander={ x:b.pos.x+(Math.random()*2-1)*16, z:b.pos.z+(Math.random()*2-1)*16 }; }
       destX=Math.max(-lim,Math.min(lim,b._wander.x)); destZ=Math.max(-lim,Math.min(lim,b._wander.z)); wantFire=false;
     }
     else if(tgt){ destX=tgt.pos.x; destZ=tgt.pos.z; }   // engage
     else { const h=_botHome(); destX=h.x; destZ=h.z; }   // no target -> head to the play space (region center, not arena origin)
-    // Confined to a region? Pull the destination back inside it, so no AI state can steer a bot out toward a
-    // walled-off point (the off-center arena origin, a target/last-seen spot behind a wall, etc.).
-    if(gameCfg && gameCfg.spawnRegion && gameCfg.spawnRegion.on){ const cc=_clampToRegion(destX,destZ); destX=cc.x; destZ=cc.z; }
+    // (The spawn region is a spawn-only filter, never a movement cage: a bot's destination is left alone so
+    // it can pursue/roam anywhere on the map. The arena walls + props are the only boundary.)
     let dx=destX-b.pos.x, dz=destZ-b.pos.z; const dist=Math.hypot(dx,dz)||1; let mvx,mvz;
     if(b.aiState==='engage' && tgt && hasLOS && dist<Math.max(9,b.prefRange+3) && !(koth && !cpOwnedBy(b.team))){
       const radial = dist < b.prefRange-1 ? -0.5 : (dist > b.prefRange+1 ? 0.5 : 0);
@@ -9490,18 +9489,16 @@ function updateBots(dt){
     const ox=b.pos.x, oz=b.pos.z;
     if(b.grounded!==false){   // walk only with feet on a surface; while airborne, momentum carries it
       // stuck recovery: if we've been blocked a while, steer perpendicular for a moment to get around it
-      if(b._stuckT>0.6){ const px=-mvz, pz=mvx; mvx=(mvx+px*1.4); mvz=(mvz+pz*1.4); const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml; if(b._stuckT>1.4){ b._stuckT=0; b.strafe*=-1; if(gameCfg && gameCfg.spawnRegion && gameCfg.spawnRegion.on){ const h=_botHome(); const hx=h.x-b.pos.x, hz=h.z-b.pos.z, hl=Math.hypot(hx,hz)||1; mvx=hx/hl; mvz=hz/hl; } } }   // jammed too long -> head back toward the play space
+      if(b._stuckT>0.6){ const px=-mvz, pz=mvx; mvx=(mvx+px*1.4); mvz=(mvz+pz*1.4); const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml; if(b._stuckT>1.4){ b._stuckT=0; b.strafe*=-1; } }   // jammed too long -> flip strafe and let it re-route
       const step=spd*dt;
       const cx=Math.max(-lim,Math.min(lim, b.pos.x+mvx*step)), cz=Math.max(-lim,Math.min(lim, b.pos.z+mvz*step));
-      // Keep bots inside the spawn region: if currently inside, a step that leaves it is blocked (slide along the
-      // boundary). A bot that spawned outside (e.g. on a rock) is free to move so it can walk back in.
-      const wasIn = _inRegion(b.pos.x, b.pos.z);
-      const regionOK = (xx,zz)=> !wasIn || _inRegion(xx,zz);
-      const okFull=((typeof clearAt!=='function') || clearAt(cx,cz,b.pos.y)) && regionOK(cx,cz);
+      // The arena walls + props are the only movement boundary; the spawn region never blocks motion, so a
+      // bot can leave its spawn area and roam the whole map.
+      const okFull=((typeof clearAt!=='function') || clearAt(cx,cz,b.pos.y));
       if(okFull){ b.pos.x=cx; b.pos.z=cz; }
       else {
         // blocked head-on: try sliding along each axis so we skim past walls/props instead of freezing
-        const okX = clearAt(cx, b.pos.z, b.pos.y) && regionOK(cx, b.pos.z), okZ = clearAt(b.pos.x, cz, b.pos.y) && regionOK(b.pos.x, cz);
+        const okX = clearAt(cx, b.pos.z, b.pos.y), okZ = clearAt(b.pos.x, cz, b.pos.y);
         if(okX){ b.pos.x=cx; } else if(okZ){ b.pos.z=cz; }   // slide on whichever axis is open
         else { b.strafe*=-1; }   // boxed in -> reverse strafe and let stuck recovery kick in
       }
@@ -11458,7 +11455,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 448 · 2026-06-12';
+const BUILD_VERSION = 'build 449 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
