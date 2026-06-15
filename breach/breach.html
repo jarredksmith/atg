@@ -6221,6 +6221,9 @@ for(const c of colliders){
 const SAVE_KEY = 'breach_level_v1';
 function readSave(){ try { const s = localStorage.getItem(SAVE_KEY); return s ? JSON.parse(s) : null; } catch(e){ return null; } }
 let savedLevel = readSave();
+// Self-heal: if localStorage lost the save (cleared on close / evicted) but the durable IndexedDB copy survived,
+// restore it and reload once so the synchronous startup path picks it up. Guarded against reload loops.
+if(!savedLevel){ try{ if(!sessionStorage.getItem('breach_lvl_healed') && typeof _levelDBGet==='function'){ _levelDBGet().then(str=>{ if(str && typeof str==='string'){ try{ localStorage.setItem(SAVE_KEY, str); sessionStorage.setItem('breach_lvl_healed','1'); location.reload(); }catch(e){} } }); } }catch(e){} }
 
 // ---- Shareable level links: serializeLevel() -> (gzip) -> base64url, carried in the URL hash (#lvl=) ----
 function _b64urlFromBytes(bytes){ let s=''; for(let i=0;i<bytes.length;i++) s+=String.fromCharCode(bytes[i]); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
@@ -7209,6 +7212,16 @@ function _sfFetchArchive(z){
 // once and every later session loads instantly. Best-effort: any failure silently falls back to the network.
 const _MODELDB_NAME='breachModels', _MODELDB_STORE='archives', _MODELDB_VER=1;
 let _modelDBp=null;
+// Durable level store (IndexedDB): localStorage is small (~5MB) and some browsers evict/clear it on close, so we
+// also keep the saved level here (much larger quota, more durable) and self-heal localStorage from it on startup.
+const _LVLDB_NAME='breachLevel', _LVLDB_STORE='saves', _LVLDB_KEY='level', _LVLDB_VER=1; let _lvlDBp=null;
+function _levelDB(){
+  if(_lvlDBp) return _lvlDBp;
+  _lvlDBp = new Promise((res)=>{ try{ if(!window.indexedDB){ res(null); return; } const rq=indexedDB.open(_LVLDB_NAME,_LVLDB_VER); rq.onupgradeneeded=()=>{ try{ rq.result.createObjectStore(_LVLDB_STORE); }catch(e){} }; rq.onsuccess=()=>res(rq.result); rq.onerror=()=>res(null); }catch(e){ res(null); } });
+  return _lvlDBp;
+}
+function _levelDBPut(str){ return _levelDB().then(db=>{ if(!db) return false; return new Promise(r=>{ try{ const tx=db.transaction(_LVLDB_STORE,'readwrite'); tx.objectStore(_LVLDB_STORE).put(str,_LVLDB_KEY); tx.oncomplete=()=>r(true); tx.onerror=()=>r(false); }catch(e){ r(false); } }); }).catch(()=>false); }
+function _levelDBGet(){ return _levelDB().then(db=>{ if(!db) return null; return new Promise(r=>{ try{ const tx=db.transaction(_LVLDB_STORE,'readonly'); const rq=tx.objectStore(_LVLDB_STORE).get(_LVLDB_KEY); rq.onsuccess=()=>r(rq.result||null); rq.onerror=()=>r(null); }catch(e){ r(null); } }); }).catch(()=>null); }
 function _modelDB(){
   if(_modelDBp) return _modelDBp;
   _modelDBp = new Promise((res)=>{
@@ -9929,7 +9942,7 @@ function serializeWorld(){
   // dynamic physics props (position + orientation) so clients see them roll
   const D = dynamicProps.length ? dynamicProps.filter(o=>o.userData.nid).map(o=>({ id:o.userData.nid, p:[o.position.x,o.position.y,o.position.z], q:[o.quaternion.x,o.quaternion.y,o.quaternion.z,o.quaternion.w] })) : undefined;
   // loot crates (id, position, item ids) so clients see + can open the same crates
-  const K = chests.length ? chests.map(ch=>({ id:ch.id, p:[ch.pos.x,ch.pos.z], it:ch.items.map(i=>i.id) })) : undefined;
+  const K = chests.length ? chests.map(ch=>({ id:ch.id, p:[ch.pos.x,ch.pos.z], it:ch.items.map(i=>i.id), gc:(ch.glowColor!=null?ch.glowColor:undefined), gi:(ch.glowI!=null?ch.glowI:undefined), gy:(ch.yOff||undefined) })) : undefined;
   const PU = powerups.length ? powerups.map(p=>({ id:p.id, p:[p.x,p.z], k:p.kind, r:p.ready?1:0 })) : undefined;
   // objective state (so clients see the survival timer / extraction beacon + hold, not just "WAVE n")
   const O = { o:objectiveActive(), s:+surviveLeft.toFixed(1), h:+extractHoldT.toFixed(2),
@@ -10066,7 +10079,7 @@ function applyWorld(msg){
       if(NET.deadChests[k.id]) continue;                       // a crate we just bought — wait for the host to drop it
       ks.add(k.id);
       let ch = chests.find(c=>c.id===k.id);
-      if(!ch){ const mesh = buildChestMesh(k.p[0], k.p[1]); ch = { id:k.id, mesh, pos:mesh.position.clone(), items:[], spin:0 }; chests.push(ch); }
+      if(!ch){ const mesh = buildChestMesh(k.p[0], k.p[1], { y:k.gy, glowColor:k.gc, glowI:k.gi }); ch = { id:k.id, mesh, pos:mesh.position.clone(), items:[], spin:0 }; chests.push(ch); }
       ch.items = k.it.map(id=>ITEM_POOL.find(it=>it.id===id)).filter(Boolean);   // reconstruct items (with their act fns) by id
     }
     for(let i=chests.length-1;i>=0;i--){ if(!ks.has(chests[i].id)){ scene.remove(chests[i].mesh); chests.splice(i,1); } }
@@ -10828,7 +10841,7 @@ function spawnPlacedLoot(){
     const items = (sp.items && sp.items.length)
       ? sp.items.map(id=>ITEM_POOL.find(it=>it.id===id)).filter(Boolean)
       : _rollLootItems(3);
-    chests.push({ id:nextChestId++, mesh, pos:mesh.position.clone(), items, spin:0, placed:true });
+    chests.push({ id:nextChestId++, mesh, pos:mesh.position.clone(), items, spin:0, placed:true, glowColor:sp.glowColor, glowI:sp.glowI, yOff:(+sp.y||0) });
   }
 }
 function spawnChest(){
@@ -11212,7 +11225,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 436 · 2026-06-12';
+const BUILD_VERSION = 'build 437 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14510,8 +14523,13 @@ function serializeLevel(){
     cine:    { on: cineCfg.on, path: cineCfg.path.map(q=>q.slice()), lensFrom: cineCfg.lensFrom, lensTo: cineCfg.lensTo, focusOn: cineCfg.focusOn, focusFrom: cineCfg.focusFrom, focusTo: cineCfg.focusTo, dur: cineCfg.dur, look: cineCfg.look, audio: cineCfg.audio||'' , shots2: (cineCfg.shots2||[]).map(s=>({ path:(s.path||[]).map(q=>q.slice()), lensFrom:s.lensFrom, lensTo:s.lensTo, focusOn:s.focusOn, focusFrom:s.focusFrom, focusTo:s.focusTo, dur:s.dur, look:s.look })), name: cineCfg.name||'Intro', others: (cineCfg.others||[]).map(o=>({ name:o.name, audio:o.audio||'', path:(o.path||[]).map(q=>q.slice()), lensFrom:o.lensFrom, lensTo:o.lensTo, focusOn:o.focusOn, focusFrom:o.focusFrom, focusTo:o.focusTo, dur:o.dur, look:o.look, shots2:(o.shots2||[]).map(s=>({ path:(s.path||[]).map(q=>q.slice()), lensFrom:s.lensFrom, lensTo:s.lensTo, focusOn:s.focusOn, focusFrom:s.focusFrom, focusTo:s.focusTo, dur:s.dur, look:s.look })) })) },
   };
 }
-function saveLevel(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(serializeLevel())); return true; } catch(e){ return false; } }
-function clearSave(){ try { localStorage.removeItem(SAVE_KEY); return true; } catch(e){ return false; } }
+function saveLevel(){
+  let str; try{ str = JSON.stringify(serializeLevel()); }catch(e){ return false; }
+  if(typeof _levelDBPut==='function') _levelDBPut(str);   // durable copy (large quota, survives localStorage eviction)
+  try{ localStorage.setItem(SAVE_KEY, str); return localStorage.getItem(SAVE_KEY)===str; }   // verify it actually persisted (not silently dropped by quota)
+  catch(e){ return (typeof _levelDB==='function'); }      // localStorage full -> still saved to IndexedDB
+}
+function clearSave(){ try { localStorage.removeItem(SAVE_KEY); }catch(e){} try{ if(typeof _levelDBPut==='function') _levelDBPut(''); }catch(e){} return true; }
 // ---------- Single-player campaign: an ordered list of levels; each level's win condition loads the next ----------
 const CAMPAIGN_KEY='breach_campaign_v1';
 function loadCampaign(){ try{ const j=JSON.parse(localStorage.getItem(CAMPAIGN_KEY)); if(j && Array.isArray(j.levels)) return j; }catch(e){} return { levels:[] }; }
