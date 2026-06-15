@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>BREACH // FPS</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=Major+Mono+Display&family=Orbitron:wght@500;700&family=Rajdhani:wght@500;600;700&family=Press+Start+2P&family=Share+Tech+Mono&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=Major+Mono+Display&family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&family=Press+Start+2P&family=Share+Tech+Mono&family=Audiowide&family=Teko:wght@500;600;700&family=Exo+2:wght@500;700&family=Saira+Condensed:wght@600;700&family=Aldrich&family=Syncopate:wght@700&family=VT323&family=Michroma&family=Russo+One&family=Bungee&family=Space+Mono:wght@700&family=JetBrains+Mono:wght@500;700&display=swap');
 
   :root{ --accent:#38f5b5; --accent-rgb:56,245,181; --ui-font:'Chakra Petch', monospace; --display-font:'Major Mono Display', monospace; }
 
@@ -624,7 +624,7 @@
       <b>R</b> reload &nbsp;·&nbsp; <b>V</b> melee (auto when dry) &nbsp;·&nbsp; <b>G</b> throw grenade &nbsp;·&nbsp; <b>E</b> use station / open cache &nbsp;·&nbsp; <b>1·2·3</b> / <b>scroll</b> weapons<br>
       <b>ESC</b> pause &nbsp;·&nbsp; <b>P</b> open the in-game model/transform editor<br>
       <span style="color:#ffd166">Kill enemies for ◆ credits — spend them at the ammo station and supply caches.</span>
-      <div id="padNote" style="display:none;margin-top:10px;color:#38f5b5">🎮 Controller connected — <b>L-stick</b> move · <b>R-stick</b> look · <b>RT</b> fire · <b>LT</b> aim · <b>A</b> jump · <b>X</b> reload · <b>Y</b> use · <b>B</b> grenade · <b>LB/RB</b> weapons · <b>L3</b> sprint · <b>any button</b> deploys &nbsp; <span style="color:#5a7d72">(press <b>`</b> for controller test)</span></div>
+      <div id="padNote" style="display:none;margin-top:10px;color:var(--accent)">🎮 Controller connected — <b>L-stick</b> move · <b>R-stick</b> look · <b>RT</b> fire · <b>LT</b> aim · <b>A</b> jump · <b>X</b> reload · <b>Y</b> use · <b>B</b> grenade · <b>LB/RB</b> weapons · <b>L3</b> sprint · <b>any button</b> deploys &nbsp; <span style="color:#5a7d72">(press <b>`</b> for controller test)</span></div>
     </div>
   </div>
 </div>
@@ -5849,7 +5849,16 @@ const UI_FONT_CHOICES = [
   { label:'Chakra Petch (default)', v:"'Chakra Petch', monospace" },
   { label:'Rajdhani', v:"'Rajdhani', sans-serif" },
   { label:'Orbitron', v:"'Orbitron', sans-serif" },
+  { label:'Exo 2', v:"'Exo 2', sans-serif" },
+  { label:'Teko (tall)', v:"'Teko', sans-serif" },
+  { label:'Saira Condensed', v:"'Saira Condensed', sans-serif" },
+  { label:'Aldrich', v:"'Aldrich', sans-serif" },
+  { label:'Michroma', v:"'Michroma', sans-serif" },
+  { label:'Russo One', v:"'Russo One', sans-serif" },
   { label:'Share Tech Mono', v:"'Share Tech Mono', monospace" },
+  { label:'Space Mono', v:"'Space Mono', monospace" },
+  { label:'JetBrains Mono', v:"'JetBrains Mono', monospace" },
+  { label:'VT323 (terminal)', v:"'VT323', monospace" },
   { label:'Press Start 2P (retro)', v:"'Press Start 2P', monospace" },
   { label:'System sans', v:"system-ui, -apple-system, sans-serif" },
   { label:'Monospace', v:"ui-monospace, monospace" },
@@ -5857,18 +5866,28 @@ const UI_FONT_CHOICES = [
 const UI_DISPLAY_CHOICES = [
   { label:'Major Mono (default)', v:"'Major Mono Display', monospace" },
   { label:'Orbitron', v:"'Orbitron', sans-serif" },
+  { label:'Audiowide', v:"'Audiowide', sans-serif" },
+  { label:'Syncopate', v:"'Syncopate', sans-serif" },
+  { label:'Michroma', v:"'Michroma', sans-serif" },
+  { label:'Russo One', v:"'Russo One', sans-serif" },
+  { label:'Bungee', v:"'Bungee', sans-serif" },
+  { label:'Teko (tall)', v:"'Teko', sans-serif" },
   { label:'Press Start 2P (retro)', v:"'Press Start 2P', monospace" },
+  { label:'VT323 (terminal)', v:"'VT323', monospace" },
   { label:'Rajdhani', v:"'Rajdhani', sans-serif" },
   { label:'Chakra Petch', v:"'Chakra Petch', monospace" },
   { label:'Share Tech Mono', v:"'Share Tech Mono', monospace" },
 ];
 let uiTheme = (function(){ try{ const v=JSON.parse(localStorage.getItem(UI_THEME_KEY)||'null'); return v ? Object.assign({}, UI_THEME_DEFAULT, v) : Object.assign({}, UI_THEME_DEFAULT); }catch(e){ return Object.assign({}, UI_THEME_DEFAULT); } })();
+let UI_ACCENT = '#38f5b5', UI_ACCENT_RGB = '56,245,181';   // canvas-drawn HUD reads these (CSS vars don't reach a 2D canvas)
 function _hexToRgbTriplet(hex){ try{ hex=String(hex||'').replace('#',''); if(hex.length===3) hex=hex.split('').map(c=>c+c).join(''); const n=parseInt(hex,16); return ((n>>16)&255)+','+((n>>8)&255)+','+(n&255); }catch(e){ return '56,245,181'; } }
 function applyUiTheme(){
   try{
+    UI_ACCENT = uiTheme.accent||UI_THEME_DEFAULT.accent;
+    UI_ACCENT_RGB = _hexToRgbTriplet(UI_ACCENT);
     const r=document.documentElement.style;
-    r.setProperty('--accent', uiTheme.accent||UI_THEME_DEFAULT.accent);
-    r.setProperty('--accent-rgb', _hexToRgbTriplet(uiTheme.accent||UI_THEME_DEFAULT.accent));
+    r.setProperty('--accent', UI_ACCENT);
+    r.setProperty('--accent-rgb', UI_ACCENT_RGB);
     r.setProperty('--ui-font', uiTheme.uiFont||UI_THEME_DEFAULT.uiFont);
     r.setProperty('--display-font', uiTheme.displayFont||UI_THEME_DEFAULT.displayFont);
   }catch(e){}
@@ -7024,7 +7043,7 @@ function renderTexSearch(host, onPick){
   q.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
   const sBtn=document.createElement('button'); sBtn.textContent='Search'; sRow.appendChild(q); sRow.appendChild(sBtn);
   const hiLab=document.createElement('label'); hiLab.title='Fetch 2K maps \u2014 sharper on big surfaces, more GPU memory'; hiLab.style.cssText='display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#9fe6cf;cursor:pointer;white-space:nowrap;';
-  const hiCb=document.createElement('input'); hiCb.type='checkbox'; hiCb.checked=texHiRes; hiCb.style.accentColor='#38f5b5'; hiCb.onchange=()=>{ texHiRes=hiCb.checked; };
+  const hiCb=document.createElement('input'); hiCb.type='checkbox'; hiCb.checked=texHiRes; hiCb.style.accentColor='var(--accent)'; hiCb.onchange=()=>{ texHiRes=hiCb.checked; };
   hiLab.appendChild(hiCb); hiLab.appendChild(document.createTextNode('2K')); sRow.appendChild(hiLab); host.appendChild(sRow);
   const status=document.createElement('div'); status.className='hint'; status.style.margin='2px 0'; host.appendChild(status);
   const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:repeat(3,1fr);gap:5px;'; host.appendChild(grid);
@@ -9621,7 +9640,7 @@ function showDuelResult(winnerId, winnerTeam){
   clearKillFeed();
   const win = teamMode() ? (NET.team===winnerTeam) : (winnerId===NET.myId);
   const ov=document.getElementById('overlay'); ov.classList.remove('hidden');
-  ov.innerHTML = `<h1 style="color:${win?'#38f5b5':'#ff2d55'};text-shadow:0 0 30px ${win?'rgba(56,245,181,.5)':'rgba(255,45,85,.5)'}">${win?'VICTORY':'DEFEAT'}</h1>
+  ov.innerHTML = `<h1 style="color:${win?'var(--accent)':'#ff2d55'};text-shadow:0 0 30px ${win?'rgba(56,245,181,.5)':'rgba(255,45,85,.5)'}">${win?'VICTORY':'DEFEAT'}</h1>
     <div class="sub">${teamMode() ? (TEAM_NAME[winnerTeam]+' TEAM WINS') : (pvpLabel()+' TO '+NET.killTarget+' KILLS')}</div>
     <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:6px;">
       <button id="replayBtn">${NET.mode==='host'?'Replay match':'Rejoin / replay'}</button>
@@ -10553,13 +10572,13 @@ function showUpgradePicker(opts, onPick){
   const el = document.createElement('div'); el.id='upgrade';
   el.style.cssText = 'position:absolute;inset:0;z-index:60;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:rgba(4,10,12,.72);backdrop-filter:blur(3px);';
   const h = document.createElement('div'); h.textContent = 'WAVE '+wave+' CLEARED — CHOOSE AN UPGRADE';
-  h.style.cssText = 'color:#38f5b5;letter-spacing:3px;font-weight:700;font-size:20px;text-shadow:0 0 20px rgba(56,245,181,.5)';
+  h.style.cssText = 'color:var(--accent);letter-spacing:3px;font-weight:700;font-size:20px;text-shadow:0 0 20px rgba(56,245,181,.5)';
   el.appendChild(h);
   const row = document.createElement('div'); row.style.cssText='display:flex;gap:16px;flex-wrap:wrap;justify-content:center';
   for(const u of opts){
     const c = document.createElement('button');
     c.style.cssText = 'width:200px;min-height:150px;background:linear-gradient(160deg,rgba(10,22,26,.95),rgba(8,16,20,.9));border:1px solid rgba(56,245,181,.35);border-radius:10px;color:#cfeee2;padding:18px;cursor:pointer;display:flex;flex-direction:column;gap:10px;align-items:center;text-align:center;transition:all .12s;';
-    c.onmouseenter=()=>{ c.style.borderColor='#38f5b5'; c.style.transform='translateY(-4px)'; };
+    c.onmouseenter=()=>{ c.style.borderColor='var(--accent)'; c.style.transform='translateY(-4px)'; };
     c.onmouseleave=()=>{ c.style.borderColor='rgba(56,245,181,.35)'; c.style.transform='none'; };
     c.innerHTML = '<div style="font-size:40px">'+u.icon+'</div><div style="font-weight:700;font-size:15px;color:#eafff7">'+u.name+'</div><div style="font-size:13px;color:#9fe6cf;line-height:1.4">'+u.desc+'</div>';
     c.onclick=()=>{ el.remove(); onPick(u); };
@@ -11342,7 +11361,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 444 · 2026-06-12';
+const BUILD_VERSION = 'build 445 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -11556,7 +11575,7 @@ let touchEditMode=false, _teOverlay=null, _teDrag=null, _teSel=null, _teSizeRow=
 function _teSyncSize(){ if(!_teSizeRow) return;
   if(_teSel){ const o=touchLayout[_teSel]||{}; _teSizeSlider.value=(typeof o.scale==='number'&&o.scale>0)?o.scale:1; _teSizeName.textContent=TOUCH_LABEL[_teSel]||_teSel; _teSizeRow.style.display='flex'; }
   else { _teSizeRow.style.display='none'; } }
-function _teHighlight(){ for(const id of ALL_EDITABLE){ const el=document.getElementById(id); if(!el) continue; const on=(id===_teSel); el.style.outline=on?'2px solid #38f5b5':''; el.style.outlineOffset=on?'2px':''; } }
+function _teHighlight(){ for(const id of ALL_EDITABLE){ const el=document.getElementById(id); if(!el) continue; const on=(id===_teSel); el.style.outline=on?'2px solid var(--accent)':''; el.style.outlineOffset=on?'2px':''; } }
 function _teClamp(id){ const el=document.getElementById(id); if(!el) return; const r=el.getBoundingClientRect(); let nx=r.left, ny=r.top, ch=false;
   if(r.right>innerWidth){ nx=innerWidth-r.width; ch=true; } if(r.bottom>innerHeight){ ny=innerHeight-r.height; ch=true; }
   if(nx<0){ nx=0; ch=true; } if(ny<0){ ny=0; ch=true; }
@@ -11579,21 +11598,21 @@ function enterTouchEdit(){
     const lbl=document.createElement('span'); lbl.textContent='Drag to move \u00b7 tap to size'; lbl.style.cssText='color:#eafff7;font:600 12px/1.2 ui-monospace,monospace;margin-right:4px;';
     const reset=document.createElement('button'); reset.textContent='Reset'; reset.style.cssText='padding:5px 12px;font:600 12px ui-monospace,monospace;background:#0c1418;color:#cfeee2;border:1px solid #2a3a42;border-radius:6px;';
     reset.onclick=(e)=>{ e.stopPropagation(); touchLayout={}; _teSel=null; touchOpacity=1; touchHand='right'; try{ localStorage.setItem('breach_touch_opacity','1'); localStorage.setItem('breach_touch_hand','right'); }catch(_){} saveTouchLayout(); applyTouchLayout(); applyTouchChrome(); oSlider.value=1; _teHighlight(); _teSyncSize(); };
-    const done=document.createElement('button'); done.textContent='Done'; done.style.cssText='padding:5px 14px;font:600 12px ui-monospace,monospace;background:#38f5b5;color:#04110c;border:none;border-radius:6px;';
+    const done=document.createElement('button'); done.textContent='Done'; done.style.cssText='padding:5px 14px;font:600 12px ui-monospace,monospace;background:var(--accent);color:#04110c;border:none;border-radius:6px;';
     done.onclick=(e)=>{ e.stopPropagation(); exitTouchEdit(); };
     row1.appendChild(lbl); row1.appendChild(reset); row1.appendChild(done); bar.appendChild(row1);
     const row2=document.createElement('div'); row2.style.cssText='display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;border-top:1px solid rgba(56,245,181,0.18);padding-top:6px;';
     const flip=document.createElement('button'); flip.textContent='\u21c4 Flip L/R'; flip.style.cssText='padding:5px 12px;font:600 11px ui-monospace,monospace;background:#0c1418;color:#cfeee2;border:1px solid #2a3a42;border-radius:6px;';
     flip.onclick=(e)=>{ e.stopPropagation(); const vw=innerWidth; for(const id of ALL_EDITABLE){ const el=document.getElementById(id); if(!el) continue; const r=el.getBoundingClientRect(); const o=(touchLayout[id]=touchLayout[id]||{}); o.fx=(vw-r.right)/vw; if(typeof o.fy!=='number') o.fy=r.top/innerHeight; } touchHand=(touchHand==='left')?'right':'left'; try{ localStorage.setItem('breach_touch_hand', touchHand); }catch(_){} saveTouchLayout(); applyTouchLayout(); applyTouchChrome(); _teClamp&&ALL_EDITABLE.forEach(_teClamp); _teHighlight(); };
     const oLab=document.createElement('span'); oLab.textContent='Opacity'; oLab.style.cssText='color:#eafff7;font:600 11px ui-monospace,monospace;';
-    const oSlider=document.createElement('input'); oSlider.type='range'; oSlider.min='0.2'; oSlider.max='1'; oSlider.step='0.05'; oSlider.value=touchOpacity; oSlider.style.cssText='width:120px;accent-color:#38f5b5;';
+    const oSlider=document.createElement('input'); oSlider.type='range'; oSlider.min='0.2'; oSlider.max='1'; oSlider.step='0.05'; oSlider.value=touchOpacity; oSlider.style.cssText='width:120px;accent-color:var(--accent);';
     oSlider.addEventListener('pointerdown', e=>e.stopPropagation());
     oSlider.oninput=()=>{ touchOpacity=+oSlider.value; try{ localStorage.setItem('breach_touch_opacity', touchOpacity); }catch(_){} applyTouchChrome(); };
     row2.appendChild(flip); row2.appendChild(oLab); row2.appendChild(oSlider); bar.appendChild(row2);
     const sizeRow=document.createElement('div'); sizeRow.style.cssText='display:none;gap:8px;align-items:center;justify-content:center;border-top:1px solid rgba(56,245,181,0.18);padding-top:6px;';
     const sName=document.createElement('span'); sName.style.cssText='color:#9fe6cf;font:600 11px ui-monospace,monospace;min-width:54px;text-align:right;';
     const sLab=document.createElement('span'); sLab.textContent='Size'; sLab.style.cssText='color:#eafff7;font:600 11px ui-monospace,monospace;';
-    const sSlider=document.createElement('input'); sSlider.type='range'; sSlider.min='0.55'; sSlider.max='2'; sSlider.step='0.05'; sSlider.value='1'; sSlider.style.cssText='width:150px;accent-color:#38f5b5;';
+    const sSlider=document.createElement('input'); sSlider.type='range'; sSlider.min='0.55'; sSlider.max='2'; sSlider.step='0.05'; sSlider.value='1'; sSlider.style.cssText='width:150px;accent-color:var(--accent);';
     sSlider.addEventListener('pointerdown', e=>e.stopPropagation());   // don't start a drag when using the slider
     sSlider.oninput=()=>{ if(!_teSel) return; const o=(touchLayout[_teSel]=touchLayout[_teSel]||{}); o.scale=+sSlider.value; applyTouchLayout(); _teClamp(_teSel); _teHighlight(); saveTouchLayout(); };
     sizeRow.appendChild(sName); sizeRow.appendChild(sLab); sizeRow.appendChild(sSlider); bar.appendChild(sizeRow);
@@ -12652,7 +12671,7 @@ function drawMinimap(){
   ctx.beginPath(); ctx.arc(MINI_R, MINI_R, MINI_R-2, 0, Math.PI*2); ctx.clip();
 
   // faint range rings
-  ctx.strokeStyle = 'rgba(56,245,181,0.12)'; ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba('+UI_ACCENT_RGB+',0.12)'; ctx.lineWidth = 1;
   for(const rr of [0.5, 1]){ ctx.beginPath(); ctx.arc(MINI_R, MINI_R, (MINI_R-4)*rr, 0, Math.PI*2); ctx.stroke(); }
 
   const scale = (MINI_R-4) / MINI_RANGE;
@@ -12678,9 +12697,9 @@ function drawMinimap(){
   // enemies (red)
   for(const en of enemies) blip(en.mesh.position.x, en.mesh.position.z, '#ff4d5e', 2.6);
   // extraction zone (pulsing green)
-  if((objectiveActive()==='extraction'||objectiveActive()==='defend') && extractZone && extractZone.visible) blip(extractPos.x, extractPos.z, '#38f5b5', 4.2);
+  if((objectiveActive()==='extraction'||objectiveActive()==='defend') && extractZone && extractZone.visible) blip(extractPos.x, extractPos.z, UI_ACCENT, 4.2);
   if(objectiveActive()==='destroy'){ for(const m of _destroyMarkers){ const o=m.userData.prop; if(o && !o.userData._shattered && o.parent) blip(o.position.x, o.position.z, '#ff5b6b', 3.6); } }
-  if(objectiveActive()==='escort'){ if(extractZone && extractZone.visible) blip(extractPos.x, extractPos.z, '#38f5b5', 4.2); if(escortMarker && escortMarker.visible) blip(escortPos.x, escortPos.z, '#2fd0e0', 4.4); }
+  if(objectiveActive()==='escort'){ if(extractZone && extractZone.visible) blip(extractPos.x, extractPos.z, UI_ACCENT, 4.2); if(escortMarker && escortMarker.visible) blip(escortPos.x, escortPos.z, '#2fd0e0', 4.4); }
 
   // multiplayer: other players + bots. Team modes color by team (red/blue); FFA shows everyone as foes.
   if(typeof NET!=='undefined' && NET.mode){
@@ -12748,7 +12767,7 @@ function showHitmarker(kill){
   const hm = $('hitmarker');
   hm.textContent = kill ? '✖' : '✕';
   hm.style.color = kill ? '#ff4d6d' : '#fff';
-  hm.style.textShadow = kill ? '0 0 12px #ff4d6d' : '0 0 8px #38f5b5';
+  hm.style.textShadow = kill ? '0 0 12px #ff4d6d' : '0 0 8px var(--accent)';
   hm.style.transition='none'; hm.style.opacity='1'; hm.style.transform='translate(-50%,-50%) scale('+(kill?1.4:1)+')';
   requestAnimationFrame(()=>{ hm.style.transition='all .25s'; hm.style.opacity='0'; hm.style.transform='translate(-50%,-50%) scale(.6)'; });
 }
@@ -14320,7 +14339,7 @@ let editorActive = 'gun';
 // exactly one mode. (Purely a visibility layer — every panel's editing logic is unchanged.)
 const EDITOR_MODES = ['build','scene','enemies','rules','kit','files'];
 const MODE_LABEL = { build:'Build', scene:'World', enemies:'Enemies', rules:'Gameplay', kit:'Weapons', files:'Save' };   // user-facing names; internal mode keys unchanged so saved prefs/tests keep working
-const MODE_COLOR = { build:'#38f5b5', scene:'#5db4ff', enemies:'#ff6b8a', rules:'#ffd166', kit:'#ff9b5b', files:'#b69cff' };   // per-mode accent so the buttons read as distinct sections
+const MODE_COLOR = { build:'var(--accent)', scene:'#5db4ff', enemies:'#ff6b8a', rules:'#ffd166', kit:'#ff9b5b', files:'#b69cff' };   // per-mode accent so the buttons read as distinct sections
 function _hexRgba(hex,a){ const nn=parseInt(hex.replace('#',''),16); return 'rgba('+((nn>>16)&255)+','+((nn>>8)&255)+','+(nn&255)+','+a+')'; }
 const SHOW_MODEL_LIBRARY = false;   // hardcoded model-library chips hidden for now (to be rebuilt); flip true to restore
 const _svgIcon = (inner)=>'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+inner+'</svg>';
@@ -14368,7 +14387,7 @@ function applyEditorMode(){
   const tabRow = editorEl.querySelector('#edTabs'); if(tabRow) tabRow.style.display = tgts.length ? 'flex' : 'none';   // no target picker in Scene/Rules/Save
   const view = editorEl.querySelector('#edView'); if(view) view.style.display = 'flex';   // global view toolbar (sits above the tabs)
   editorEl.querySelectorAll('#edModes .edMode').forEach(b=>{
-    const c = MODE_COLOR[b.dataset.mode] || '#38f5b5', on = b.dataset.mode===editorMode;
+    const c = MODE_COLOR[b.dataset.mode] || 'var(--accent)', on = b.dataset.mode===editorMode;
     b.classList.toggle('active', on);
     b.style.borderColor = on ? c : 'transparent';
     b.style.background  = on ? _hexRgba(c,0.20) : 'transparent';
@@ -14431,7 +14450,7 @@ function showPropLoader(label){
     el.innerHTML = '<div style="background:rgba(6,12,14,0.85);border:1px solid rgba(56,245,181,0.4);border-radius:12px;padding:18px 26px;min-width:240px;text-align:center;box-shadow:0 8px 40px rgba(0,0,0,0.6);">'
       + '<div id="propLoaderLabel" style="color:#eafff7;font:600 14px/1.3 ui-monospace,monospace;margin-bottom:12px;letter-spacing:0.4px;">Loading\u2026</div>'
       + '<div style="width:220px;height:7px;background:#0c1418;border:1px solid #1c2b30;border-radius:6px;overflow:hidden;">'
-      + '<div style="width:38%;height:100%;background:linear-gradient(90deg,transparent,#38f5b5,transparent);animation:propLoadSlide 1.05s ease-in-out infinite;"></div>'
+      + '<div style="width:38%;height:100%;background:linear-gradient(90deg,transparent,var(--accent),transparent);animation:propLoadSlide 1.05s ease-in-out infinite;"></div>'
       + '</div></div>';
     document.body.appendChild(el);
     const st = document.createElement('style'); st.textContent = '@keyframes propLoadSlide{0%{transform:translateX(-110%)}100%{transform:translateX(420%)}}';
@@ -14755,11 +14774,11 @@ function showCampaignInterstitial(fromName, clearedNum, toIdx, total, onContinue
   card.innerHTML =
     '<div style="letter-spacing:3px;font-size:13px;color:#7fe7cf">LEVEL '+clearedNum+' OF '+total+' CLEARED</div>'+
     '<div style="font-size:30px;font-weight:700;color:#9affe0;text-shadow:0 0 24px rgba(56,245,181,.45)">'+_interEsc(fromName)+'</div>'+
-    '<div style="width:120px;height:1px;background:linear-gradient(90deg,transparent,#38f5b5,transparent);margin:4px 0"></div>'+
+    '<div style="width:120px;height:1px;background:linear-gradient(90deg,transparent,var(--accent),transparent);margin:4px 0"></div>'+
     '<div style="letter-spacing:3px;font-size:13px;color:#8fc0e7">NEXT &middot; LEVEL '+(toIdx+1)+' OF '+total+'</div>'+
     '<div style="font-size:34px;font-weight:800;color:#fff;text-shadow:0 0 30px rgba(120,180,255,.4)">'+_interEsc(nextName)+'</div>'+
     '<div style="font-size:13px;color:#9fb6c2;text-transform:uppercase;letter-spacing:2px">Objective &middot; '+_interEsc(obj)+'</div>'+
-    '<button id="interGo" style="margin-top:14px;padding:12px 34px;font-size:16px;font-weight:700;color:#04110d;background:#38f5b5;border:none;border-radius:9px;cursor:pointer;box-shadow:0 0 26px rgba(56,245,181,.45)">Continue \u2192</button>'+
+    '<button id="interGo" style="margin-top:14px;padding:12px 34px;font-size:16px;font-weight:700;color:#04110d;background:var(--accent);border:none;border-radius:9px;cursor:pointer;box-shadow:0 0 26px rgba(56,245,181,.45)">Continue \u2192</button>'+
     '<div style="font-size:12px;color:#6f8a8a">auto-continues in <span id="interCount">6</span>\u2026 &middot; press any key</div>';
   card.style.display='flex';
   const go=()=>{ if(!_interActive) return; _clearInterstitial(); try{ onContinue(); }catch(e){ console.warn('interstitial continue failed', e); } };
@@ -14886,7 +14905,7 @@ function renderAudioZonesPanel(){
   host.appendChild(addB);
   const st=document.createElement('div'); st.className='hint'; st.style.margin='6px 0 2px'; st.textContent = audioZones.length ? (audioZones.length+' zone'+(audioZones.length>1?'s':'')+':') : 'No zones yet.';
   host.appendChild(st);
-  const slider=(label, val, min, max, step, on, fmt)=>{ const w=document.createElement('div'); w.style.cssText='margin:4px 0;'; const lab=document.createElement('div'); lab.style.cssText='display:flex;justify-content:space-between;font-size:10px;color:#9fe6cf;'; const nm=document.createElement('span'); nm.textContent=label; const vv=document.createElement('span'); vv.textContent=fmt(val); lab.appendChild(nm); lab.appendChild(vv); const inp=document.createElement('input'); inp.type='range'; inp.min=min; inp.max=max; inp.step=step; inp.value=val; inp.style.cssText='width:100%;accent-color:#38f5b5;'; inp.oninput=()=>{ const v=parseFloat(inp.value); vv.textContent=fmt(v); on(v); }; inp.onchange=()=>{ pushUndoSnapshot(); }; w.appendChild(lab); w.appendChild(inp); return w; };
+  const slider=(label, val, min, max, step, on, fmt)=>{ const w=document.createElement('div'); w.style.cssText='margin:4px 0;'; const lab=document.createElement('div'); lab.style.cssText='display:flex;justify-content:space-between;font-size:10px;color:#9fe6cf;'; const nm=document.createElement('span'); nm.textContent=label; const vv=document.createElement('span'); vv.textContent=fmt(val); lab.appendChild(nm); lab.appendChild(vv); const inp=document.createElement('input'); inp.type='range'; inp.min=min; inp.max=max; inp.step=step; inp.value=val; inp.style.cssText='width:100%;accent-color:var(--accent);'; inp.oninput=()=>{ const v=parseFloat(inp.value); vv.textContent=fmt(v); on(v); }; inp.onchange=()=>{ pushUndoSnapshot(); }; w.appendChild(lab); w.appendChild(inp); return w; };
   audioZones.forEach((z,i)=>{
     const card=document.createElement('div'); card.style.cssText='border:1px solid #243640;border-radius:6px;padding:6px 7px;margin:5px 0;background:#0c1418;';
     const top=document.createElement('div'); top.style.cssText='display:flex;align-items:center;gap:6px;margin-bottom:5px;';
@@ -14901,7 +14920,7 @@ function renderAudioZonesPanel(){
     card.appendChild(slider('Radius', z.r, 3, 90, 1, (v)=>{ z.r=v; refreshAudioZoneMarkers(); }, (v)=>v.toFixed(0)+' m'));
     card.appendChild(slider('Max volume', (z.vol!=null?z.vol:0.8), 0, 1, 0.05, (v)=>{ z.vol=v; }, (v)=>Math.round(v*100)+'%'));
     const ll=document.createElement('label'); ll.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:11px;margin-top:5px;cursor:pointer;';
-    const lc=document.createElement('input'); lc.type='checkbox'; lc.checked=z.loop!==false; lc.style.cssText='width:14px;height:14px;accent-color:#38f5b5;cursor:pointer;'; lc.onchange=()=>{ pushUndoSnapshot(); z.loop=lc.checked; stopAudioZones(); };
+    const lc=document.createElement('input'); lc.type='checkbox'; lc.checked=z.loop!==false; lc.style.cssText='width:14px;height:14px;accent-color:var(--accent);cursor:pointer;'; lc.onchange=()=>{ pushUndoSnapshot(); z.loop=lc.checked; stopAudioZones(); };
     ll.appendChild(lc); const ls=document.createElement('span'); ls.textContent='Loop (ambient). Off = play once each time you enter.'; ll.appendChild(ls); card.appendChild(ll);
     host.appendChild(card);
   });
@@ -14935,7 +14954,7 @@ function renderCampaignPanel(){
   }
   const st=document.createElement('div'); st.className='hint'; st.style.margin='6px 0 2px'; st.textContent = campaign.levels.length ? (campaign.levels.length+' level'+(campaign.levels.length>1?'s':'')+':') : 'No levels yet.';
   host.appendChild(st);
-  campaign.levels.forEach((lv,i)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;align-items:center;gap:5px;font-size:12px;color:#cfeee2;margin:2px 0;'+((i===campaignEditIdx)?'outline:1px solid #38f5b5;border-radius:5px;padding:2px 3px;':'');
+  campaign.levels.forEach((lv,i)=>{ const r=document.createElement('div'); r.style.cssText='display:flex;align-items:center;gap:5px;font-size:12px;color:#cfeee2;margin:2px 0;'+((i===campaignEditIdx)?'outline:1px solid var(--accent);border-radius:5px;padding:2px 3px;':'');
     const nm=document.createElement('input'); nm.type='text'; nm.value=(lv.name!=null?lv.name:('Level '+(i+1))); nm.title=((lv.game&&lv.game.objective)||'eliminate')+' · '+((lv.props&&lv.props.length)||0)+' props'; nm.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 6px;font-size:12px;'; nm.onchange=()=>{ lv.name=nm.value.trim()||('Level '+(i+1)); saveCampaign(); };
     const ed=document.createElement('button'); ed.textContent='Edit'; ed.title='Load this level back into the editor to change it'; ed.style.cssText='padding:1px 7px;font-size:11px;'; ed.onclick=()=>{ if(typeof pushUndoSnapshot==='function') pushUndoSnapshot(); restoreLevel(campaign.levels[i]); campaignEditIdx=i; if(typeof renderEditorFields==='function') renderEditorFields(); if(typeof renderCampaignPanel==='function') renderCampaignPanel(); if(typeof flashToast==='function') flashToast('Editing "'+(lv.name||('Level '+(i+1)))+'" - Save to campaign when done'); };
     const up=document.createElement('button'); up.textContent='▲'; up.style.cssText='padding:1px 6px'; up.onclick=()=>{ if(i>0){ const t=campaign.levels[i-1]; campaign.levels[i-1]=campaign.levels[i]; campaign.levels[i]=t; campaignEditIdx=-1; saveCampaign(); renderCampaignPanel(); } };
@@ -15033,7 +15052,7 @@ function _modelSourceBar(host, rerender){
   const wrap=document.createElement('div'); wrap.style.cssText='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 6px;';
   if(!sfEnabled()){
     const lab=document.createElement('label'); lab.style.cssText='display:flex;align-items:center;gap:6px;color:#8fb6aa;font-size:11px;cursor:pointer;';
-    const cb=document.createElement('input'); cb.type='checkbox'; cb.style.cssText='width:14px;height:14px;accent-color:#38f5b5;flex:none;';
+    const cb=document.createElement('input'); cb.type='checkbox'; cb.style.cssText='width:14px;height:14px;accent-color:var(--accent);flex:none;';
     cb.onchange=()=>{ sfSetEnabled(cb.checked); if(cb.checked) _setModelSource('sf'); rerender(); };
     const sp=document.createElement('span'); sp.textContent='Also search Sketchfab (needs a free account + API token)';
     lab.appendChild(cb); lab.appendChild(sp); wrap.appendChild(lab);
@@ -15041,7 +15060,7 @@ function _modelSourceBar(host, rerender){
     const mk=(key,label,color)=>{ const b=document.createElement('button'); b.textContent=label; const on=_modelSource()===key;
       b.style.cssText='flex:0 0 auto;padding:3px 12px;font-size:11px;border-radius:6px;border:1px solid '+(on?color:'transparent')+';background:'+(on?_hexRgba(color,0.18):'transparent')+';color:'+(on?'#f4fffb':color)+';cursor:pointer;';
       b.onclick=()=>{ _setModelSource(key); rerender(); }; return b; };
-    const sw=document.createElement('div'); sw.style.cssText='display:flex;gap:4px;'; sw.appendChild(mk('pp','Poly Pizza','#38f5b5')); sw.appendChild(mk('sf','Sketchfab','#1caad9')); wrap.appendChild(sw);
+    const sw=document.createElement('div'); sw.style.cssText='display:flex;gap:4px;'; sw.appendChild(mk('pp','Poly Pizza','var(--accent)')); sw.appendChild(mk('sf','Sketchfab','#1caad9')); wrap.appendChild(sw);
     const off=document.createElement('button'); off.textContent='hide'; off.title='Hide the Sketchfab option'; off.style.cssText='flex:0 0 auto;margin-left:auto;padding:3px 8px;font-size:10px;border-radius:6px;border:1px solid #2a3a42;background:transparent;color:#6f968b;cursor:pointer;'; off.onclick=()=>{ sfSetEnabled(false); _setModelSource('pp'); rerender(); }; wrap.appendChild(off);
   }
   host.appendChild(wrap); return wrap;
@@ -15057,7 +15076,7 @@ function renderSketchfabSearch(host, onPick){
   const q=document.createElement('input'); q.type='text'; q.placeholder='search Sketchfab\u2026'; q.value=sfLastQuery; q.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
   const sb=document.createElement('button'); sb.textContent='Search'; sb.style.flex='0 0 auto'; sRow.appendChild(q); sRow.appendChild(sb); host.appendChild(sRow);
   const aRow=document.createElement('label'); aRow.style.cssText='display:flex;align-items:center;gap:6px;color:#9fe6cf;font-size:11px;cursor:pointer;margin:1px 0 4px;';
-  const acb=document.createElement('input'); acb.type='checkbox'; acb.style.cssText='width:14px;height:14px;accent-color:#38f5b5;flex:none;';
+  const acb=document.createElement('input'); acb.type='checkbox'; acb.style.cssText='width:14px;height:14px;accent-color:var(--accent);flex:none;';
   let _sfAnimOnly=false; try{ _sfAnimOnly = localStorage.getItem('breach_sf_anim_only')==='1'; }catch(e){}
   acb.checked=_sfAnimOnly;
   acb.onchange=()=>{ _sfAnimOnly=acb.checked; try{ localStorage.setItem('breach_sf_anim_only', _sfAnimOnly?'1':'0'); }catch(e){} if(q.value.trim()) doSearch(); };   // re-run with the filter
@@ -15094,7 +15113,7 @@ function renderModelSearchPP(host, onPick, opts){
   const sBtn=document.createElement('button'); sBtn.textContent='Search'; sBtn.style.flex='0 0 auto';
   sRow.appendChild(q); sRow.appendChild(sBtn); host.appendChild(sRow);
   const fRow=document.createElement('label'); fRow.style.cssText='display:flex;align-items:center;gap:6px;color:#9fe6cf;font-size:11px;margin:1px 0 2px;cursor:pointer;';
-  const anim=document.createElement('input'); anim.type='checkbox'; anim.style.cssText='width:14px;height:14px;accent-color:#38f5b5;';
+  const anim=document.createElement('input'); anim.type='checkbox'; anim.style.cssText='width:14px;height:14px;accent-color:var(--accent);';
   const fSp=document.createElement('span'); fSp.textContent='Animated only';
   fRow.appendChild(anim); fRow.appendChild(fSp); host.appendChild(fRow);
   const status=document.createElement('div'); status.className='hint'; status.style.margin='2px 0'; host.appendChild(status);
@@ -15316,7 +15335,7 @@ function buildEditorPanel(){
       + '<button id="edCollapse" title="Collapse panel">\u2304</button>'
     + '</div>'
     + '<div class="hint">Click an object to select it. <b>Shift+click</b> props to multi-select. Use <b>Move / Rotate / Scale</b> + the handles, or type values. <b>Shift+D</b> duplicates (or <b>Alt+drag</b> a prop to clone it in place), <b>Delete</b> removes. Drag the left edge to resize. Press <b>P</b> to close.</div>'
-    + '<div class="row2" style="margin:0 0 8px"><button id="edPlay" style="background:#38f5b5;color:#05070a;font-weight:700;border:none">▶ Play level</button><button id="edMenu" style="background:rgba(255,140,60,.14);color:#ffd9a8;font-weight:700;border:1px solid rgba(255,150,70,.55)">⌂ Main menu</button></div>'
+    + '<div class="row2" style="margin:0 0 8px"><button id="edPlay" style="background:var(--accent);color:#05070a;font-weight:700;border:none">▶ Play level</button><button id="edMenu" style="background:rgba(255,140,60,.14);color:#ffd9a8;font-weight:700;border:1px solid rgba(255,150,70,.55)">⌂ Main menu</button></div>'
     + '<div class="row2" id="edView" style="margin-bottom:10px"></div>'
     + '<div class="edModes" id="edModes"></div>'
     + '<div class="tabs" id="edTabs"></div>'
@@ -15337,7 +15356,7 @@ function buildEditorPanel(){
     + sec('Level file', 'levelfile',
         '<div id="edIssues"></div>'
       + '<div class="row2"><button id="edSave">💾 Save</button><button id="edClear">Clear save</button></div>'
-      + '<label style="display:flex;align-items:center;gap:7px;margin:6px 0 2px;color:#9fe6cf;font-size:12px;cursor:pointer"><input type="checkbox" id="edAutoSave" style="width:15px;height:15px;accent-color:#38f5b5"><b>Autosave</b> while editing</label>'
+      + '<label style="display:flex;align-items:center;gap:7px;margin:6px 0 2px;color:#9fe6cf;font-size:12px;cursor:pointer"><input type="checkbox" id="edAutoSave" style="width:15px;height:15px;accent-color:var(--accent)"><b>Autosave</b> while editing</label>'
       + '<div class="hint" id="edAutoStatus" style="font-size:10px;opacity:0.75;margin:0 0 4px">Saves automatically as you work.</div>'
       + '<div class="row2" style="margin-top:6px"><button id="edShare">🔗 Copy share link</button></div>'
       + '<div class="row2" style="margin-top:6px"><button id="edExport">⬇ Export .json</button><button id="edImport">⬆ Import .json</button></div>'
@@ -15603,7 +15622,7 @@ function renderEditorFields(){
     const slider = (host, label, key, min, max, step)=>{
       const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:5px 0;';
       const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='86px';
-      const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=worldCfg[key]; rng.style.cssText='flex:1;accent-color:#38f5b5;';
+      const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=worldCfg[key]; rng.style.cssText='flex:1;accent-color:var(--accent);';
       const num=document.createElement('input'); num.type='number'; num.min=min; num.max=max; num.step=step; num.value=+(+worldCfg[key]).toFixed(2); num.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
       const apply=(v)=>{ worldCfg[key]=parseFloat(v)||0; applyWorldCfg(); rng.value=worldCfg[key]; num.value=+(+worldCfg[key]).toFixed(2); };
       rng.oninput=()=>apply(rng.value); num.onchange=()=>apply(num.value);
@@ -15655,12 +15674,12 @@ function renderEditorFields(){
     { const b=subSec('Camera \u0026 view','cam',true);
       slider(b,'Field of view','fov',50,110,1); slider(b,'View distance','viewDist',60,2000,10); slider(b,'Fog density','fogDensity',0,0.08,0.001); colorRow(b,'Fog color','fogColor');
       const gridRow=document.createElement('label'); gridRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0;cursor:pointer;';
-      const gridCb=document.createElement('input'); gridCb.type='checkbox'; gridCb.checked=(worldCfg.grid!==false); gridCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+      const gridCb=document.createElement('input'); gridCb.type='checkbox'; gridCb.checked=(worldCfg.grid!==false); gridCb.style.cssText='width:15px;height:15px;accent-color:var(--accent);cursor:pointer;';
       gridCb.onchange=()=>{ pushUndoSnapshot(); worldCfg.grid=gridCb.checked; applyWorldCfg(); };
       const gridSp=document.createElement('span'); gridSp.textContent='Show ground grid'; gridRow.appendChild(gridCb); gridRow.appendChild(gridSp); b.appendChild(gridRow);
       hint(b,'','0 0 4px').textContent='Lower fog density = see farther into the dark. View distance is the hard cutoff where geometry stops drawing.';
       const dofRow=document.createElement('label'); dofRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:8px 0 4px;cursor:pointer;';
-      const dofCb=document.createElement('input'); dofCb.type='checkbox'; dofCb.checked=(worldCfg.dof===true); dofCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+      const dofCb=document.createElement('input'); dofCb.type='checkbox'; dofCb.checked=(worldCfg.dof===true); dofCb.style.cssText='width:15px;height:15px;accent-color:var(--accent);cursor:pointer;';
       dofCb.onchange=()=>{ pushUndoSnapshot(); worldCfg.dof=dofCb.checked; applyWorldCfg(); renderEditorFields(); };
       const dofSp=document.createElement('span'); dofSp.innerHTML='<b>Depth of field</b> \u2014 blur by distance'; dofRow.appendChild(dofCb); dofRow.appendChild(dofSp); b.appendChild(dofRow);
       if(worldCfg.dof===true){ slider(b,'Focus distance','dofFocus',2,120,1); slider(b,'In-focus range','dofRange',1,80,1); slider(b,'Blur strength','dofStrength',0.1,4,0.1);
@@ -15683,7 +15702,7 @@ function renderEditorFields(){
       { const tb=document.createElement('div'); tb.style.cssText='margin-top:8px;border-top:1px solid #1d2b33;padding-top:7px;';
         const tl=document.createElement('div'); tl.className='hint'; tl.style.margin='0 0 5px'; tl.innerHTML='<b>Terrain</b> \u2014 rolling height-mesh. Walks correctly in both Classic and Physics movement.'; tb.appendChild(tl);
         const tcur=worldCfg.terrain||null;
-        const trow=(lab,val,mn,mx,st)=>{ const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:3px 0;'; const sp=document.createElement('span'); sp.textContent=lab; sp.style.minWidth='52px'; const inp=document.createElement('input'); inp.type='range'; inp.min=mn; inp.max=mx; inp.step=st; inp.value=val; inp.style.flex='1'; inp.style.accentColor='#38f5b5'; const nm=document.createElement('span'); nm.textContent=val; nm.style.minWidth='26px'; nm.style.textAlign='right'; inp.oninput=()=>{ nm.textContent=inp.value; }; r.appendChild(sp); r.appendChild(inp); r.appendChild(nm); tb.appendChild(r); return inp; };
+        const trow=(lab,val,mn,mx,st)=>{ const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:3px 0;'; const sp=document.createElement('span'); sp.textContent=lab; sp.style.minWidth='52px'; const inp=document.createElement('input'); inp.type='range'; inp.min=mn; inp.max=mx; inp.step=st; inp.value=val; inp.style.flex='1'; inp.style.accentColor='var(--accent)'; const nm=document.createElement('span'); nm.textContent=val; nm.style.minWidth='26px'; nm.style.textAlign='right'; inp.oninput=()=>{ nm.textContent=inp.value; }; r.appendChild(sp); r.appendChild(inp); r.appendChild(nm); tb.appendChild(r); return inp; };
         const ampIn=trow('Height', tcur?(tcur.amp!=null?tcur.amp:6):6, 0, 18, 0.5);
         const freqIn=trow('Detail', tcur?(tcur.freq||3):3, 1, 8, 1);
         const br=document.createElement('div'); br.style.cssText='display:flex;gap:6px;margin-top:5px;';
@@ -15693,7 +15712,7 @@ function renderEditorFields(){
         flat.onclick=()=>{ pushUndoSnapshot(); worldCfg.terrain=null; setTerrainFromCfg(true); renderEditorFields(); };
         br.appendChild(gen); br.appendChild(flat); tb.appendChild(br);
         // sculpt brush controls
-        const mkBSlider=(lab,val,mn,mx,st,set)=>{ const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:5px 0 0;'; const sp=document.createElement('span'); sp.textContent=lab; sp.style.minWidth='62px'; const inp=document.createElement('input'); inp.type='range'; inp.min=mn; inp.max=mx; inp.step=st; inp.value=val; inp.style.flex='1'; inp.style.accentColor='#38f5b5'; const nm=document.createElement('span'); nm.textContent=val; nm.style.minWidth='28px'; nm.style.textAlign='right'; inp.oninput=()=>{ nm.textContent=inp.value; set(+inp.value); }; r.appendChild(sp); r.appendChild(inp); r.appendChild(nm); return r; };
+        const mkBSlider=(lab,val,mn,mx,st,set)=>{ const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:5px 0 0;'; const sp=document.createElement('span'); sp.textContent=lab; sp.style.minWidth='62px'; const inp=document.createElement('input'); inp.type='range'; inp.min=mn; inp.max=mx; inp.step=st; inp.value=val; inp.style.flex='1'; inp.style.accentColor='var(--accent)'; const nm=document.createElement('span'); nm.textContent=val; nm.style.minWidth='28px'; nm.style.textAlign='right'; inp.oninput=()=>{ nm.textContent=inp.value; set(+inp.value); }; r.appendChild(sp); r.appendChild(inp); r.appendChild(nm); return r; };
         const bw=document.createElement('div'); bw.style.cssText='margin-top:8px;border-top:1px solid #1e3a3a;padding-top:7px;';
         const bl=document.createElement('label'); bl.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;cursor:pointer;';
         const bcb=document.createElement('input'); bcb.type='checkbox'; bcb.checked=terrainBrush.on; bcb.onchange=()=>{ terrainBrush.on=bcb.checked; renderEditorFields(); };
@@ -15710,7 +15729,7 @@ function renderEditorFields(){
         b.appendChild(tb); } }
     { const b=subSec('Cinematic','cine',true);
       { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 6px;cursor:pointer;';
-        const c=document.createElement('input'); c.type='checkbox'; c.checked=!!cineCfg.on; c.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+        const c=document.createElement('input'); c.type='checkbox'; c.checked=!!cineCfg.on; c.style.cssText='width:15px;height:15px;accent-color:var(--accent);cursor:pointer;';
         c.onchange=()=>{ pushUndoSnapshot(); cineCfg.on=c.checked; };
         const sp=document.createElement('span'); sp.innerHTML='<b>Play intro flythrough on deploy</b>'; r.appendChild(c); r.appendChild(sp); if(_cineCSel===0) b.appendChild(r); }
       // ---- cutscene selector: #1 is the deploy intro; extras are signal-only, played by name ----
@@ -15746,7 +15765,7 @@ function renderEditorFields(){
         b.appendChild(sr); }
       const CS = cineAllShots()[_cineShotSel];   // every path/lens/focus/dur/look control below edits this shot
       { const r2=document.createElement('label'); r2.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:-2px 0 6px;cursor:pointer;';
-        const c2=document.createElement('input'); c2.type='checkbox'; c2.checked=!!cineShowChar; c2.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+        const c2=document.createElement('input'); c2.type='checkbox'; c2.checked=!!cineShowChar; c2.style.cssText='width:15px;height:15px;accent-color:var(--accent);cursor:pointer;';
         c2.onchange=()=>{ cineShowChar=c2.checked; if(typeof refreshCinePreview==='function') refreshCinePreview(); };
         const sp2=document.createElement('span'); sp2.textContent='Show character at the player start'; r2.appendChild(c2); r2.appendChild(sp2); b.appendChild(r2); }
       hint(b,'Fly the editor camera to a spot, Add a waypoint, repeat. 2+ points moves the camera; 1 point is a held shot. The shot frames your player start (or its travel direction). Deploy to watch; any key or tap skips.','0 0 6px');
@@ -15769,12 +15788,12 @@ function renderEditorFields(){
           r.appendChild(del); b.appendChild(r); });
         const clr=document.createElement('button'); clr.textContent='Clear path'; clr.style.cssText='padding:3px 10px;font-size:11px;margin:3px 0;'; clr.onclick=()=>{ pushUndoSnapshot(); CS.path.length=0; renderEditorFields(); }; b.appendChild(clr);
       }
-      const crow=(lab,val,mn,mx,st,suffix,set)=>{ const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent=lab; sp.style.minWidth='56px'; const inp=document.createElement('input'); inp.type='range'; inp.min=mn; inp.max=mx; inp.step=st; inp.value=val; inp.style.flex='1'; inp.style.accentColor='#38f5b5'; const nm=document.createElement('span'); nm.textContent=val+suffix; nm.style.minWidth='44px'; nm.style.textAlign='right'; inp.oninput=()=>{ nm.textContent=inp.value+suffix; set(+inp.value); }; r.appendChild(sp); r.appendChild(inp); r.appendChild(nm); b.appendChild(r); };
+      const crow=(lab,val,mn,mx,st,suffix,set)=>{ const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent=lab; sp.style.minWidth='56px'; const inp=document.createElement('input'); inp.type='range'; inp.min=mn; inp.max=mx; inp.step=st; inp.value=val; inp.style.flex='1'; inp.style.accentColor='var(--accent)'; const nm=document.createElement('span'); nm.textContent=val+suffix; nm.style.minWidth='44px'; nm.style.textAlign='right'; inp.oninput=()=>{ nm.textContent=inp.value+suffix; set(+inp.value); }; r.appendChild(sp); r.appendChild(inp); r.appendChild(nm); b.appendChild(r); };
       crow('Lens start', CS.lensFrom, 14, 120, 1, 'mm', v=>{ CS.lensFrom=v; });
       crow('Lens end', CS.lensTo, 14, 120, 1, 'mm', v=>{ CS.lensTo=v; });
       hint(b,'Different start/end lens = a zoom across the shot (e.g. 35 to 85 pushes in).','0 0 4px');
       { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0 2px;cursor:pointer;';
-        const c=document.createElement('input'); c.type='checkbox'; c.checked=!!CS.focusOn; c.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+        const c=document.createElement('input'); c.type='checkbox'; c.checked=!!CS.focusOn; c.style.cssText='width:15px;height:15px;accent-color:var(--accent);cursor:pointer;';
         c.onchange=()=>{ pushUndoSnapshot(); CS.focusOn=c.checked; renderEditorFields(); };
         const sp=document.createElement('span'); sp.innerHTML='<b>Rack focus</b> (depth of field)'; r.appendChild(c); r.appendChild(sp); b.appendChild(r); }
       if(CS.focusOn){
@@ -15797,7 +15816,7 @@ function renderEditorFields(){
       if(typeof refreshCinePreview==='function') refreshCinePreview(); }
     { const b=subSec('Walls','walls',true);
       { const vr=document.createElement('label'); vr.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 6px;cursor:pointer;';
-        const vc=document.createElement('input'); vc.type='checkbox'; vc.checked=(worldCfg.wallsVisible!==false); vc.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+        const vc=document.createElement('input'); vc.type='checkbox'; vc.checked=(worldCfg.wallsVisible!==false); vc.style.cssText='width:15px;height:15px;accent-color:var(--accent);cursor:pointer;';
         vc.onchange=()=>{ pushUndoSnapshot(); worldCfg.wallsVisible=vc.checked; applyWorldCfg(); };
         const vs=document.createElement('span'); vs.innerHTML='<b>Show boundary walls</b> \u2014 off = invisible, still solid'; vr.appendChild(vc); vr.appendChild(vs); b.appendChild(vr); }
       colorRow(b,'Wall color','wallColor'); slider(b,'Wall roughness','wallRough',0,1,0.05); slider(b,'Wall metalness','wallMetal',0,1,0.05);
@@ -15926,7 +15945,7 @@ function renderEditorFields(){
     hint(gHost, '<b>Fall damage</b> — hurt anything that lands hard', '10px 0 4px');
     const fdToggle=(label, get, set)=>{
       const lab=document.createElement('label'); lab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;cursor:pointer;margin:3px 0;';
-      const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!!get(); cb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;flex:none;';
+      const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!!get(); cb.style.cssText='width:15px;height:15px;accent-color:var(--accent);flex:none;';
       cb.onchange=()=>{ pushUndoSnapshot(); set(cb.checked); renderEditorFields(); };
       const sp=document.createElement('span'); sp.innerHTML=label; lab.appendChild(cb); lab.appendChild(sp); gHost.appendChild(lab);
     };
@@ -15937,7 +15956,7 @@ function renderEditorFields(){
       const fdNum=(label, get, set, min, max, step, hintTxt)=>{
         const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;';
         const s=document.createElement('span'); s.textContent=label; s.style.minWidth='92px';
-        const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=get(); rng.style.cssText='flex:1;accent-color:#38f5b5;';
+        const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=get(); rng.style.cssText='flex:1;accent-color:var(--accent);';
         const nm=document.createElement('input'); nm.type='number'; nm.step=step; nm.value=+(+get()).toFixed(2); nm.style.cssText='width:60px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
         const ap=(v)=>{ let n=parseFloat(v); if(!isFinite(n)) n=min; n=Math.max(min,Math.min(max,n)); set(n); rng.value=n; nm.value=+n.toFixed(2); };
         rng.addEventListener('mousedown',()=>pushUndoSnapshot()); nm.addEventListener('focus',()=>pushUndoSnapshot());
@@ -15958,7 +15977,7 @@ function renderEditorFields(){
       const cdNum=(label, get, set, min, max, step, hintTxt)=>{
         const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;';
         const s=document.createElement('span'); s.textContent=label; s.style.minWidth='92px';
-        const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=get(); rng.style.cssText='flex:1;accent-color:#38f5b5;';
+        const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=get(); rng.style.cssText='flex:1;accent-color:var(--accent);';
         const nm=document.createElement('input'); nm.type='number'; nm.step=step; nm.value=+(+get()).toFixed(2); nm.style.cssText='width:60px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
         const ap=(v)=>{ let n=parseFloat(v); if(!isFinite(n)) n=min; n=Math.max(min,Math.min(max,n)); set(n); rng.value=n; nm.value=+n.toFixed(2); };
         rng.addEventListener('mousedown',()=>pushUndoSnapshot()); nm.addEventListener('focus',()=>pushUndoSnapshot());
@@ -16009,7 +16028,7 @@ function renderEditorFields(){
     { const sr = gameCfg.spawnRegion;
       hint(gHost, '<b>Multiplayer spawn area</b>', '14px 0 4px');
       const onLab=document.createElement('label'); onLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 4px;cursor:pointer;';
-      const onCb=document.createElement('input'); onCb.type='checkbox'; onCb.checked=!!sr.on; onCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+      const onCb=document.createElement('input'); onCb.type='checkbox'; onCb.checked=!!sr.on; onCb.style.cssText='width:15px;height:15px;accent-color:var(--accent);cursor:pointer;';
       onCb.onchange=()=>{ pushUndoSnapshot(); sr.on=onCb.checked; refreshSpawnRegionMarker(); renderEditorFields(); };
       const onSp=document.createElement('span'); onSp.innerHTML='<b>Confine spawns to a region</b>'; onLab.appendChild(onCb); onLab.appendChild(onSp); gHost.appendChild(onLab);
       hint(gHost,'','0 0 6px').textContent = sr.on
@@ -16019,7 +16038,7 @@ function renderEditorFields(){
         // shape: circle or clicked outline (polygon) for odd-shaped arenas
         const shRow=document.createElement('div'); shRow.style.cssText='display:flex;gap:6px;margin:2px 0 8px;';
         [['circle','● Circle'],['poly','⬡ Outline']].forEach(([val,lab])=>{
-          const b=document.createElement('button'); b.textContent=lab; b.style.cssText='flex:1;'+(sr.shape===val?'background:#1d6f5e;border-color:#38f5b5;color:#eafff7;':'');
+          const b=document.createElement('button'); b.textContent=lab; b.style.cssText='flex:1;'+(sr.shape===val?'background:#1d6f5e;border-color:var(--accent);color:#eafff7;':'');
           b.onclick=()=>{ pushUndoSnapshot(); sr.shape=val; if(val==='circle') spawnPolyEdit=false; refreshSpawnRegionMarker(); renderEditorFields(); };
           shRow.appendChild(b);
         });
@@ -16047,7 +16066,7 @@ function renderEditorFields(){
           const mkN=(label,key,min,max,step)=>{
             const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:8px;color:#9fe6cf;font-size:12px;margin:3px 0;';
             const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='70px';
-            const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=sr[key]; rng.style.cssText='flex:1;accent-color:#38f5b5;';
+            const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=sr[key]; rng.style.cssText='flex:1;accent-color:var(--accent);';
             const num=document.createElement('input'); num.type='number'; num.min=min; num.max=max; num.step=step; num.value=sr[key]; num.style.cssText='width:62px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:11px;';
             const ap=(v)=>{ let n=parseFloat(v); if(!isFinite(n)) n=0; sr[key]=n; rng.value=n; num.value=n; refreshSpawnRegionMarker(); };
             rng.addEventListener('mousedown',()=>pushUndoSnapshot()); num.addEventListener('focus',()=>pushUndoSnapshot());
@@ -16063,7 +16082,7 @@ function renderEditorFields(){
     pkHost.innerHTML='';
     hint(pkHost, '<b>Pickups</b> \u2014 items players grab on the map', '12px 0 4px');
     { const poLab=document.createElement('label'); poLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 6px;cursor:pointer;';
-      const poCb=document.createElement('input'); poCb.type='checkbox'; poCb.checked=pickupsOn; poCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+      const poCb=document.createElement('input'); poCb.type='checkbox'; poCb.checked=pickupsOn; poCb.style.cssText='width:15px;height:15px;accent-color:var(--accent);cursor:pointer;';
       poCb.onchange=()=>{ pushUndoSnapshot(); pickupsOn=poCb.checked; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers(); renderEditorFields(); };
       const poSp=document.createElement('span'); poSp.textContent='Spawn pickups'; poLab.appendChild(poCb); poLab.appendChild(poSp); pkHost.appendChild(poLab); }
     if(!pickupsOn){ hint(pkHost,'','2px 0 6px').textContent='Pickups are off \u2014 no health/buff diamonds spawn (placed spots below are kept for when you turn this back on).'; }
@@ -16113,7 +16132,7 @@ function renderEditorFields(){
       : 'Random: each wave auto-spawns scattered, mixed-type hostiles that scale with the wave number.';
     if(gameCfg.mode==='prebuilt'){
       const nrLab=document.createElement('label'); nrLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 4px;cursor:pointer;';
-      const nrCb=document.createElement('input'); nrCb.type='checkbox'; nrCb.checked=!!gameCfg.noRespawn; nrCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+      const nrCb=document.createElement('input'); nrCb.type='checkbox'; nrCb.checked=!!gameCfg.noRespawn; nrCb.style.cssText='width:15px;height:15px;accent-color:var(--accent);cursor:pointer;';
       nrCb.onchange=()=>{ pushUndoSnapshot(); gameCfg.noRespawn=nrCb.checked; renderEditorFields(); };
       const nrSp=document.createElement('span'); nrSp.innerHTML='<b>No respawn</b> (single pass)'; nrLab.appendChild(nrCb); nrLab.appendChild(nrSp); gHost.appendChild(nrLab);
       hint(gHost,'','0 0 6px').textContent = gameCfg.noRespawn
@@ -16133,7 +16152,7 @@ function renderEditorFields(){
     bwLab.appendChild(bwSp); bwLab.appendChild(bwN); gHost.appendChild(bwLab);
     hint(gHost, '', '2px 0 0').textContent = (gameCfg.bossWave>0) ? ('Random mode: a BOSS joins every '+gameCfg.bossWave+' wave'+(gameCfg.bossWave===1?'':'s')+'. (Pre-built: place boss spawns on the Spawns tab.)') : 'No automatic bosses (you can still place boss spawns on the Spawns tab).';
     const ugLab=document.createElement('label'); ugLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:8px 0 2px;cursor:pointer;';
-    const ugCb=document.createElement('input'); ugCb.type='checkbox'; ugCb.checked=(gameCfg.upgrades!==false); ugCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+    const ugCb=document.createElement('input'); ugCb.type='checkbox'; ugCb.checked=(gameCfg.upgrades!==false); ugCb.style.cssText='width:15px;height:15px;accent-color:var(--accent);cursor:pointer;';
     ugCb.onchange=()=>{ pushUndoSnapshot(); gameCfg.upgrades=ugCb.checked; };
     const ugSp=document.createElement('span'); ugSp.textContent='Between-wave upgrade cards (solo)';
     ugLab.appendChild(ugCb); ugLab.appendChild(ugSp); gHost.appendChild(ugLab);
@@ -16141,7 +16160,7 @@ function renderEditorFields(){
     // hit-number look
     hint(gHost, '<b>Hit numbers</b>', '12px 0 4px');
     const hnLab=document.createElement('label'); hnLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;cursor:pointer;';
-    const hnCb=document.createElement('input'); hnCb.type='checkbox'; hnCb.checked=(dmgNumCfg.on!==false); hnCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+    const hnCb=document.createElement('input'); hnCb.type='checkbox'; hnCb.checked=(dmgNumCfg.on!==false); hnCb.style.cssText='width:15px;height:15px;accent-color:var(--accent);cursor:pointer;';
     hnCb.onchange=()=>{ pushUndoSnapshot(); dmgNumCfg.on=hnCb.checked; renderEditorFields(); };
     const hnSp=document.createElement('span'); hnSp.textContent='Show floating damage numbers';
     hnLab.appendChild(hnCb); hnLab.appendChild(hnSp); gHost.appendChild(hnLab);
@@ -16179,7 +16198,7 @@ function renderEditorFields(){
     hint(lHost, '', '3px 0 0').textContent = 'Apply clears current loot boxes so the next spawn uses the new model.';
     // ---- Random spawn toggle: when off, ONLY placed loot boxes appear ----
     const rlRow=document.createElement('label'); rlRow.style.cssText='display:flex;align-items:center;gap:8px;color:#9fe6cf;font-size:12px;margin:10px 0 2px;cursor:pointer;';
-    const rlCb=document.createElement('input'); rlCb.type='checkbox'; rlCb.checked=randomLootOn; rlCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;';
+    const rlCb=document.createElement('input'); rlCb.type='checkbox'; rlCb.checked=randomLootOn; rlCb.style.cssText='width:15px;height:15px;accent-color:var(--accent);';
     rlCb.onchange=()=>{ pushUndoSnapshot(); randomLootOn=rlCb.checked; renderEditorFields(); };
     const rlSp=document.createElement('span'); rlSp.innerHTML='<b>Spawn random loot boxes</b>';
     rlRow.appendChild(rlCb); rlRow.appendChild(rlSp); lHost.appendChild(rlRow);
@@ -16201,7 +16220,7 @@ function renderEditorFields(){
       const lootNum=(label,get,set,min,max,step)=>{
         const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:11px;margin:2px 0;';
         const s=document.createElement('span'); s.textContent=label; s.style.minWidth='58px';
-        const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=get(); rng.style.cssText='flex:1;accent-color:#38f5b5;';
+        const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=get(); rng.style.cssText='flex:1;accent-color:var(--accent);';
         const nm=document.createElement('input'); nm.type='number'; nm.step=step; nm.value=+(+get()).toFixed(2); nm.style.cssText='width:56px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:11px;';
         const ap=(v)=>{ let n=parseFloat(v); if(!isFinite(n)) n=0; set(n); rng.value=n; nm.value=+(+n).toFixed(2); refreshLootMarkers(); };
         rng.addEventListener('mousedown',()=>pushUndoSnapshot()); nm.addEventListener('focus',()=>pushUndoSnapshot());
@@ -16221,7 +16240,7 @@ function renderEditorFields(){
       const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:1fr 1fr;gap:3px;';
       ITEM_POOL.forEach(it=>{
         const lab=document.createElement('label'); lab.style.cssText='display:flex;align-items:center;gap:5px;font-size:10px;color:#cfeee2;cursor:pointer;';
-        const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=(sp.items||[]).includes(it.id); cb.style.cssText='width:13px;height:13px;accent-color:#38f5b5;flex:none;';
+        const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=(sp.items||[]).includes(it.id); cb.style.cssText='width:13px;height:13px;accent-color:var(--accent);flex:none;';
         cb.onchange=()=>{ pushUndoSnapshot(); sp.items=sp.items||[]; if(cb.checked){ if(!sp.items.includes(it.id)) sp.items.push(it.id); } else { sp.items=sp.items.filter(x=>x!==it.id); } renderEditorFields(); };
         const sp2=document.createElement('span'); sp2.textContent=it.name; lab.appendChild(cb); lab.appendChild(sp2); grid.appendChild(lab);
       });
@@ -16231,7 +16250,7 @@ function renderEditorFields(){
     // coins
     hint(lHost, '<b>Coins</b> — drops collected for credits', '12px 0 4px');
     const cnLab=document.createElement('label'); cnLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;cursor:pointer;';
-    const cnCb=document.createElement('input'); cnCb.type='checkbox'; cnCb.checked=(coinCfg.on!==false); cnCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;cursor:pointer;';
+    const cnCb=document.createElement('input'); cnCb.type='checkbox'; cnCb.checked=(coinCfg.on!==false); cnCb.style.cssText='width:15px;height:15px;accent-color:var(--accent);cursor:pointer;';
     cnCb.onchange=()=>{ pushUndoSnapshot(); coinCfg.on=cnCb.checked; renderEditorFields(); };
     const cnSp=document.createElement('span'); cnSp.textContent='Spawn coins on kills';
     cnLab.appendChild(cnCb); cnLab.appendChild(cnSp); lHost.appendChild(cnLab);
@@ -16324,7 +16343,7 @@ function renderEditorFields(){
     const mkSlide=(label,key,min,max,step)=>{
       const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:8px;color:#9fe6cf;font-size:12px;margin:4px 0;';
       const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='70px';
-      const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=extractFxCfg[key]; rng.style.cssText='flex:1;accent-color:#38f5b5;';
+      const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=extractFxCfg[key]; rng.style.cssText='flex:1;accent-color:var(--accent);';
       const num=document.createElement('input'); num.type='number'; num.min=min; num.max=max; num.step=step; num.value=extractFxCfg[key]; num.style.cssText='width:60px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:11px;';
       const ap=(v)=>{ let n=parseFloat(v); if(!isFinite(n)) n=min; n=Math.max(min,Math.min(max,n)); extractFxCfg[key]=n; rng.value=n; num.value=n; applyExtractFx(); };
       rng.addEventListener('mousedown',()=>pushUndoSnapshot()); num.addEventListener('focus',()=>pushUndoSnapshot());
@@ -16334,7 +16353,7 @@ function renderEditorFields(){
     mkSlide('Glow','opacity',0.1,1,0.05);
     mkSlide('Height','height',0,20,0.5);
     const pilRow=document.createElement('label'); pilRow.style.cssText='display:flex;align-items:center;gap:8px;color:#9fe6cf;font-size:12px;margin:4px 0;cursor:pointer;';
-    const pilCb=document.createElement('input'); pilCb.type='checkbox'; pilCb.checked=extractFxCfg.pillar; pilCb.style.cssText='width:15px;height:15px;accent-color:#38f5b5;';
+    const pilCb=document.createElement('input'); pilCb.type='checkbox'; pilCb.checked=extractFxCfg.pillar; pilCb.style.cssText='width:15px;height:15px;accent-color:var(--accent);';
     pilCb.onchange=()=>{ pushUndoSnapshot(); extractFxCfg.pillar=pilCb.checked; applyExtractFx(); };
     const pilSp=document.createElement('span'); pilSp.textContent='Light pillar';
     pilRow.appendChild(pilCb); pilRow.appendChild(pilSp); picker.appendChild(pilRow);
@@ -16427,7 +16446,7 @@ function renderEditorFields(){
     gz.innerHTML = '';
     const selectable = (editorActive==='station') || (editorActive==='props' && !!editorTargets.props.obj()) || (editorActive==='lights' && !!editorTargets.lights.obj());
     if(selectable){
-      const head = document.createElement('div'); head.className='hint'; head.style.margin='2px 0 3px'; head.innerHTML='<b>Gizmo</b> — drag the handles in the scene · keys <b>1 2 3</b>' + (isGroupSel() ? (' · <b style="color:#38f5b5">'+activeSel().length+' selected (group)</b>') : '');
+      const head = document.createElement('div'); head.className='hint'; head.style.margin='2px 0 3px'; head.innerHTML='<b>Gizmo</b> — drag the handles in the scene · keys <b>1 2 3</b>' + (isGroupSel() ? (' · <b style="color:var(--accent)">'+activeSel().length+' selected (group)</b>') : '');
       gz.appendChild(head);
       const row = document.createElement('div'); row.className='row2';
       const modes = [['translate','Move','1'],['rotate','Rotate','2'],['scale','Scale','3']];
@@ -16443,7 +16462,7 @@ function renderEditorFields(){
       if(editorActive!=='lights'){
         const lab=document.createElement('label'); lab.className='propToggle';
         lab.style.cssText='display:flex;align-items:center;gap:7px;margin:7px 0 2px;color:#9fe6cf;font-size:12px;cursor:pointer;'+(gizmoMode==='scale'?'':'opacity:0.55;');
-        const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=scaleProportional; cb.style.accentColor='#38f5b5';
+        const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=scaleProportional; cb.style.accentColor='var(--accent)';
         cb.onchange=()=>{ scaleProportional=cb.checked; };
         const span=document.createElement('span'); span.innerHTML='Proportional scaling '+(scaleProportional?'(uniform)':'(per-axis)');
         lab.appendChild(cb); lab.appendChild(span);
@@ -16660,7 +16679,7 @@ function renderEditorFields(){
         const phead=document.createElement('div'); phead.className='hint'; phead.style.margin='8px 0 3px'; phead.innerHTML='<b>Physics</b> — dynamic objects fall, tumble, stack & react to shots';
         const pdBody = edFold(animHost, 'physdest', 'Physics & destruction', false, 'Dynamic, grabbable, breakable, explosive, debris');
         const plab=document.createElement('label'); plab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;cursor:pointer;';
-        const pcb=document.createElement('input'); pcb.type='checkbox'; pcb.checked=!!sel.userData.phys; pcb.style.accentColor='#38f5b5';
+        const pcb=document.createElement('input'); pcb.type='checkbox'; pcb.checked=!!sel.userData.phys; pcb.style.accentColor='var(--accent)';
         pcb.onchange=()=>{ pushUndoSnapshot(); setPropDynamic(sel, pcb.checked); renderEditorFields(); };
         const pspan=document.createElement('span'); pspan.textContent='Dynamic (reacts to physics)';
         plab.appendChild(pcb); plab.appendChild(pspan); pdBody.appendChild(plab);
@@ -16669,7 +16688,7 @@ function renderEditorFields(){
           if(sel.userData.mass==null) sel.userData.mass = defaultMassFor(sel);
           const wlab=document.createElement('label'); wlab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin-top:6px;';
           const wspan=document.createElement('span'); wspan.textContent='Weight'; wspan.style.minWidth='44px';
-          const wrange=document.createElement('input'); wrange.type='range'; wrange.min='0.2'; wrange.max='50'; wrange.step='0.1'; wrange.value=sel.userData.mass; wrange.style.cssText='flex:1;accent-color:#38f5b5;';
+          const wrange=document.createElement('input'); wrange.type='range'; wrange.min='0.2'; wrange.max='50'; wrange.step='0.1'; wrange.value=sel.userData.mass; wrange.style.cssText='flex:1;accent-color:var(--accent);';
           const wnum=document.createElement('input'); wnum.type='number'; wnum.min='0.05'; wnum.max='200'; wnum.step='0.1'; wnum.value=sel.userData.mass; wnum.style.cssText='width:62px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
           const applyW=(v)=>{ const m=Math.max(0.05,Math.min(200, parseFloat(v)||1)); wrange.value=Math.min(50,Math.max(0.2,m)); wnum.value=m; setPropMass(sel, m); };
           wrange.oninput=()=>applyW(wrange.value); wnum.onchange=()=>applyW(wnum.value);
@@ -16683,7 +16702,7 @@ function renderEditorFields(){
 
           // Grabbable: can the gravity gun pick this prop up, carry and throw it?
           const grb=document.createElement('label'); grb.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin-top:8px;cursor:pointer;';
-          const grbcb=document.createElement('input'); grbcb.type='checkbox'; grbcb.checked=(sel.userData.noGrab!==true); grbcb.style.accentColor='#38f5b5';
+          const grbcb=document.createElement('input'); grbcb.type='checkbox'; grbcb.checked=(sel.userData.noGrab!==true); grbcb.style.accentColor='var(--accent)';
           grbcb.onchange=()=>{ pushUndoSnapshot(); sel.userData.noGrab = !grbcb.checked; };
           const grbsp=document.createElement('span'); grbsp.innerHTML='<b>Grabbable</b> \u2014 can be picked up &amp; thrown';
           grb.appendChild(grbcb); grb.appendChild(grbsp); pdBody.appendChild(grb);
@@ -16886,7 +16905,7 @@ function renderEditorFields(){
       cRow.appendChild(cSp); cRow.appendChild(cInp); urlHost.appendChild(cRow);
       const mkSL=(label,key,min,max,step,def)=>{ const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:3px 0;';
         const sp=document.createElement('span'); sp.textContent=label; sp.style.minWidth='86px';
-        const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=(s[key]!=null?s[key]:def); rng.style.cssText='flex:1;accent-color:#38f5b5;';
+        const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=(s[key]!=null?s[key]:def); rng.style.cssText='flex:1;accent-color:var(--accent);';
         const num=document.createElement('input'); num.type='number'; num.min=min; num.max=max; num.step=step; num.value=(s[key]!=null?s[key]:def); num.style.cssText='width:60px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
         const ap=(v)=>{ s[key]=parseFloat(v)||0; rng.value=s[key]; num.value=s[key]; applyStationLight(); };
         rng.oninput=()=>ap(rng.value); num.onchange=()=>ap(num.value); rng.addEventListener('mousedown',()=>pushUndoSnapshot());
@@ -16907,7 +16926,7 @@ function renderEditorFields(){
         spd.style.cssText='flex:0 0 52px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 4px;font-size:11px;';
         spd.onchange=()=>{ if(!playerModelCfg.clipSpeed) playerModelCfg.clipSpeed={}; const v=Math.max(0.1,Math.min(4,parseFloat(spd.value)||1)); playerModelCfg.clipSpeed[stKey]=v; spd.value=String(v); applyAnimSpeedLive(stKey, v); };
         const holdWrap=document.createElement('label'); holdWrap.title='Hold the last frame instead of looping (good for Aim / Death)'; holdWrap.style.cssText='flex:0 0 auto;display:flex;align-items:center;gap:3px;font-size:10px;color:#7fb8a6;cursor:pointer;';
-        const hold=document.createElement('input'); hold.type='checkbox'; hold.style.cssText='width:13px;height:13px;accent-color:#38f5b5;';
+        const hold=document.createElement('input'); hold.type='checkbox'; hold.style.cssText='width:13px;height:13px;accent-color:var(--accent);';
         hold.checked = (playerModelCfg.clipHold && playerModelCfg.clipHold[stKey]!=null) ? !!playerModelCfg.clipHold[stKey] : (stKey==='die');
         hold.onchange=()=>{ if(!playerModelCfg.clipHold) playerModelCfg.clipHold={}; playerModelCfg.clipHold[stKey]=hold.checked; rebuildAvatars(); };
         const hl=document.createElement('span'); hl.textContent='hold'; holdWrap.appendChild(hold); holdWrap.appendChild(hl);
@@ -17054,7 +17073,7 @@ function renderEditorFields(){
       matHost.appendChild(eHead);
       const on = !!selObj.userData.emit;
       const elab=document.createElement('label'); elab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;cursor:pointer;';
-      const ecb=document.createElement('input'); ecb.type='checkbox'; ecb.checked=on; ecb.style.accentColor='#38f5b5';
+      const ecb=document.createElement('input'); ecb.type='checkbox'; ecb.checked=on; ecb.style.accentColor='var(--accent)';
       const espan=document.createElement('span'); espan.textContent='Light emitter';
       elab.appendChild(ecb); elab.appendChild(espan); matHost.appendChild(elab);
       const emit = selObj.userData.emit || { c:0x38f5b5, i:4 };
@@ -17841,9 +17860,9 @@ function showLevelLoader(){
   if(!_levelLoaderEl){
     const el=document.createElement('div'); el.id='levelLoader';
     el.style.cssText='position:fixed;inset:0;z-index:120;display:flex;flex-direction:column;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 42%, rgba(8,20,24,0.97), rgba(3,6,9,0.99));color:#eafff7;font:600 15px/1.4 ui-monospace,monospace;transition:opacity 0.4s;';
-    el.innerHTML='<div style="font-size:13px;letter-spacing:4px;color:#38f5b5;margin-bottom:16px;">BREACH</div>'
+    el.innerHTML='<div style="font-size:13px;letter-spacing:4px;color:var(--accent);margin-bottom:16px;">BREACH</div>'
       +'<div id="levelLoaderLabel" style="margin-bottom:14px;">Loading level\u2026</div>'
-      +'<div style="width:240px;height:7px;background:#0c1418;border:1px solid #1c2b30;border-radius:6px;overflow:hidden;"><div style="width:38%;height:100%;background:linear-gradient(90deg,transparent,#38f5b5,transparent);animation:propLoadSlide 1.05s ease-in-out infinite;"></div></div>';
+      +'<div style="width:240px;height:7px;background:#0c1418;border:1px solid #1c2b30;border-radius:6px;overflow:hidden;"><div style="width:38%;height:100%;background:linear-gradient(90deg,transparent,var(--accent),transparent);animation:propLoadSlide 1.05s ease-in-out infinite;"></div></div>';
     document.body.appendChild(el); _levelLoaderEl=el;
   }
   _levelLoaderEl.style.display='flex'; _levelLoaderEl.style.opacity='1'; _levelLoaderActive=true;
@@ -18046,7 +18065,7 @@ function gameWon(){
   const pr=$('prompt'); if(pr) pr.style.display='none';
   const ov=$('overlay'); ov.classList.remove('hidden');
   ov.innerHTML = `
-    <h1 style="color:#38f5b5;text-shadow:0 0 30px rgba(56,245,181,.5)">${_campaignComplete?'CAMPAIGN COMPLETE':'MISSION COMPLETE'}</h1>
+    <h1 style="color:var(--accent);text-shadow:0 0 30px rgba(56,245,181,.5)">${_campaignComplete?'CAMPAIGN COMPLETE':'MISSION COMPLETE'}</h1>
     <div class="sub">${ gameCfg.objective==='survival' ? ('SURVIVED '+fmtClock(gameCfg.surviveSecs)) : gameCfg.objective==='extraction' ? 'EXTRACTED' : gameCfg.objective==='defend' ? ('ZONE HELD '+fmtClock(gameCfg.surviveSecs)) : gameCfg.objective==='destroy' ? 'ALL TARGETS DESTROYED' : gameCfg.objective==='escort' ? 'PAYLOAD DELIVERED' : (gameCfg.winWaves+' WAVE'+(gameCfg.winWaves===1?'':'S')+' CLEARED') }</div>
     ${runSummaryHTML()}
     ${challengeResultHTML()}
@@ -18153,9 +18172,9 @@ function _sndRow(label, get, set){
   const line=document.createElement('div'); line.style.cssText='display:flex;gap:5px;align-items:center;';
   const inp=document.createElement('input'); inp.type='text'; inp.spellcheck=false; inp.placeholder='https://…/sound.mp3'; inp.value=get()||'';
   inp.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:11px;';
-  const test=document.createElement('button'); test.textContent='▶'; test.title='Test'; test.style.cssText='flex:0 0 auto;width:26px;background:rgba(56,245,181,.16);border:1px solid #38f5b5;color:#eafff7;border-radius:4px;cursor:pointer;';
+  const test=document.createElement('button'); test.textContent='▶'; test.title='Test'; test.style.cssText='flex:0 0 auto;width:26px;background:rgba(56,245,181,.16);border:1px solid var(--accent);color:#eafff7;border-radius:4px;cursor:pointer;';
   const st=document.createElement('span'); st.style.cssText='flex:0 0 auto;width:14px;text-align:center;font-size:12px;color:#5a7d72;';
-  const mark=(x)=>{ st.textContent = x==='ok'?'✓':x==='loading'?'…':x==='error'?'✗':''; st.style.color = x==='error'?'#ff6b6b':(x==='ok'?'#38f5b5':'#5a7d72'); };
+  const mark=(x)=>{ st.textContent = x==='ok'?'✓':x==='loading'?'…':x==='error'?'✗':''; st.style.color = x==='error'?'#ff6b6b':(x==='ok'?'var(--accent)':'#5a7d72'); };
   inp.onchange=()=>{ const u=inp.value.trim(); set(u); saveAudioSettings(); if(u){ initAudio(); loadSound(u, mark); } else mark(''); };
   test.onclick=()=>{ const u=inp.value.trim(); if(!u){ return; } initAudio(); loadSound(u, (x)=>{ mark(x); if(x==='ok'){ playSample(u); } else if(x==='loading'){ setTimeout(()=>{ if(playSample(u)) mark('ok'); }, 500); } }); };
   const u0=get(); if(u0){ const b=_soundBuffers[u0]; if(b && b.duration!==undefined) mark('ok'); else { mark('loading'); loadSound(u0, mark); } }
@@ -18197,7 +18216,7 @@ function _fsAssignSlots(){
 }
 function renderFreesoundBrowser(host, refresh, directTarget){
   const I='background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:11px;';
-  const B='background:rgba(56,245,181,.16);border:1px solid #38f5b5;color:#eafff7;border-radius:4px;cursor:pointer;padding:3px 8px;font-size:11px;';
+  const B='background:rgba(56,245,181,.16);border:1px solid var(--accent);color:#eafff7;border-radius:4px;cursor:pointer;padding:3px 8px;font-size:11px;';
   const wrap=document.createElement('div'); wrap.style.cssText='margin-top:14px;border-top:1px solid #233;padding-top:10px;';
   const head=document.createElement('div'); head.className='hint'; head.style.margin='2px 0 6px';
   head.innerHTML='<b>Freesound</b> \u2014 search free CC sound effects, preview, and assign to any event.';
@@ -18370,7 +18389,7 @@ function bindPauseMenu(){
   const vMu=document.getElementById('volMusic'); if(vMu){ vMu.value=Math.round(audioSettings.music*100); vMu.oninput=()=>{ audioSettings.music=(+vMu.value)/100; applyAudioSettings(); saveAudioSettings(); }; }
   const vS=document.getElementById('volSfx'); if(vS){ vS.value=Math.round(audioSettings.sfx*100); vS.oninput=()=>{ audioSettings.sfx=(+vS.value)/100; applyAudioSettings(); saveAudioSettings(); initAudio(); SFX.coin(); }; }   // tick so it's
   // ---- appearance controls ----
-  { const ac=document.getElementById('uiAccent'); if(ac){ ac.value=uiTheme.accent||'#38f5b5'; ac.oninput=()=>{ uiTheme.accent=ac.value; applyUiTheme(); saveUiTheme(); }; }
+  { const ac=document.getElementById('uiAccent'); if(ac){ ac.value=uiTheme.accent||'var(--accent)'; ac.oninput=()=>{ uiTheme.accent=ac.value; applyUiTheme(); saveUiTheme(); }; }
     const fillSel=(sel, choices, cur)=>{ if(!sel) return; sel.innerHTML=''; for(const c of choices){ const o=document.createElement('option'); o.value=c.v; o.textContent=c.label; if(c.v===cur) o.selected=true; sel.appendChild(o); } };
     const uf=document.getElementById('uiFontSel'); fillSel(uf, UI_FONT_CHOICES, uiTheme.uiFont); if(uf){ uf.onchange=()=>{ uiTheme.uiFont=uf.value; applyUiTheme(); saveUiTheme(); }; }
     const df=document.getElementById('uiDispSel'); fillSel(df, UI_DISPLAY_CHOICES, uiTheme.displayFont); if(df){ df.onchange=()=>{ uiTheme.displayFont=df.value; applyUiTheme(); saveUiTheme(); }; }
