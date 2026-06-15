@@ -9492,9 +9492,23 @@ function buildNavGrid(){
       if(w && w.ok){ NAV.walk[idx]=1; NAV.y[idx]=w.y; } else { NAV.walk[idx]=0; NAV.y[idx]=(w&&isFinite(w.y))?w.y:0; }
     }
   }
+  // 8-neighbour connectivity: two walkable cells link if the height change is climbable (up<=NAV_UP, drop<=NAV_DOWN)
+  // and a diagonal isn't cutting a wall corner (both orthogonal neighbours must also be walkable).
+  NAV.link = new Uint8Array(N);
+  const DIRS = navDirs();
+  for(let gx=0; gx<NAV.nx; gx++) for(let gz=0; gz<NAV.nz; gz++){
+    const idx=navIdx(gx,gz); if(!NAV.walk[idx]) continue; const cy=NAV.y[idx]; let mask=0;
+    for(let d=0; d<8; d++){ const ax=gx+DIRS[d][0], az=gz+DIRS[d][1];
+      if(ax<0||ax>=NAV.nx||az<0||az>=NAV.nz) continue; const nidx=navIdx(ax,az); if(!NAV.walk[nidx]) continue;
+      const dy=NAV.y[nidx]-cy; if(dy>NAV_UP || dy<-NAV_DOWN) continue;
+      if(d>=4 && (!NAV.walk[navIdx(ax,gz)] || !NAV.walk[navIdx(gx,az)])) continue;   // don't cut corners
+      mask |= (1<<d);
+    }
+    NAV.link[idx]=mask;
+  }
   NAV.built = true;
 }
-function _clearNavOverlay(){ if(NAV.overlay){ scene.remove(NAV.overlay); if(NAV.overlay.geometry) NAV.overlay.geometry.dispose(); if(NAV.overlay.material && NAV.overlay.material.dispose) NAV.overlay.material.dispose(); NAV.overlay=null; } }
+function _clearNavOverlay(){ for(const key of ['overlay','pathOverlay']){ const o=NAV[key]; if(o){ scene.remove(o); if(o.geometry) o.geometry.dispose(); if(o.material && o.material.dispose) o.material.dispose(); NAV[key]=null; } } }
 function buildNavOverlay(){
   _clearNavOverlay();
   if(!NAV.built) buildNavGrid();
@@ -9508,9 +9522,68 @@ function buildNavOverlay(){
   for(let gx=0;gx<NAV.nx;gx++) for(let gz=0;gz<NAV.nz;gz++){ const idx=navIdx(gx,gz); if(!NAV.walk[idx]) continue;
     const x=NAV.ox+(gx+0.5)*NAV.cell, z=NAV.oz+(gz+0.5)*NAV.cell; m.makeTranslation(x, NAV.y[idx]+0.07, z); inst.setMatrixAt(k++, m); }
   inst.instanceMatrix.needsUpdate=true; scene.add(inst); NAV.overlay=inst;
-  if(typeof flashToast==='function') flashToast('Nav grid: '+cnt+'/'+(NAV.nx*NAV.nz)+' walkable ('+NAV.cell+'u cells)');
+  // Demo path: from the player to the farthest reachable cell, so the A* route can be eyeballed routing
+  // around the rocks. (Pure debug — bot movement is unchanged until Step 3.)
+  let pathLen=0;
+  try {
+    const px=(typeof player!=='undefined'&&player.pos)?player.pos.x:0, pz=(typeof player!=='undefined'&&player.pos)?player.pos.z:0;
+    const si=navNearestWalkable(px,pz); const gi=navFarthestFrom(si); const path=(si>=0&&gi>=0)?navFindPath(si,gi):null;
+    if(path && path.length>1){ pathLen=path.length;
+      const pg=new THREE.PlaneGeometry(NAV.cell*0.6, NAV.cell*0.6); pg.rotateX(-Math.PI/2);
+      const pm=new THREE.MeshBasicMaterial({ color:0xff3df0, transparent:true, opacity:0.85, depthWrite:false, depthTest:false, side:THREE.DoubleSide });
+      const pinst=new THREE.InstancedMesh(pg, pm, path.length); pinst.frustumCulled=false; pinst.renderOrder=10;
+      const mm=new THREE.Matrix4(); for(let j=0;j<path.length;j++){ const c=navCellCenter(path[j]); mm.makeTranslation(c.x, (c.y||0)+0.16, c.z); pinst.setMatrixAt(j, mm); }
+      pinst.instanceMatrix.needsUpdate=true; scene.add(pinst); NAV.pathOverlay=pinst;
+    }
+  } catch(e){}
+  if(typeof flashToast==='function') flashToast('Nav grid: '+cnt+'/'+(NAV.nx*NAV.nz)+' walkable'+(pathLen?(' · demo path '+pathLen+' cells'):' · no path'));
 }
 function navOverlayToggle(){ NAV.show=!NAV.show; if(NAV.show){ NAV.built=false; buildNavOverlay(); } else _clearNavOverlay(); }
+const NAV_UP = 1.8, NAV_DOWN = 8.0;            // climbable up / droppable down between adjacent cells
+function navDirs(){ return NAV._dirs || (NAV._dirs=[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]]); }
+function navDirCost(){ return NAV._dc || (NAV._dc=[1,1,1,1,Math.SQRT2,Math.SQRT2,Math.SQRT2,Math.SQRT2]); }
+function navNearestWalkable(x,z){   // nearest walkable cell index to a world point (spiral out), or -1
+  if(!NAV.walk) return -1;
+  const c=navCellOf(x,z); let bx=Math.max(0,Math.min(NAV.nx-1,c.gx)), bz=Math.max(0,Math.min(NAV.nz-1,c.gz));
+  if(NAV.walk[navIdx(bx,bz)]) return navIdx(bx,bz);
+  for(let r=1; r<Math.max(NAV.nx,NAV.nz); r++){
+    for(let dx=-r; dx<=r; dx++) for(let dz=-r; dz<=r; dz++){ if(Math.max(Math.abs(dx),Math.abs(dz))!==r) continue;
+      const gx=bx+dx, gz=bz+dz; if(gx<0||gx>=NAV.nx||gz<0||gz>=NAV.nz) continue; const i=navIdx(gx,gz); if(NAV.walk[i]) return i; }
+  }
+  return -1;
+}
+// A* over the cell grid. Returns an array of cell indices (start..goal) or null. Octile heuristic; reuses
+// scratch arrays across calls via a generation stamp so it doesn't reallocate or clear each search.
+function navFindPath(si, gi){
+  if(!NAV.walk || si<0 || gi<0 || si>=NAV.walk.length || gi>=NAV.walk.length) return null;
+  if(!NAV.walk[si] || !NAV.walk[gi]) return null;
+  if(si===gi) return [si];
+  const N=NAV.walk.length, nz=NAV.nz, cell=NAV.cell;
+  if(!NAV._g || NAV._g.length!==N){ NAV._g=new Float32Array(N); NAV._from=new Int32Array(N); NAV._seen=new Int32Array(N); NAV._gen=0; }
+  const g=NAV._g, from=NAV._from, seen=NAV._seen, gen=++NAV._gen;
+  const gX=Math.floor(gi/nz), gZ=gi%nz;
+  const h=(i)=>{ const dx=Math.abs(Math.floor(i/nz)-gX), dz=Math.abs(i%nz-gZ); return (dx+dz+(Math.SQRT2-2)*Math.min(dx,dz))*cell; };
+  const hI=[], hF=[];
+  const push=(i,f)=>{ hI.push(i); hF.push(f); let c=hI.length-1; while(c>0){ const p=(c-1)>>1; if(hF[p]<=hF[c]) break; const ti=hI[p];hI[p]=hI[c];hI[c]=ti; const tf=hF[p];hF[p]=hF[c];hF[c]=tf; c=p; } };
+  const pop=()=>{ const ri=hI[0], n=hI.length-1; hI[0]=hI[n]; hF[0]=hF[n]; hI.pop(); hF.pop(); let c=0; const m=hI.length; while(true){ let l=2*c+1,r=2*c+2,s=c; if(l<m&&hF[l]<hF[s])s=l; if(r<m&&hF[r]<hF[s])s=r; if(s===c)break; const ti=hI[s];hI[s]=hI[c];hI[c]=ti; const tf=hF[s];hF[s]=hF[c];hF[c]=tf; c=s; } return ri; };
+  const DIRS=navDirs(), DC=navDirCost();
+  seen[si]=gen; g[si]=0; from[si]=-1; push(si, h(si));
+  let found=false, guard=0, maxG=N*6;
+  while(hI.length && guard++<maxG){
+    const cur=pop(); if(cur===gi){ found=true; break; }
+    const cx=Math.floor(cur/nz), cz=cur%nz, mask=NAV.link[cur];
+    for(let d=0; d<8; d++){ if(!(mask&(1<<d))) continue; const ni=(cx+DIRS[d][0])*nz+(cz+DIRS[d][1]); const ng=g[cur]+DC[d]*cell;
+      if(seen[ni]!==gen || ng<g[ni]){ seen[ni]=gen; g[ni]=ng; from[ni]=cur; push(ni, ng+h(ni)); } }
+  }
+  if(!found) return null;
+  const path=[]; let c=gi, lim=N+2; while(c!==-1 && lim-->0){ path.push(c); c=from[c]; } path.reverse(); return path;
+}
+function navCellCenter(i){ const gx=Math.floor(i/NAV.nz), gz=i%NAV.nz; return { x:NAV.ox+(gx+0.5)*NAV.cell, y:NAV.y[i], z:NAV.oz+(gz+0.5)*NAV.cell }; }
+function navFarthestFrom(si){   // walkable cell with the greatest grid distance from si (for the debug demo path)
+  if(si<0) return -1; const sx=Math.floor(si/NAV.nz), sz=si%NAV.nz; let best=-1, bd=-1;
+  for(let i=0;i<NAV.walk.length;i++){ if(!NAV.walk[i]) continue; const dx=Math.floor(i/NAV.nz)-sx, dz=i%NAV.nz-sz; const d=dx*dx+dz*dz; if(d>bd){ bd=d; best=i; } }
+  return best;
+}
 function _botHome(){
   // Where a target-less bot heads: the arena objective/center. The spawn region only controls where bots
   // START — it is NOT a movement boundary — so home is the map center, leaving them free to roam.
@@ -11813,7 +11886,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 466 · 2026-06-12';
+const BUILD_VERSION = 'build 467 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
