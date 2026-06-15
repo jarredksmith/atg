@@ -11225,7 +11225,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 437 · 2026-06-12';
+const BUILD_VERSION = 'build 438 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14523,6 +14523,24 @@ function serializeLevel(){
     cine:    { on: cineCfg.on, path: cineCfg.path.map(q=>q.slice()), lensFrom: cineCfg.lensFrom, lensTo: cineCfg.lensTo, focusOn: cineCfg.focusOn, focusFrom: cineCfg.focusFrom, focusTo: cineCfg.focusTo, dur: cineCfg.dur, look: cineCfg.look, audio: cineCfg.audio||'' , shots2: (cineCfg.shots2||[]).map(s=>({ path:(s.path||[]).map(q=>q.slice()), lensFrom:s.lensFrom, lensTo:s.lensTo, focusOn:s.focusOn, focusFrom:s.focusFrom, focusTo:s.focusTo, dur:s.dur, look:s.look })), name: cineCfg.name||'Intro', others: (cineCfg.others||[]).map(o=>({ name:o.name, audio:o.audio||'', path:(o.path||[]).map(q=>q.slice()), lensFrom:o.lensFrom, lensTo:o.lensTo, focusOn:o.focusOn, focusFrom:o.focusFrom, focusTo:o.focusTo, dur:o.dur, look:o.look, shots2:(o.shots2||[]).map(s=>({ path:(s.path||[]).map(q=>q.slice()), lensFrom:s.lensFrom, lensTo:s.lensTo, focusOn:s.focusOn, focusFrom:s.focusFrom, focusTo:s.focusTo, dur:s.dur, look:s.look })) })) },
   };
 }
+// ---- Autosave: persist as you work so a browser close never loses progress ----
+let _levelDirty = false, _autoSaveTimer = null;
+const AUTOSAVE_KEY='breach_autosave_on';
+let _autoSaveOn = (function(){ try{ const v=localStorage.getItem(AUTOSAVE_KEY); return v===null ? true : v==='1'; }catch(e){ return true; } })();
+function setAutoSaveOn(on){ _autoSaveOn=!!on; try{ localStorage.setItem(AUTOSAVE_KEY, _autoSaveOn?'1':'0'); }catch(e){} if(_autoSaveOn) startAutoSave(); else stopAutoSave(); }
+function _autoSaveStatus(txt){ try{ const el = editorEl && editorEl.querySelector('#edAutoStatus'); if(el) el.textContent = txt; }catch(e){} }
+function autoSaveNow(reason){   // save if there are unsaved edits; quiet no-op otherwise
+  if(!_autoSaveOn || !_levelDirty) return;
+  if(typeof pvpMode==='function' && pvpMode()) return;   // never autosave mid-match
+  const ok = saveLevel();
+  if(ok){ _levelDirty=false; const t=new Date(); const hh=String(t.getHours()).padStart(2,'0'), mm=String(t.getMinutes()).padStart(2,'0'); _autoSaveStatus('Autosaved '+hh+':'+mm+(reason?(' · '+reason):'')); }
+  else { _autoSaveStatus('Autosave failed — storage full. Export a backup.'); }
+}
+function startAutoSave(){ stopAutoSave(); if(!_autoSaveOn) return; _autoSaveTimer = setInterval(()=>{ if(typeof editorOpen!=='undefined' && editorOpen) autoSaveNow(); }, 20000); }   // every 20s while editing
+function stopAutoSave(){ if(_autoSaveTimer){ clearInterval(_autoSaveTimer); _autoSaveTimer=null; } }
+// final safety net: flush unsaved edits if the tab is closed/hidden
+try{ window.addEventListener('beforeunload', ()=>{ try{ if(_autoSaveOn && _levelDirty) saveLevel(); }catch(e){} }); }catch(e){}
+try{ document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') autoSaveNow(); }); }catch(e){}
 function saveLevel(){
   let str; try{ str = JSON.stringify(serializeLevel()); }catch(e){ return false; }
   if(typeof _levelDBPut==='function') _levelDBPut(str);   // durable copy (large quota, survives localStorage eviction)
@@ -14787,6 +14805,7 @@ const editorUndo = [];
 let editorUndoActive = false;
 function pushUndoSnapshot(){
   if(editorUndoActive || !editorOpen) return;
+  _levelDirty = true;   // autosave: an edit happened
   try {
     const snap = JSON.stringify(serializeLevel());
     if(editorUndo.length && editorUndo[editorUndo.length-1] === snap) return;   // identical to last -> skip
@@ -15171,6 +15190,8 @@ function buildEditorPanel(){
     + sec('Level file', 'levelfile',
         '<div id="edIssues"></div>'
       + '<div class="row2"><button id="edSave">💾 Save</button><button id="edClear">Clear save</button></div>'
+      + '<label style="display:flex;align-items:center;gap:7px;margin:6px 0 2px;color:#9fe6cf;font-size:12px;cursor:pointer"><input type="checkbox" id="edAutoSave" style="width:15px;height:15px;accent-color:#38f5b5"><b>Autosave</b> while editing</label>'
+      + '<div class="hint" id="edAutoStatus" style="font-size:10px;opacity:0.75;margin:0 0 4px">Saves automatically as you work.</div>'
       + '<div class="row2" style="margin-top:6px"><button id="edShare">🔗 Copy share link</button></div>'
       + '<div class="row2" style="margin-top:6px"><button id="edExport">⬇ Export .json</button><button id="edImport">⬆ Import .json</button></div>'
       + '<input type="file" id="edImportFile" accept=".json,application/json" style="display:none">'
@@ -15278,8 +15299,9 @@ function buildEditorPanel(){
   const modeRow = p.querySelector('#edModes');
   if(modeRow){ for(const m of EDITOR_MODES){ const mb=document.createElement('div'); mb.className='edMode'; mb.dataset.mode=m; mb.innerHTML=(MODE_ICON[m]||'')+'<span class="edModeLbl">'+MODE_LABEL[m]+'</span>'; mb.title=MODE_LABEL[m]; mb.onclick=()=>setEditorMode(m); modeRow.appendChild(mb); } }
   p.querySelector('#edReset').onclick = ()=>{ resetEditorTarget(editorActive); };
-  p.querySelector('#edPlay').onclick = ()=>{ startGame(); };           // test the live-built level immediately (no save/reload)
+  p.querySelector('#edPlay').onclick = ()=>{ if(typeof autoSaveNow==='function') autoSaveNow('before play'); startGame(); };           // test the live-built level immediately (no save/reload)
   p.querySelector('#edMenu').onclick = ()=>{ editorToMenu(); };        // back to the start overlay
+  { const ac=p.querySelector('#edAutoSave'); if(ac){ ac.checked=_autoSaveOn; ac.onchange=()=>{ setAutoSaveOn(ac.checked); const st=p.querySelector('#edAutoStatus'); if(st) st.textContent=ac.checked?'Saves automatically as you work.':'Autosave off — remember to Save.'; }; } }
   p.querySelector('#edCopy').onclick = ()=>{ copyEditorCode(); };
   { const wb=p.querySelector('#edWipe'); if(wb){ let armed=false, t=null; wb.onclick=()=>{
       if(!armed){ armed=true; wb.textContent='⚠ Click again to delete ALL objects'; wb.style.background='#7a2630'; t=setTimeout(()=>{ armed=false; wb.textContent='🗑 Delete all objects (fresh scene)'; wb.style.background=''; }, 3500); return; }
@@ -17565,6 +17587,7 @@ function toggleEditor(){
   if(editorOpen){
     if(!editorEl) buildEditorPanel();
     editorEl.style.display = 'block';
+    _levelDirty = false; if(typeof startAutoSave==='function') startAutoSave();   // autosave while editing
     { const fb=document.getElementById('edAddFab'); if(fb) fb.style.display='block'; }
     firing=false; ads=false;
     safeExitPointerLock();
@@ -17589,6 +17612,7 @@ function toggleEditor(){
     if(typeof applyEditorMode==='function') applyEditorMode();
     renderEditorFields();
   } else {
+    if(typeof autoSaveNow==='function') autoSaveNow('on close'); if(typeof stopAutoSave==='function') stopAutoSave();   // flush unsaved edits when leaving the editor
     if(editorEl) editorEl.style.display = 'none';
     { const fb=document.getElementById('edAddFab'); if(fb) fb.style.display='none'; }
     editorAimPreview = false;
