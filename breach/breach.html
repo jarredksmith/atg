@@ -127,12 +127,7 @@
     width: 26px; height: 26px;
     transition: opacity .12s;
   }
-  #crosshair::before, #crosshair::after {
-    content: ''; position: absolute; background: var(--accent);
-    box-shadow: 0 0 6px var(--accent);
-  }
-  #crosshair::before { left: 50%; top: 0; width: 2px; height: 100%; transform: translateX(-50%); }
-  #crosshair::after { top: 50%; left: 0; height: 2px; width: 100%; transform: translateY(-50%); }
+  #crosshair::before, #crosshair::after { display:none; }   /* crosshair is built in JS now (configurable) */
   #crosshair .dot {
     position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
     width: 4px; height: 4px; background: #fff; border-radius: 50%;
@@ -7652,6 +7647,15 @@ let gameCfg = {
     minSpeed:(savedLevel && savedLevel.game && savedLevel.game.crushDamage && savedLevel.game.crushDamage.minSpeed!=null) ? +savedLevel.game.crushDamage.minSpeed : 7,   // prop must be moving this fast to hurt
     perUnit: (savedLevel && savedLevel.game && savedLevel.game.crushDamage && savedLevel.game.crushDamage.perUnit!=null) ? +savedLevel.game.crushDamage.perUnit : 2.2,   // damage per (units/s) above the threshold
   },
+  // Crosshair (authored in the editor, carried to multiplayer joiners). 'accent' color follows each player's theme.
+  crosshair: (function(){ const c=(savedLevel&&savedLevel.game&&savedLevel.game.crosshair)||{}; return {
+    style: c.style || 'classic',          // classic | cross | dot | circle | tee | none
+    size: c.size!=null ? +c.size : 24,
+    thickness: c.thickness!=null ? +c.thickness : 2,
+    gap: c.gap!=null ? +c.gap : 3,
+    dot: c.dot!=null ? !!c.dot : true,
+    color: c.color || 'accent',           // 'accent' or a #rrggbb hex
+  }; })(),
 };
 
 // ---------- Player start (where you/co-op players spawn each run; authored in-editor) ----------
@@ -10315,6 +10319,7 @@ function handleHostMsg(msg){
     if(msg.yourTeam!=null) NET.team=msg.yourTeam;
     if(msg.level) NET.pendingLevel=msg.level;
     if(msg.sfTok){ try{ const t=_sfUnpack(msg.sfTok); if(t) sfSetSessionToken(t); }catch(e){} }   // borrow the host's Sketchfab token for this session so the level's models load
+    if(msg.crosshair){ NET.crosshair = msg.crosshair; if(typeof applyCrosshair==='function') applyCrosshair(msg.crosshair); }   // use the host's authored crosshair
     NET.charById = Object.assign({}, msg.chars||{}); if(msg.char) NET.charById[0]=msg.char;   // host + existing players' characters
     if(msg.sounds) NET.pendingSounds=msg.sounds;
     if(msg.music!=null) NET.pendingMusic=msg.music;
@@ -10378,7 +10383,7 @@ function hostStart(code, mode, killTarget){
       // If this level uses Sketchfab models and we have a token, lend it to the joiner so the models load even
       // if they have no Sketchfab account of their own. Obfuscated (not encrypted) — they don't keep it.
       let sfTok; try{ if(_levelUsesSketchfab(level) && sfGetToken()) sfTok = _sfPack(sfGetToken()); }catch(e){}
-      conn.send({t:'welcome', id:conn._pid, mode:NET.gameMode, killTarget:NET.killTarget, level, sfTok, sounds:audioSettings.sounds, music:audioSettings.musicUrl, teams:NET.teams, yourTeam:(teamMode()?NET.teams[conn._pid]:undefined), char:myCharCfg(), chars:Object.assign({}, NET.charById), phase:NET.phase});
+      conn.send({t:'welcome', id:conn._pid, mode:NET.gameMode, killTarget:NET.killTarget, level, sfTok, crosshair:gameCfg.crosshair, sounds:audioSettings.sounds, music:audioSettings.musicUrl, teams:NET.teams, yourTeam:(teamMode()?NET.teams[conn._pid]:undefined), char:myCharCfg(), chars:Object.assign({}, NET.charById), phase:NET.phase});
       netStatus('Player joined ('+Object.keys(NET.conns).length+' connected)');
       if(pvpMode()) broadcastDuelScore();
       if(teamMode()){ broadcastTeams(); applyTeamColors(); }
@@ -11361,7 +11366,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 445 · 2026-06-12';
+const BUILD_VERSION = 'build 446 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12657,6 +12662,34 @@ function killEnemy(en){
 // ---------- HUD ----------
 const $ = id=>document.getElementById(id);
 const crosshairEl = $('crosshair');
+// Build the crosshair from a config object. 'accent' color follows the player's theme; a hex is literal.
+const CROSSHAIR_DEFAULT = { style:'classic', size:24, thickness:2, gap:3, dot:true, color:'accent' };
+let _activeCrosshair = Object.assign({}, CROSSHAIR_DEFAULT);
+function applyCrosshair(cfg){
+  const el = crosshairEl; if(!el) return;
+  cfg = Object.assign({}, CROSSHAIR_DEFAULT, cfg||{});
+  _activeCrosshair = cfg;
+  const col = (!cfg.color || cfg.color==='accent') ? 'var(--accent)' : cfg.color;
+  const size = Math.max(4, +cfg.size||24), th = Math.max(1, +cfg.thickness||2), gap = Math.max(0, +cfg.gap||0);
+  el.style.width = size+'px'; el.style.height = size+'px';
+  if(cfg.style==='none'){ el.innerHTML=''; return; }
+  const arm = Math.max(0, size/2 - gap);
+  const ln = 'position:absolute;background:'+col+';box-shadow:0 0 6px '+col+';';
+  let html='';
+  if(cfg.style==='cross' || cfg.style==='classic' || cfg.style==='tee'){
+    if(cfg.style!=='tee') html += '<div style="'+ln+'left:50%;transform:translateX(-50%);width:'+th+'px;height:'+arm+'px;top:0"></div>';
+    html += '<div style="'+ln+'left:50%;transform:translateX(-50%);width:'+th+'px;height:'+arm+'px;bottom:0"></div>';
+    html += '<div style="'+ln+'top:50%;transform:translateY(-50%);height:'+th+'px;width:'+arm+'px;left:0"></div>';
+    html += '<div style="'+ln+'top:50%;transform:translateY(-50%);height:'+th+'px;width:'+arm+'px;right:0"></div>';
+  } else if(cfg.style==='circle'){
+    html += '<div style="position:absolute;inset:0;border:'+th+'px solid '+col+';border-radius:50%;box-shadow:0 0 6px '+col+'"></div>';
+  }
+  if(cfg.dot || cfg.style==='dot'){
+    const ds = Math.max(2, th+2);
+    html += '<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:'+ds+'px;height:'+ds+'px;background:#fff;border-radius:50%;box-shadow:0 0 4px rgba(0,0,0,0.6)"></div>';
+  }
+  el.innerHTML = html;
+}
 
 // ---------- Minimap ----------
 const miniCanvas = $('minimap');
@@ -14680,7 +14713,7 @@ function serializeLevel(){
     roster: charRoster.map(c=>({ name:c.name, url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, thumb:c.thumb||'', clips:Object.assign({},c.clips||{}), clipSpeed:Object.assign({},c.clipSpeed||{}), clipHold:Object.assign({},c.clipHold||{}) })),
     pickupModels: Object.keys(pickupModels).reduce((a,k)=>{ const m=pickupModels[k]; if(m&&m.url){ a[k]={ url:m.url, scale:m.scale||1 }; } return a; }, {}),
     keyNames: Object.keys(keyNames).reduce((a,k)=>{ const n=(keyNames[k]||'').trim(); if(n) a[k]=n; return a; }, {}),
-    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave, noRespawn: !!gameCfg.noRespawn, spawnRegion: { on: !!gameCfg.spawnRegion.on, shape: gameCfg.spawnRegion.shape||'circle', x: +gameCfg.spawnRegion.x, z: +gameCfg.spawnRegion.z, r: +gameCfg.spawnRegion.r, poly: (gameCfg.spawnRegion.poly||[]).map(p=>({ x:+p.x, z:+p.z })) } , fallDamage: { on: !!gameCfg.fallDamage.on, player: gameCfg.fallDamage.player!==false, ai: gameCfg.fallDamage.ai!==false, minSpeed: +gameCfg.fallDamage.minSpeed, perUnit: +gameCfg.fallDamage.perUnit }, crushDamage: { on: !!gameCfg.crushDamage.on, player: gameCfg.crushDamage.player!==false, ai: gameCfg.crushDamage.ai!==false, minSpeed: +gameCfg.crushDamage.minSpeed, perUnit: +gameCfg.crushDamage.perUnit } },
+    game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave, noRespawn: !!gameCfg.noRespawn, spawnRegion: { on: !!gameCfg.spawnRegion.on, shape: gameCfg.spawnRegion.shape||'circle', x: +gameCfg.spawnRegion.x, z: +gameCfg.spawnRegion.z, r: +gameCfg.spawnRegion.r, poly: (gameCfg.spawnRegion.poly||[]).map(p=>({ x:+p.x, z:+p.z })) } , fallDamage: { on: !!gameCfg.fallDamage.on, player: gameCfg.fallDamage.player!==false, ai: gameCfg.fallDamage.ai!==false, minSpeed: +gameCfg.fallDamage.minSpeed, perUnit: +gameCfg.fallDamage.perUnit }, crushDamage: { on: !!gameCfg.crushDamage.on, player: gameCfg.crushDamage.player!==false, ai: gameCfg.crushDamage.ai!==false, minSpeed: +gameCfg.crushDamage.minSpeed, perUnit: +gameCfg.crushDamage.perUnit }, crosshair: { style: gameCfg.crosshair.style, size: +gameCfg.crosshair.size, thickness: +gameCfg.crosshair.thickness, gap: +gameCfg.crosshair.gap, dot: !!gameCfg.crosshair.dot, color: gameCfg.crosshair.color } },
     dmgNum:  { on: dmgNumCfg.on !== false, size: dmgNumCfg.size, hit: dmgNumCfg.hitColor, kill: dmgNumCfg.killColor },
     pstart:  { x: playerSpawn.x, y: playerSpawn.y||0, z: playerSpawn.z, yaw: playerSpawn.yaw },
     extract: extractSpot ? { x: +extractSpot.x.toFixed(3), z: +extractSpot.z.toFixed(3) } : null,
@@ -15988,6 +16021,41 @@ function renderEditorFields(){
       cdNum('Min speed', ()=>gameCfg.crushDamage.minSpeed, v=>gameCfg.crushDamage.minSpeed=v, 0, 40, 0.5, 'How fast a prop must be moving to deal crush damage.');
       cdNum('Damage', ()=>gameCfg.crushDamage.perUnit, v=>gameCfg.crushDamage.perUnit=v, 0, 12, 0.1, 'Damage per unit of prop speed above the minimum.');
     }
+    // ---- Crosshair ----
+    if(!gameCfg.crosshair) gameCfg.crosshair = { style:'classic', size:24, thickness:2, gap:3, dot:true, color:'accent' };
+    hint(gHost, '<b>Crosshair</b> — carries to multiplayer players who join your game', '10px 0 4px');
+    const xhRow=document.createElement('div'); xhRow.className='row2'; xhRow.style.flexWrap='wrap';
+    const xhBtn=(key,txt)=>{ const b=document.createElement('button'); b.textContent=txt; if((gameCfg.crosshair.style||'classic')===key){ b.style.background='rgba(var(--accent-rgb),0.30)'; b.style.color='#eafff7'; } b.onclick=()=>{ pushUndoSnapshot(); gameCfg.crosshair.style=key; if(typeof applyCrosshair==='function') applyCrosshair(gameCfg.crosshair); renderEditorFields(); }; return b; };
+    ['classic|✛ Classic','cross|+ Cross','dot|• Dot','circle|◯ Circle','tee|⊤ T-shape','none|∅ None'].forEach(p=>{ const [k,t]=p.split('|'); xhRow.appendChild(xhBtn(k,t)); });
+    gHost.appendChild(xhRow);
+    if(gameCfg.crosshair.style!=='none'){
+      const xhNum=(label, get, set, min, max, step)=>{
+        const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;';
+        const s=document.createElement('span'); s.textContent=label; s.style.minWidth='78px';
+        const rng=document.createElement('input'); rng.type='range'; rng.min=min; rng.max=max; rng.step=step; rng.value=get(); rng.style.cssText='flex:1;accent-color:var(--accent);';
+        const nm=document.createElement('input'); nm.type='number'; nm.step=step; nm.value=+(+get()).toFixed(1); nm.style.cssText='width:54px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
+        const ap=(v)=>{ let n=parseFloat(v); if(!isFinite(n)) n=min; n=Math.max(min,Math.min(max,n)); set(n); rng.value=n; nm.value=+n.toFixed(1); if(typeof applyCrosshair==='function') applyCrosshair(gameCfg.crosshair); };
+        rng.addEventListener('mousedown',()=>pushUndoSnapshot()); nm.addEventListener('focus',()=>pushUndoSnapshot());
+        rng.oninput=()=>ap(rng.value); nm.onchange=()=>ap(nm.value);
+        row.appendChild(s); row.appendChild(rng); row.appendChild(nm); gHost.appendChild(row);
+      };
+      xhNum('Size', ()=>gameCfg.crosshair.size, v=>gameCfg.crosshair.size=v, 6, 60, 1);
+      if(gameCfg.crosshair.style!=='dot'){ xhNum('Thickness', ()=>gameCfg.crosshair.thickness, v=>gameCfg.crosshair.thickness=v, 1, 8, 1); }
+      if(gameCfg.crosshair.style==='cross' || gameCfg.crosshair.style==='classic' || gameCfg.crosshair.style==='tee'){ xhNum('Gap', ()=>gameCfg.crosshair.gap, v=>gameCfg.crosshair.gap=v, 0, 20, 1); }
+      if(gameCfg.crosshair.style!=='dot'){ fdToggle('Center dot', ()=>gameCfg.crosshair.dot, v=>{ gameCfg.crosshair.dot=v; if(typeof applyCrosshair==='function') applyCrosshair(gameCfg.crosshair); }); }
+      // colour: accent (themable) or a custom hex
+      const xhColRow=document.createElement('label'); xhColRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0;';
+      const xhColS=document.createElement('span'); xhColS.textContent='Color'; xhColS.style.minWidth='78px';
+      const xhAcc=document.createElement('input'); xhAcc.type='checkbox'; xhAcc.checked=(gameCfg.crosshair.color==='accent'); xhAcc.style.cssText='width:15px;height:15px;accent-color:var(--accent)';
+      const xhAccLbl=document.createElement('span'); xhAccLbl.textContent='Use theme accent'; xhAccLbl.style.fontSize='11px';
+      const xhPick=document.createElement('input'); xhPick.type='color'; xhPick.value=(gameCfg.crosshair.color&&gameCfg.crosshair.color!=='accent')?gameCfg.crosshair.color:'#38f5b5'; xhPick.style.cssText='width:34px;height:24px;border:none;background:none;cursor:pointer;'+(xhAcc.checked?'opacity:0.4;pointer-events:none':'');
+      xhAcc.onchange=()=>{ pushUndoSnapshot(); gameCfg.crosshair.color = xhAcc.checked ? 'accent' : xhPick.value; if(typeof applyCrosshair==='function') applyCrosshair(gameCfg.crosshair); renderEditorFields(); };
+      xhPick.oninput=()=>{ pushUndoSnapshot(); gameCfg.crosshair.color = xhPick.value; if(typeof applyCrosshair==='function') applyCrosshair(gameCfg.crosshair); };
+      xhColRow.appendChild(xhColS); xhColRow.appendChild(xhAcc); xhColRow.appendChild(xhAccLbl); xhColRow.appendChild(xhPick); gHost.appendChild(xhColRow);
+    }
+    hint(gHost, 'Tip: open the editor and the crosshair updates live as you tweak it.', '2px 0 6px');
+    if(typeof applyCrosshair==='function') applyCrosshair(gameCfg.crosshair);
+    if(crosshairEl) crosshairEl.style.opacity = '1';   // show a live preview while tuning on this tab
     hint(gHost, '', '3px 0 6px').textContent = (objectiveActive()==='survival')
       ? 'Survival: hostiles spawn endlessly — outlast the countdown to win.'
       : (objectiveActive()==='extraction')
@@ -17918,6 +17986,7 @@ function startGame(){
   closeModal('mpModal'); closeModal('instrModal');   // drop any open menu modal as the world starts
   if(typeof ensurePlayerPreview==='function') ensurePlayerPreview(false);   // drop the editor's stand-in avatar
   editorOpen=false; _editorOpenFlag=false; if(typeof applyAudioSettings==='function') applyAudioSettings();   // leaving the editor: clear the flag + unmute the music bus BEFORE music starts
+  if(typeof applyCrosshair==='function') applyCrosshair((NET.mode==='client' && NET.crosshair) ? NET.crosshair : gameCfg.crosshair);   // host's authored crosshair carries to joiners
   initAudio();
   startMusic();
   player.hp=100; player.maxHp=100; run = { ...RUN0 }; if(typeof closeUpgradePicker==='function') closeUpgradePicker(); player.pos.set(playerSpawn.x, terrainHeightAt(playerSpawn.x, playerSpawn.z)+(playerSpawn.y||0)+EYE, playerSpawn.z); player.vel.set(0,0,0);
