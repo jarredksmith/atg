@@ -5838,7 +5838,7 @@ function _clamp01(x){ x=+x; return isFinite(x)?Math.max(0,Math.min(1,x)):0; }
 function loadAudioSettings(){ try{ const j=JSON.parse(localStorage.getItem(AUDIO_KEY)); if(j) return { master:_clamp01(j.master!=null?j.master:0.8), music:_clamp01(j.music!=null?j.music:0.6), sfx:_clamp01(j.sfx!=null?j.sfx:1), muted:!!j.muted, sounds:_sanitizeSounds(j.sounds), musicUrl:(typeof j.musicUrl==='string'?j.musicUrl:'') }; }catch(e){} return { master:0.8, music:0.6, sfx:1, muted:false, sounds:_emptySounds(), musicUrl:'' }; }
 const audioSettings = loadAudioSettings();
 function saveAudioSettings(){ try{ localStorage.setItem(AUDIO_KEY, JSON.stringify(audioSettings)); }catch(e){} }
-function applyAudioSettings(){ if(!actx||!masterBus) return; const t=actx.currentTime; masterBus.gain.setTargetAtTime(audioSettings.muted?0:audioSettings.master, t, 0.02); musicBus.gain.setTargetAtTime(audioSettings.music, t, 0.02); sfxBus.gain.setTargetAtTime(audioSettings.sfx, t, 0.02); }
+function applyAudioSettings(){ if(!actx||!masterBus) return; const t=actx.currentTime; masterBus.gain.setTargetAtTime(audioSettings.muted?0:audioSettings.master, t, 0.02); const _editing=(typeof editorOpen!=='undefined' && editorOpen); musicBus.gain.setTargetAtTime(_editing?0:audioSettings.music, t, 0.02); sfxBus.gain.setTargetAtTime(audioSettings.sfx, t, 0.02); }   // music is forced silent while editing (no auto-play in the editor); SFX stays for preview buttons
 function buildAudioBuses(){ if(masterBus||!actx) return; masterBus=actx.createGain(); masterBus.connect(actx.destination); sfxBus=actx.createGain(); sfxBus.connect(masterBus); musicBus=actx.createGain(); musicBus.connect(masterBus); applyAudioSettings(); }
 function toggleMute(){ audioSettings.muted=!audioSettings.muted; applyAudioSettings(); saveAudioSettings(); return audioSettings.muted; }
 
@@ -5852,6 +5852,7 @@ function setMusicIntensity(x){ _musicTarget=Math.max(0,Math.min(1,+x||0)); }
 function curMusicUrl(){ return (typeof NET!=='undefined' && NET.musicUrl) || (audioSettings && audioSettings.musicUrl) || ''; }
 function startMusic(){
   if(!actx||!musicBus||_musicOn) return;
+  if(typeof editorOpen!=='undefined' && editorOpen) return;   // no level music while editing
   const murl=curMusicUrl();
   if(murl){
     _musicOn=true;
@@ -11225,7 +11226,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 438 · 2026-06-12';
+const BUILD_VERSION = 'build 440 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -17587,6 +17588,9 @@ function toggleEditor(){
   if(editorOpen){
     if(!editorEl) buildEditorPanel();
     editorEl.style.display = 'block';
+    if(typeof stopMusic==='function') stopMusic();   // silence the level's music/ambience while editing
+    if(typeof stopAudioZones==='function') stopAudioZones();
+    if(typeof applyAudioSettings==='function') applyAudioSettings();   // force the music bus to 0 so nothing can re-start audible music
     _levelDirty = false; if(typeof startAutoSave==='function') startAutoSave();   // autosave while editing
     { const fb=document.getElementById('edAddFab'); if(fb) fb.style.display='block'; }
     firing=false; ads=false;
@@ -17613,6 +17617,7 @@ function toggleEditor(){
     renderEditorFields();
   } else {
     if(typeof autoSaveNow==='function') autoSaveNow('on close'); if(typeof stopAutoSave==='function') stopAutoSave();   // flush unsaved edits when leaving the editor
+    if(typeof applyAudioSettings==='function') applyAudioSettings();   // restore the music bus now that we're leaving the editor
     if(editorEl) editorEl.style.display = 'none';
     { const fb=document.getElementById('edAddFab'); if(fb) fb.style.display='none'; }
     editorAimPreview = false;
@@ -17699,6 +17704,7 @@ function startGame(){
   if(_pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; }   // hide editor path markers during play
   closeModal('mpModal'); closeModal('instrModal');   // drop any open menu modal as the world starts
   if(typeof ensurePlayerPreview==='function') ensurePlayerPreview(false);   // drop the editor's stand-in avatar
+  editorOpen=false; _editorOpenFlag=false; if(typeof applyAudioSettings==='function') applyAudioSettings();   // leaving the editor: clear the flag + unmute the music bus BEFORE music starts
   initAudio();
   startMusic();
   player.hp=100; player.maxHp=100; run = { ...RUN0 }; if(typeof closeUpgradePicker==='function') closeUpgradePicker(); player.pos.set(playerSpawn.x, terrainHeightAt(playerSpawn.x, playerSpawn.z)+(playerSpawn.y||0)+EYE, playerSpawn.z); player.vel.set(0,0,0);
