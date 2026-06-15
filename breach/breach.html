@@ -9466,12 +9466,15 @@ function _polyCentroid(poly){ let x=0,z=0; for(const p of poly){ x+=p.x; z+=p.z;
 const NAV = { cell:1.5, nx:0, nz:0, ox:0, oz:0, walk:null, y:null, built:false, overlay:null, show:false };
 function navIdx(gx,gz){ return gx*NAV.nz + gz; }
 function navCellOf(x,z){ return { gx:Math.floor((x-NAV.ox)/NAV.cell), gz:Math.floor((z-NAV.oz)/NAV.cell) }; }
-function navWalkable(x,z){   // can a bot stand at this column? (surface present, not embedded, body band clear)
+function navWalkable(x,z){   // can a bot stand at this column? Authority = clearAt, the SAME test the player uses.
   if(typeof surfaceTopAt!=='function' || typeof clearAt!=='function') return false;
   const gy=surfaceTopAt(x,z); const ty=(typeof terrainHeightAt==='function')?terrainHeightAt(x,z):0;
   const standY=(gy>-Infinity)?Math.max(gy,ty):ty;
   if(!isFinite(standY)) return false;
-  if(typeof insideSolid==='function' && insideSolid(x,z,standY)) return false;
+  // Use clearAt ONLY. It has the ramp/step surface-escape (samples the real mesh), so it treats a rock TOP as
+  // standable even when the model's coarse collider box bulges above the actual surface. insideSolid has no
+  // such escape, so those over-occupied boxes made it falsely reject every rock cell (the player walks there
+  // via clearAt, so the nav grid must agree with clearAt — not with the raw boxes).
   return { ok: clearAt(x,z,standY), y: standY };
 }
 function buildNavGrid(){
@@ -11810,7 +11813,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 465 · 2026-06-12';
+const BUILD_VERSION = 'build 466 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
