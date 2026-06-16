@@ -9874,7 +9874,18 @@ function _botAcquire(b){
   for(const o of bots){ if(o===b||o.dead) continue; if(tm && o.team===b.team) continue; const d=Math.hypot(b.pos.x-o.pos.x, b.pos.z-o.pos.z); if(d<bd){ bd=d; best={kind:'bot', id:o.id, pos:o.pos, bot:o}; } }
   return best;
 }
-function _botLOS(ex,ez,tx,tz,eyeY){ const fy=(eyeY!=null)?eyeY:0; for(let i=1;i<6;i++){ const t=i/6, x=ex+(tx-ex)*t, z=ez+(tz-ez)*t; if(typeof insideSolid==='function' && insideSolid(x,z,fy)) return false; } return true; }
+function _botLOS(ex,ez,tx,tz,eyeY){
+  // Use clearAt (NOT insideSolid): insideSolid is poisoned by the over-occupying model voxelizer, which marks
+  // empty space around angled rock faces as solid -> sightlines across the rock arena were falsely blocked,
+  // so bots never saw their target (no orbit, no fire). clearAt has the surface-escape that avoids that.
+  const fy=(eyeY!=null)?eyeY:0; const dist=Math.hypot(tx-ex,tz-ez);
+  const steps=Math.max(4, Math.min(16, Math.ceil(dist/2.5)));   // sample ~every 2.5m so long sightlines are checked
+  for(let i=1;i<steps;i++){ const t=i/steps, x=ex+(tx-ex)*t, z=ez+(tz-ez)*t;
+    const blocked = (typeof clearAt==='function') ? !clearAt(x,z,fy) : (typeof insideSolid==='function' && insideSolid(x,z,fy));
+    if(blocked) return false;
+  }
+  return true;
+}
 function _botDamage(b, tgt, dmg){
   if(tgt.kind==='host') applyPvpDamage(dmg, b.id);
   else if(tgt.kind==='client') sendToPlayer(tgt.id, {t:'pvpHit', d:dmg, from:b.id});
@@ -11958,7 +11969,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 473 · 2026-06-12';
+const BUILD_VERSION = 'build 474 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
