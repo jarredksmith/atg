@@ -12041,7 +12041,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 482 · 2026-06-12';
+const BUILD_VERSION = 'build 483 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13819,6 +13819,20 @@ const PLAYER_HEIGHT = EYE + 0.2;   // body column height used for overhead-clear
 const _downRay = new THREE.Raycaster();
 const _downDir = new THREE.Vector3(0, -1, 0);
 const _downOrigin = new THREE.Vector3();
+const _surfList = [];
+// A vertical (down) ray can only hit a collider whose XZ footprint contains (x,z). Skipping every other
+// collider turns a raycast-against-all-rocks into a test of the 1-2 actually underfoot — the big per-bot
+// per-frame cost. Provably safe: a collider's geometry lives inside its box(es), so if (x,z) is outside
+// them the ray cannot hit it. Colliders with no box info are kept (can't cull them).
+function _surfCull(x, z){
+  const out=_surfList; out.length=0; const M=0.3;   // small margin for float-edge safety
+  for(let i=0;i<colliders.length;i++){ const c=colliders[i];
+    const bs = c.userData && (c.userData.boxes || (c.userData.box && [c.userData.box]));
+    if(!bs){ out.push(c); continue; }
+    for(let k=0;k<bs.length;k++){ const b=bs[k]; if(x>=b.min.x-M && x<=b.max.x+M && z>=b.min.z-M && z<=b.max.z+M){ out.push(c); break; } }
+  }
+  return out;
+}
 function surfaceTopAt(x, z){
   // highest collider surface directly under (x,z); -Infinity if nothing there.
   // Dynamic props are included so the player can stand on / walk up their real (possibly tilted)
@@ -13828,7 +13842,7 @@ function surfaceTopAt(x, z){
   _downRay.set(_downOrigin, _downDir);
   _downRay.far = 600;
   let top = -Infinity;
-  const hits = _downRay.intersectObjects(colliders, true);
+  const hits = _downRay.intersectObjects(_surfCull(x,z), true);   // only colliders whose footprint is under (x,z)
   for(const h of hits){ if(h.point.y > top) top = h.point.y; }
   if(dynamicProps.length){
     const list = heldProp ? dynamicProps.filter(o=>o!==heldProp) : dynamicProps;   // never let the player stand on / collide with the object they're carrying
