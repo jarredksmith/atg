@@ -7245,10 +7245,19 @@ function sfFetchPage(url, cb, errcb){   // cb(results, nextPageUrl|null)
   // Public search/browse: send NO Authorization header. Adding it makes the request preflighted, and
   // Sketchfab's search endpoint does not allow 'authorization' in its CORS Access-Control-Allow-Headers,
   // so the preflight is rejected. The token is only needed to DOWNLOAD a model (see loadSketchfabModel).
-  fetch(url)
-    .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status+(r.status===401?' \u2014 check your token':'')); return r.json(); })
-    .then(d=>{ cb((d.results||[]).map(sfMap), d.next||null); })
-    .catch(errcb);
+  const deliver = (d)=>{ cb((d.results||[]).map(sfMap), d.next||null); };
+  // Read the body as TEXT first so an empty/non-JSON response gives a clear message instead of the cryptic
+  // "Unexpected end of JSON input" that r.json() throws on a blank 200 body.
+  const parse = (r)=> r.text().then(t=>{
+    if(!r.ok) throw new Error('HTTP '+r.status+(r.status===401?' \u2014 check your token':''));
+    if(!t || !t.trim()) throw new Error('Sketchfab returned an empty response \u2014 it may be rate-limiting. Wait a few seconds and try again.');
+    try{ return JSON.parse(t); }catch(e){ throw new Error('Sketchfab sent a non-JSON response'); }
+  });
+  fetch(url).then(parse).then(deliver).catch(err=>{
+    const px = proxied(url);
+    if(px===url){ errcb && errcb(err); return; }   // no CORS proxy configured -> report the original error
+    fetch(px).then(parse).then(deliver).catch(()=> errcb && errcb(err));   // retry through the proxy; if it also fails, report the first error
+  });
 }
 function sfSearch(query, cb, errcb, animatedOnly){
   sfFetchPage('https://api.sketchfab.com/v3/search?type=models&downloadable=true&archives_flavours=false&count=24'+(animatedOnly?'&animated=true':'')+'&q='+encodeURIComponent(query), cb, errcb);
@@ -11949,7 +11958,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 472 · 2026-06-12';
+const BUILD_VERSION = 'build 473 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
