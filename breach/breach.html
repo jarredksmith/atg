@@ -6644,6 +6644,39 @@ function setEnemyAnimState(body, state){
   if(cur && cur !== next) cur.crossFadeTo(next, 0.18, false);
   v.userData.animState = key;
 }
+// --- Animation SELECTION helpers: turn live movement into the right directional slot ----------------
+// _locoSlot: choose forward / back / strafe locomotion from the planar move vector relative to facing yaw.
+// family = 'walk' | 'run' | 'sprint' | 'crouch'. Avatars face -Z, so forward is (-sin yaw, -cos yaw); the
+// move vector is projected onto facing (f) and screen-right (r), and the dominant axis picks the slot.
+function _locoSlot(mx, mz, yaw, family){
+  const sp = Math.hypot(mx, mz);
+  if(sp < 1e-4) return family==='crouch' ? 'crouch' : 'idle';
+  const fx=-Math.sin(yaw), fz=-Math.cos(yaw);   // forward
+  const rx= Math.cos(yaw), rz=-Math.sin(yaw);   // right (level, screen-right)
+  const f=(mx*fx+mz*fz)/sp, r=(mx*rx+mz*rz)/sp;
+  const fwd = Math.abs(f) >= Math.abs(r);        // dominant axis: forward/back vs strafe
+  if(family==='crouch'){
+    if(fwd) return f>=0 ? 'crouchWalk' : 'crouchBack';
+    return r>0 ? 'crouchStrafeR' : 'crouchStrafeL';
+  }
+  const runFam = (family==='run' || family==='sprint');
+  if(fwd) return f>=0 ? family : (runFam ? 'runBack' : 'walkBack');   // forward keeps the tier (incl. sprint)
+  return runFam ? (r>0?'runStrafeR':'runStrafeL') : (r>0?'strafeR':'strafeL');
+}
+// _airborneSlot: jump takeoff / air / fall / landing sub-states from grounded + vertical velocity. `s` is a
+// tiny per-character store kept on the avatar/bot. Returns null when fully grounded (caller uses locomotion).
+function _airborneSlot(s, grounded, vy, dt){
+  if(grounded){
+    if(s.air){ s.air=false; const hard=(s.minVy < -16); s.landKind=hard?'hardLand':'jumpLand'; s.landT=hard?0.45:0.2; s.minVy=0; }   // just landed -> brief land pose (hard from a fast fall)
+    if(s.landT>0){ s.landT-=dt; return s.landKind; }
+    return null;
+  }
+  if(!s.air){ s.air=true; s.airT=0; s.minVy=0; }   // just left the ground
+  s.airT+=dt; if(vy<s.minVy) s.minVy=vy;           // remember the fastest descent for hard-land
+  if(vy>1.5 && s.airT<0.18) return 'jumpStart';    // initial upward burst
+  if(vy<-2.5) return 'fall';                       // descending
+  return 'jump';                                   // apex / neutral air
+}
 // Set WHEN the prop animates: 'auto' (on spawn) / 'interact' (E) / 'signal' (only via a signal).
 function setPropAnimTrigger(obj, trig){
   trig = (trig==='interact'||trig==='signal') ? trig : 'auto';
@@ -10061,7 +10094,7 @@ function updateBots(dt){
         if(b._dieT > fadeStart){ const k=Math.max(0,1-(b._dieT-fadeStart)/0.7); b.mesh.traverse(o=>{ if(o.isMesh && o.material){ const ms=Array.isArray(o.material)?o.material:[o.material]; ms.forEach(m=>{ m.transparent=true; m.opacity=k; }); } }); }
         if(b._dieT >= 2.5){ b.mesh.visible=false; b._dying=false; }
       }
-      if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,(sp.y||0),sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; b.aiState='engage'; b.aiT=0; b.lkp=null; b.lkpFresh=0; b.sawTgt=false; b._stuckT=0; b.path=null; b.pathT=0; b._dying=false; b._dieT=0;
+      if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,(sp.y||0),sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; b.aiState='engage'; b.aiT=0; b.lkp=null; b.lkpFresh=0; b.sawTgt=false; b._stuckT=0; b.path=null; b.pathT=0; b._dying=false; b._dieT=0; b._air=null;
         if(b.mesh){ b.mesh.visible=true; b.mesh.traverse(o=>{ if(o.isMesh && o.material){ const ms=Array.isArray(o.material)?o.material:[o.material]; ms.forEach(m=>{ m.opacity=1; }); } }); b.mesh.position.set(sp.x,(sp.y||0),sp.z); if(typeof setEnemyAnimState==='function') setEnemyAnimState(b.mesh,'idle'); } } continue; }
     b.retargetT-=dt;
     if(b.retargetT<=0 || !_botTargetAlive(b.target)){ b.target=_botAcquire(b); b.retargetT=0.4+Math.random()*0.3; }
@@ -10190,9 +10223,12 @@ function updateBots(dt){
       if(launched){ b._spin=(b._spin||0)+(Math.hypot(b.evx||0,b.evz||0)+Math.abs(b.vy||0))*dt*0.5; b.mesh.rotation.set(b._spin, (b._dispYaw=turnToward(b._dispYaw==null?b.yaw:b._dispYaw, b.yaw, dt, TURN_RATE)), b._spin*0.5); }
       else { b._spin=0; b.mesh.rotation.set(0, (b._dispYaw=turnToward(b._dispYaw==null?b.yaw:b._dispYaw, b.yaw, dt, TURN_RATE)), 0); }
       if(b.mesh.userData.hasModel && b.mesh.userData.visual && b.mesh.userData.visual.userData.stateActions){
-        const md=Math.hypot(b.pos.x-ox, b.pos.z-oz);
-        let st = md>0.06 ? 'run' : (md>0.015 ? 'walk' : 'idle');
+        const mvx=b.pos.x-ox, mvz=b.pos.z-oz, md=Math.hypot(mvx,mvz);
+        let st;
         if(b._fireAnimT && performance.now()<b._fireAnimT) st='attack';
+        else { const air=_airborneSlot(b._air||(b._air={}), b.grounded!==false, b.vy||0, dt);   // jumpStart/jump/fall/land while path-hopping or launched
+          if(air) st=air;
+          else { const tier = md>0.06?'run':(md>0.015?'walk':'idle'); st=(tier==='idle')?'idle':_locoSlot(mvx,mvz,b.yaw,tier); } }   // strafes/back-pedals show when orbiting a target it's facing
         setEnemyAnimState(b.mesh, st);
       } }
     b.fireCd-=dt;
@@ -10677,7 +10713,7 @@ function ensureOwnAvatar(){
   if(_ownAvatar.userData.charRing) _ownAvatar.userData.charRing.visible=false;   // your own ring is redundant in third person
   return _ownAvatar;
 }
-function updateOwnAvatar(){
+function updateOwnAvatar(dt){
   if(!(tpMode && gameOn && !editorOpen)){ if(_ownAvatar) _ownAvatar.visible=false; return; }
   const a=ensureOwnAvatar(); a.visible=true;
   attachAvatarGun(a, curWep);   // hold the model for the active weapon (swaps when you change guns)
@@ -10689,17 +10725,26 @@ function updateOwnAvatar(){
   // drive the animation from my own state: die > attack > jump > run/walk/idle (mirrors how peers animate me)
   if(a.userData.hasModel && a.userData.visual && a.userData.visual.userData.stateActions){
     const dead = duelDead || (player.hp!=null && player.hp<=0);
-    const md = Math.hypot(player.pos.x-_ownPrevX, player.pos.z-_ownPrevZ);   // per-frame travel (same metric peers use for me)
+    const mvx=player.pos.x-_ownPrevX, mvz=player.pos.z-_ownPrevZ;   // planar travel this frame: direction + magnitude
+    const md = Math.hypot(mvx, mvz);
     _ownSpeed = _ownSpeed*0.6 + md*0.4;   // low-pass: per-frame travel is noisy and flips walk<->run otherwise
+    const air = _airborneSlot(a.userData._air || (a.userData._air={}), player.onGround, player.vel.y, dt||0.016);
     let st;
-    if(dead) st='die';
-    else if(performance.now()-lastShot < 250) st='attack';
-    else if(sliding && player.onGround) st='slide';   // dedicated slide pose if the model has one
-    else if((ads||padAds||touchAds) && player.onGround && _ownSpeed<0.05) st='aim';   // holding right-click, standing, not firing -> aim pose
-    else if(crouching && player.onGround) st='crouch';   // crouched pose (model may have crouch-idle/walk; single pose here)
-    else if(!player.onGround) st='jump';
-    else { const cur=(a.userData.visual.userData.animState)||'idle', sm=_ownSpeed;   // hysteresis: enter run high, leave run low
-      st = sm<0.012 ? 'idle' : (cur==='run' ? (sm>0.05?'run':'walk') : (sm>0.11?'run':'walk')); }
+    if(dead) st='die';                                          // death (directional variants wired in a later pass)
+    else if(performance.now()-lastShot < 250) st='attack';      // firing
+    else if(reloading) st='reload';                             // reloading the mag
+    else if(sliding && player.onGround) st='slide';             // sprint-slide
+    else if(air) st=air;                                        // jumpStart / jump / fall / jumpLand / hardLand
+    else if((ads||padAds||touchAds) && _ownSpeed<0.05) st='aim';// holding right-click, standing -> aim pose
+    else if(crouching){ st = _ownSpeed<0.012 ? 'crouch' : _locoSlot(mvx,mvz,player.yaw,'crouch'); }   // crouch idle / directional crouch
+    else {
+      const cur=(a.userData.visual.userData.animState)||'idle', sm=_ownSpeed;
+      let tier;
+      if(sm<0.012) tier='idle';
+      else if(typeof sprinting==='function' && sprinting()) tier='sprint';
+      else tier = ((sm>0.05 && (cur==='run'||cur==='sprint'||cur.indexOf('run')===0)) || sm>0.11) ? 'run' : 'walk';   // hysteresis: enter run high, hold run low
+      st = (tier==='idle') ? 'idle' : _locoSlot(mvx,mvz,player.yaw,tier);   // forward/back/strafe by movement vs facing
+    }
     setEnemyAnimState(a, st);
   }
   _ownPrevX=player.pos.x; _ownPrevZ=player.pos.z;
@@ -12137,7 +12182,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 487 · 2026-06-12';
+const BUILD_VERSION = 'build 488 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14586,7 +14631,7 @@ function loop(){
     } else { shake = 0; camera.rotation.z = 0; }
     if(tpMode && gameOn && !duelDead){ gun.visible=false; tpCameraPushback(); }   // third-person chase cam (first-person above is the default)
   }
-  updateOwnAvatar();   // show + place the player's own body in third person (hidden otherwise)
+  updateOwnAvatar(dt);   // show + place the player's own body in third person (hidden otherwise)
 
   // PvP death killcam — while waiting to respawn, pan the view onto whoever killed you
   if(duelDead && pvpMode()){
