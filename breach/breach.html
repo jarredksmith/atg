@@ -9515,6 +9515,13 @@ function navBuildLinks(){
     }
     NAV.link[idx]=mask;
   }
+  // Label connected components so navFindPath can reject unreachable goals in O(1).
+  NAV.comp = new Int32Array(N).fill(-1);
+  let cid=0;
+  for(let s=0;s<N;s++){ if(!NAV.walk[s] || NAV.comp[s]>=0) continue; NAV.comp[s]=cid; const q=[s]; let hd=0;
+    while(hd<q.length){ const cur=q[hd++], cx=(cur/NAV.nz)|0, cz=cur%NAV.nz, mask=NAV.link[cur];
+      for(let d=0;d<8;d++){ if(!(mask&(1<<d))) continue; const ni=(cx+DIRS[d][0])*NAV.nz+(cz+DIRS[d][1]); if(NAV.comp[ni]>=0) continue; NAV.comp[ni]=cid; q.push(ni); } }
+    cid++; }
 }
 // Synchronous full build (used by the debug overlay, where a brief hitch is acceptable).
 function buildNavGrid(){
@@ -9590,12 +9597,14 @@ function navFindPath(si, gi){
   if(!NAV.walk || si<0 || gi<0 || si>=NAV.walk.length || gi>=NAV.walk.length) return null;
   if(!NAV.walk[si] || !NAV.walk[gi]) return null;
   if(si===gi) return [si];
+  if(NAV.comp && NAV.comp[si]!==NAV.comp[gi]) return null;   // different connected regions -> unreachable, fail instantly instead of exploring the whole area
   const N=NAV.walk.length, nz=NAV.nz, cell=NAV.cell;
   if(!NAV._g || NAV._g.length!==N){ NAV._g=new Float32Array(N); NAV._from=new Int32Array(N); NAV._seen=new Int32Array(N); NAV._gen=0; }
   const g=NAV._g, from=NAV._from, seen=NAV._seen, gen=++NAV._gen;
   const gX=Math.floor(gi/nz), gZ=gi%nz;
   const h=(i)=>{ const dx=Math.abs(Math.floor(i/nz)-gX), dz=Math.abs(i%nz-gZ); return (dx+dz+(Math.SQRT2-2)*Math.min(dx,dz))*cell; };
-  const hI=[], hF=[];
+  if(!NAV._hI){ NAV._hI=[]; NAV._hF=[]; }
+  const hI=NAV._hI, hF=NAV._hF; hI.length=0; hF.length=0;   // reuse the heap across calls (no per-search allocation)
   const push=(i,f)=>{ hI.push(i); hF.push(f); let c=hI.length-1; while(c>0){ const p=(c-1)>>1; if(hF[p]<=hF[c]) break; const ti=hI[p];hI[p]=hI[c];hI[c]=ti; const tf=hF[p];hF[p]=hF[c];hF[c]=tf; c=p; } };
   const pop=()=>{ const ri=hI[0], n=hI.length-1; hI[0]=hI[n]; hF[0]=hF[n]; hI.pop(); hF.pop(); let c=0; const m=hI.length; while(true){ let l=2*c+1,r=2*c+2,s=c; if(l<m&&hF[l]<hF[s])s=l; if(r<m&&hF[r]<hF[s])s=r; if(s===c)break; const ti=hI[s];hI[s]=hI[c];hI[c]=ti; const tf=hF[s];hF[s]=hF[c];hF[c]=tf; c=s; } return ri; };
   const DIRS=navDirs(), DC=navDirCost();
@@ -9640,14 +9649,14 @@ function _botRepath(b, destX, destZ){
   const si=navNearestWalkable(b.pos.x, b.pos.z), gi=navNearestWalkable(destX, destZ);
   b.path = (si>=0 && gi>=0 && si!==gi) ? navFindPath(si, gi) : null;
   b.pathI = (b.path && b.path.length>1) ? 1 : 0;   // cell 0 is where we already are; aim at the next one
-  b.pathGoalX = destX; b.pathGoalZ = destZ; b.pathT = 0.5 + Math.random()*0.4;   // jittered repath cadence
+  b.pathGoalX = destX; b.pathGoalZ = destZ; b.pathT = b.path ? (0.5 + Math.random()*0.4) : (1.0 + Math.random()*0.6);   // jittered cadence; back off when no route was found
 }
 // Returns the next waypoint to steer toward {x,z,y,jump}, or null if there's no usable path (caller beelines).
 function _botFollowPath(b, destX, destZ, dt){
   if(!NAV.built || !NAV.walk) return null;
   b.pathT = (b.pathT||0) - dt;
   const goalMoved = !b.path || Math.hypot((b.pathGoalX||0)-destX, (b.pathGoalZ||0)-destZ) > 3.0;
-  if(b.pathT<=0 || goalMoved) _botRepath(b, destX, destZ);
+  if(b.pathT<=0 || goalMoved){ if(_repathBudget>0){ _repathBudget--; _botRepath(b, destX, destZ); } else { b.pathT=0.08+Math.random()*0.06; } }   // respect the per-frame search budget
   if(!b.path || b.path.length<2) return null;
   if(b.pathI>=b.path.length) b.pathI=b.path.length-1;
   let wp=navCellCenter(b.path[b.pathI]);
@@ -9694,7 +9703,7 @@ function randomSpawn(){
     else if(reg){ const a=Math.random()*Math.PI*2, rr=Math.sqrt(Math.random())*Math.max(1,reg.r); x=reg.x+Math.cos(a)*rr; z=reg.z+Math.sin(a)*rr; }   // uniform point in the region disc
     else { x=(Math.random()*2-1)*lim; z=(Math.random()*2-1)*lim; }
     const fy = surfAt(x,z);                                  // the floor height at this column
-    if(insideSolid(x,z,fy) || !clearAt(x,z,fy)) continue;    // skip points inside/blocked by geometry (tested AT the floor)
+    if(!clearAt(x,z,fy)) continue;    // skip points blocked by geometry (clearAt has the ramp/rock surface-escape; insideSolid's over-occupied boxes falsely rejected rock cells and piled everyone on one spawn)
     let nd = others.length ? 1e9 : lim;
     for(const o of others){ const d=Math.hypot(x-o[0], z-o[1]); if(d<nd) nd=d; }
     const good = usePoly ? Math.min(34, Math.hypot(pb.maxx-pb.minx, pb.maxz-pb.minz)*0.3) : (reg ? (reg.r*0.6) : 34);
@@ -9904,7 +9913,8 @@ function botDie(b){
   } else if(b.mesh){ b.mesh.visible=false; b._dying=false; }   // no death clip -> just hide (FX still plays)
   if(typeof netDeath==='function') netDeath(b.pos.x,b.pos.y||0,b.pos.z);
 }
-let matchWarmup = 0;   // pre-match build/countdown window (host bot matches): bots are held inert until the nav grid is ready
+let matchWarmup = 0;
+let _repathBudget = 0;   // A* searches allowed per frame (reset each updateBots tick) so a frame never stalls on many repaths at once   // pre-match build/countdown window (host bot matches): bots are held inert until the nav grid is ready
 function _setCountdown(html){
   let bg=document.getElementById('matchCountdownBg'), el=document.getElementById('matchCountdown');
   if(html==null){ if(bg) bg.style.display='none'; if(el) el.style.display='none'; return; }
@@ -9933,6 +9943,7 @@ function navWarmupTick(dt){
 function updateBots(dt){
   if(NET.mode!=='host' || !pvpMode() || !gameOn || !bots.length) return;
   if(dt>0.05) dt=0.05;   // clamp the timestep: a frame hitch must never let a bot teleport across the map
+  _repathBudget = 3;   // at most 3 path searches this frame; the rest keep their current route until a slot frees
   if(!NAV.built){ if(!NAV.building && typeof navBuildBegin==='function') navBuildBegin(); if(typeof navBuildStep==='function') navBuildStep(5); }   // build the nav grid incrementally (no match-start freeze); bots beeline until ready
   const D=botDiff(), koth = NET.gameMode==='cp', lim=ARENA-2, spd=SPEED*D.spd;
   for(const b of bots){
@@ -12010,7 +12021,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 477 · 2026-06-12';
+const BUILD_VERSION = 'build 478 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
