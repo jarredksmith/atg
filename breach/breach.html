@@ -9492,6 +9492,9 @@ function buildNavGrid(){
       if(w && w.ok){ NAV.walk[idx]=1; NAV.y[idx]=w.y; } else { NAV.walk[idx]=0; NAV.y[idx]=(w&&isFinite(w.y))?w.y:0; }
     }
   }
+  // Climbable-up height = how high a bot can JUMP onto a ledge (apex rise * 0.85 for a reliable landing).
+  // This is what connects the floor to ledges/steps the bots can hop up to (they couldn't before -> islands).
+  NAV_UP = (typeof JUMP!=='undefined' && typeof GRAV!=='undefined' && GRAV>0) ? Math.max(0.6, (JUMP*JUMP/(2*GRAV))*0.85) : 2.4;
   // 8-neighbour connectivity: two walkable cells link if the height change is climbable (up<=NAV_UP, drop<=NAV_DOWN)
   // and a diagonal isn't cutting a wall corner (both orthogonal neighbours must also be walkable).
   NAV.link = new Uint8Array(N);
@@ -9542,7 +9545,7 @@ function buildNavOverlay(){
   if(typeof flashToast==='function') flashToast('Nav: '+cnt+' walkable, '+flood.count+' reachable from you'+(pathLen?(', path '+pathLen):''));
 }
 function navOverlayToggle(){ NAV.show=!NAV.show; if(NAV.show){ NAV.built=false; buildNavOverlay(); } else _clearNavOverlay(); }
-const NAV_UP = 1.8, NAV_DOWN = 8.0;            // climbable up / droppable down between adjacent cells
+let NAV_UP = 2.4; const NAV_DOWN = 8.0;            // climbable-UP (set from the bot's jump each build) / droppable-down between adjacent cells
 function navDirs(){ return NAV._dirs || (NAV._dirs=[[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]]); }
 function navDirCost(){ return NAV._dc || (NAV._dc=[1,1,1,1,Math.SQRT2,Math.SQRT2,Math.SQRT2,Math.SQRT2]); }
 function navNearestWalkable(x,z){   // nearest walkable cell index to a world point (spiral out), or -1
@@ -11900,7 +11903,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 468 · 2026-06-12';
+const BUILD_VERSION = 'build 469 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
