@@ -10597,7 +10597,9 @@ function buildAvatarVisual(g, cfg){
       if(g.userData.visual){ g.remove(g.userData.visual); g.userData.visual=null; }
       const model=THREE.cloneSkinned(gltf.scene);
       model.scale.setScalar(mc.scale||1);
-      model.traverse(o=>{ if(o.isMesh){ o.castShadow=true; if(o.frustumCulled!==undefined) o.frustumCulled=false; o.raycast=()=>{}; } });   // duel shots test the hit-proxy, not the (skinned) mesh
+      model.traverse(o=>{ if(o.isMesh){ o.castShadow=true; if(o.frustumCulled!==undefined) o.frustumCulled=false; o.raycast=()=>{};
+        if(o.material){ o.material = Array.isArray(o.material) ? o.material.map(m=>m.clone()) : o.material.clone(); }   // per-avatar material clone (build 487): bots/remote players share one cached GLB, so one bot's death-fade opacity (or team tint) was bleeding onto every other bot using the same model. Clone gives each its own material; textures stay shared by reference, so it's cheap. Mirrors the enemy-visual fix from build 484.
+      } });   // duel shots test the hit-proxy, not the (skinned) mesh
       g.add(model); g.updateMatrixWorld(true); model.updateMatrixWorld(true);
       let h=2.0, fr=0.6;
       const wbox=new THREE.Box3().setFromObject(model);
@@ -12135,7 +12137,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 486 · 2026-06-12';
+const BUILD_VERSION = 'build 487 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
