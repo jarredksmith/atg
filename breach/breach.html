@@ -9876,17 +9876,20 @@ function _botAcquire(b){
   for(const o of bots){ if(o===b||o.dead) continue; if(tm && o.team===b.team) continue; const d=Math.hypot(b.pos.x-o.pos.x, b.pos.z-o.pos.z); if(d<bd){ bd=d; best={kind:'bot', id:o.id, pos:o.pos, bot:o}; } }
   return best;
 }
+const _losRay = (typeof THREE!=='undefined') ? new THREE.Raycaster() : null;
+const _losO = (typeof THREE!=='undefined') ? new THREE.Vector3() : null;
+const _losD = (typeof THREE!=='undefined') ? new THREE.Vector3() : null;
 function _botLOS(ex,ez,tx,tz,eyeY){
-  // Use clearAt (NOT insideSolid): insideSolid is poisoned by the over-occupying model voxelizer, which marks
-  // empty space around angled rock faces as solid -> sightlines across the rock arena were falsely blocked,
-  // so bots never saw their target (no orbit, no fire). clearAt has the surface-escape that avoids that.
-  const fy=(eyeY!=null)?eyeY:0; const dist=Math.hypot(tx-ex,tz-ez);
-  const steps=Math.max(4, Math.min(16, Math.ceil(dist/2.5)));   // sample ~every 2.5m so long sightlines are checked
-  for(let i=1;i<steps;i++){ const t=i/steps, x=ex+(tx-ex)*t, z=ez+(tz-ez)*t;
-    const blocked = (typeof clearAt==='function') ? !clearAt(x,z,fy) : (typeof insideSolid==='function' && insideSolid(x,z,fy));
-    if(blocked) return false;
-  }
-  return true;
+  // ONE direct sightline raycast against the real collider meshes. This is far cheaper than sampling clearAt
+  // along the line (16 raycasts -> 1) AND more correct: it tests actual triangles, so it's immune to both the
+  // over-occupied voxelizer boxes (which poisoned insideSolid) and the per-sample cost (which tanked the FPS).
+  if(!_losRay || typeof colliders==='undefined' || !colliders || !colliders.length) return true;
+  const dist=Math.hypot(tx-ex,tz-ez); if(dist<1e-3) return true;
+  const oy=(eyeY!=null?eyeY:0)+1.3;   // chest-height sightline
+  _losO.set(ex,oy,ez); _losD.set((tx-ex)/dist, 0, (tz-ez)/dist);
+  _losRay.set(_losO,_losD); _losRay.far=dist-0.3;   // ignore anything at/behind the target itself
+  const hits=_losRay.intersectObjects(colliders, true);
+  return !(hits && hits.length);
 }
 function _botDamage(b, tgt, dmg){
   if(tgt.kind==='host') applyPvpDamage(dmg, b.id);
@@ -9903,12 +9906,15 @@ function botDie(b){
 }
 let matchWarmup = 0;   // pre-match build/countdown window (host bot matches): bots are held inert until the nav grid is ready
 function _setCountdown(html){
-  let el=document.getElementById('matchCountdown');
-  if(html==null){ if(el) el.style.display='none'; return; }
+  let bg=document.getElementById('matchCountdownBg'), el=document.getElementById('matchCountdown');
+  if(html==null){ if(bg) bg.style.display='none'; if(el) el.style.display='none'; return; }
+  if(!bg){ bg=document.createElement('div'); bg.id='matchCountdownBg';
+    bg.style.cssText='position:fixed;inset:0;z-index:71;background:radial-gradient(circle at 50% 44%, rgba(6,16,20,.55), rgba(3,8,11,.86));pointer-events:none;';
+    document.body.appendChild(bg); }
   if(!el){ el=document.createElement('div'); el.id='matchCountdown';
-    el.style.cssText='position:absolute;top:40%;left:50%;transform:translate(-50%,-50%);z-index:72;text-align:center;color:#eafff6;font-size:40px;letter-spacing:3px;font-weight:800;text-shadow:0 2px 22px rgba(0,0,0,.75);pointer-events:none;font-family:inherit;';
+    el.style.cssText='position:fixed;top:44%;left:50%;transform:translate(-50%,-50%);z-index:72;text-align:center;color:#eafff6;font-size:56px;letter-spacing:5px;font-weight:800;text-shadow:0 0 26px rgba(56,245,181,.55),0 3px 24px rgba(0,0,0,.85);pointer-events:none;font-family:inherit;';
     document.body.appendChild(el); }
-  el.style.display=''; el.innerHTML=html;
+  bg.style.display=''; el.style.display=''; el.innerHTML=html;
 }
 // Returns true while the match is still warming up (bots should be held). Builds the nav grid hard while the
 // player waits on the countdown, so open play begins with pathing ready instead of a 5fps grind.
@@ -9945,7 +9951,9 @@ function updateBots(dt){
     const tgt=b.target;
     b.aiT-=dt; if(b._jumpCd>0) b._jumpCd-=dt;
     // ---- perception: can this bot currently SEE its target? track last-known position (lkp) ----
-    const hasLOS = !!(tgt && _botLOS(b.pos.x,b.pos.z, tgt.pos.x,tgt.pos.z, b.pos.y));
+    b._losT=(b._losT||0)-dt;
+    if(b._losT<=0){ b._los = !!(tgt && _botLOS(b.pos.x,b.pos.z, tgt.pos.x,tgt.pos.z, b.pos.y)); b._losT=0.1+Math.random()*0.05; }   // LOS is a raycast: refresh ~10x/s, not every frame
+    const hasLOS = b._los && !!tgt;
     const tgtDist = tgt ? Math.hypot(tgt.pos.x-b.pos.x, tgt.pos.z-b.pos.z) : Infinity;
     if(hasLOS && tgt){ b.lkp = b.lkp||{x:0,z:0}; b.lkp.x=tgt.pos.x; b.lkp.z=tgt.pos.z; b.lkpFresh=2.5; b.sawTgt=true; }   // refresh while visible
     else { b.lkpFresh=Math.max(0, (b.lkpFresh||0)-dt); }
@@ -10067,7 +10075,7 @@ function updateBots(dt){
     if(tgt && wantFire && b.fireCd<=0){
       const ty=(tgt.pos.y!=null?Math.min(1.5,tgt.pos.y):1.4);
       const fdist=Math.hypot(tgt.pos.x-b.pos.x, ty-1.4, tgt.pos.z-b.pos.z);
-      if(fdist<D.range && _botLOS(b.pos.x,b.pos.z, tgt.pos.x,tgt.pos.z, b.pos.y)){
+      if(fdist<D.range && hasLOS){   // reuse the cached LOS instead of a second raycast per shot
         b.fireCd=D.cdMin+Math.random()*D.cdRand;
         const aim=_bv2.set(tgt.pos.x-b.pos.x, ty-1.4, tgt.pos.z-b.pos.z).normalize();
         aim.x+=(Math.random()*2-1)*D.spread; aim.y+=(Math.random()*2-1)*D.spread*0.75; aim.z+=(Math.random()*2-1)*D.spread; aim.normalize();
@@ -12002,7 +12010,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 476 · 2026-06-12';
+const BUILD_VERSION = 'build 477 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
