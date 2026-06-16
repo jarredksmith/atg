@@ -9918,7 +9918,7 @@ function updateBots(dt){
     b.retargetT-=dt;
     if(b.retargetT<=0 || !_botTargetAlive(b.target)){ b.target=_botAcquire(b); b.retargetT=0.4+Math.random()*0.3; }
     const tgt=b.target;
-    b.aiT-=dt;
+    b.aiT-=dt; if(b._jumpCd>0) b._jumpCd-=dt;
     // ---- perception: can this bot currently SEE its target? track last-known position (lkp) ----
     const hasLOS = !!(tgt && _botLOS(b.pos.x,b.pos.z, tgt.pos.x,tgt.pos.z, b.pos.y));
     const tgtDist = tgt ? Math.hypot(tgt.pos.x-b.pos.x, tgt.pos.z-b.pos.z) : Infinity;
@@ -9975,7 +9975,7 @@ function updateBots(dt){
     else {
       const wp = _botFollowPath(b, destX, destZ, dt);
       if(wp){ const pxd=wp.x-b.pos.x, pzd=wp.z-b.pos.z, pl=Math.hypot(pxd,pzd)||1; mvx=pxd/pl; mvz=pzd/pl;
-        if(wp.jump && b.grounded!==false){ b.vy=JUMP; b.grounded=false; b.evx=mvx*spd; b.evz=mvz*spd; } }   // hop up a path step, carrying forward onto the ledge
+        if(wp.jump && b.grounded!==false && (b._jumpCd||0)<=0){ b.vy=JUMP; b.grounded=false; b.evx=mvx*spd; b.evz=mvz*spd; b._jumpCarry=true; b._jumpCd=0.7; } }   // hop onto the ledge; cooldown stops a bot jackhammering a tall rock face
       else { mvx=dx/dist; mvz=dz/dist; }   // no nav path available -> beeline fallback
     }
     // SEPARATION: push away from nearby teammates/bots so they don't clump or run into each other.
@@ -10012,15 +10012,23 @@ function updateBots(dt){
         if(b.mesh) b.mesh.position.set(sp.x,(sp.y||0),sp.z);
       }
     }
-    if(b.evx||b.evz){   // launch momentum from a trebuchet / moving platform, fading once grounded
+    if(b.evx||b.evz){   // launch momentum from a trebuchet / moving platform / path hop, fading once grounded
       { const em=Math.hypot(b.evx,b.evz); if(em>40){ b.evx*=40/em; b.evz*=40/em; } }   // hard cap so momentum can't runaway-glitch
-      b.pos.x=Math.max(-lim,Math.min(lim, b.pos.x+b.evx*dt)); b.pos.z=Math.max(-lim,Math.min(lim, b.pos.z+b.evz*dt));
+      const ncx=Math.max(-lim,Math.min(lim, b.pos.x+b.evx*dt)), ncz=Math.max(-lim,Math.min(lim, b.pos.z+b.evz*dt));
+      if(b._jumpCarry && typeof clearAt==='function'){
+        // A path hop must NOT tunnel through rock: slide along walls (kill the blocked axis) instead of
+        // ramming the momentum straight through the mesh (which flung bots up/over and out of the arena).
+        if(clearAt(ncx,ncz,b.pos.y)){ b.pos.x=ncx; b.pos.z=ncz; }
+        else if(clearAt(ncx,b.pos.z,b.pos.y)){ b.pos.x=ncx; b.evz=0; }
+        else if(clearAt(b.pos.x,ncz,b.pos.y)){ b.pos.z=ncz; b.evx=0; }
+        else { b.evx=0; b.evz=0; }
+      } else { b.pos.x=ncx; b.pos.z=ncz; }   // trebuchet / platform: free flight so it can arc over obstacles
       const kd=Math.max(0, 1-((b.grounded?6:0.6))*dt); b.evx*=kd; b.evz*=kd;
       if(Math.abs(b.evx)<0.05) b.evx=0; if(Math.abs(b.evz)<0.05) b.evz=0;
     }
     { const groundY=(typeof groundHeightAt==='function')?groundHeightAt(b.pos.x,b.pos.z,b.pos.y):terrainHeightAt(b.pos.x,b.pos.z);   // land/stand with the SAME walkable-floor + ramp logic as the player (RAMP_RISE), so bots can stand & climb anywhere the player can — fixes bots dropping off a model's floor onto the terrain underneath and getting trapped
-      if(b.pos.y>groundY+0.04 || (b.vy||0)>0){ b.vy=(b.vy||0)-GRAV*dt; b.pos.y+=b.vy*dt; if(b.vy<=0 && b.pos.y<=groundY){ const _imp=-(b.vy||0); b.pos.y=groundY; b.vy=0; b.grounded=true; if(gameCfg.fallDamage && gameCfg.fallDamage.on && gameCfg.fallDamage.ai && !b.dead){ const dmg=_fallDamageFor(_imp); if(dmg>0.5){ b.hp-=dmg; if(b.hp<=0) botDie(b); } } } else b.grounded=false; }
-      else { b.pos.y=groundY; b.vy=0; b.grounded=true; }
+      if(b.pos.y>groundY+0.04 || (b.vy||0)>0){ b.vy=(b.vy||0)-GRAV*dt; b.pos.y+=b.vy*dt; if(b.vy<=0 && b.pos.y<=groundY){ const _imp=-(b.vy||0); b.pos.y=groundY; b.vy=0; b.grounded=true; b._jumpCarry=false; if(gameCfg.fallDamage && gameCfg.fallDamage.on && gameCfg.fallDamage.ai && !b.dead){ const dmg=_fallDamageFor(_imp); if(dmg>0.5){ b.hp-=dmg; if(b.hp<=0) botDie(b); } } } else b.grounded=false; }
+      else { b.pos.y=groundY; b.vy=0; b.grounded=true; b._jumpCarry=false; }
     }
     b.yaw = (tgt && hasLOS) ? Math.atan2(-(tgt.pos.x-b.pos.x), -(tgt.pos.z-b.pos.z)) : Math.atan2(-mvx,-mvz);   // face the target only while it's visible; otherwise face where we're moving (no x-ray tracking)
     if(b.mesh){ b.mesh.position.set(b.pos.x,b.pos.y,b.pos.z); if(b.grounded===false){ b._spin=(b._spin||0)+(Math.hypot(b.evx||0,b.evz||0)+Math.abs(b.vy||0))*dt*0.5; b.mesh.rotation.set(b._spin, (b._dispYaw=turnToward(b._dispYaw==null?b.yaw:b._dispYaw, b.yaw, dt, TURN_RATE)), b._spin*0.5); } else { b._spin=0; b.mesh.rotation.set(0, (b._dispYaw=turnToward(b._dispYaw==null?b.yaw:b._dispYaw, b.yaw, dt, TURN_RATE)), 0); }
@@ -11969,7 +11977,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 474 · 2026-06-12';
+const BUILD_VERSION = 'build 475 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
