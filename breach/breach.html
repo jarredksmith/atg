@@ -9523,12 +9523,12 @@ function buildNavOverlay(){
   const si=navNearestWalkable(px,pz);
   const flood=(si>=0)?navFloodReachable(si):{ reach:new Uint8Array(NAV.walk.length), count:0, farthest:-1 };
   const geo=new THREE.PlaneGeometry(NAV.cell*0.86, NAV.cell*0.86); geo.rotateX(-Math.PI/2);
-  const mat=new THREE.MeshBasicMaterial({ color:0xffffff, transparent:true, opacity:0.34, depthWrite:false, side:THREE.DoubleSide });
+  const mat=new THREE.MeshBasicMaterial({ color:0xffffff, transparent:true, opacity:0.5, depthWrite:false, depthTest:false, side:THREE.DoubleSide });
   const inst=new THREE.InstancedMesh(geo, mat, cnt); inst.frustumCulled=false; inst.renderOrder=8;
-  const m=new THREE.Matrix4(); const cGreen=new THREE.Color(0x35e0a0), cBlue=new THREE.Color(0x2f6f9e); let k=0;
+  const m=new THREE.Matrix4(); const cGreen=new THREE.Color(0x4dff8a), cBlue=new THREE.Color(0x1b3550); let k=0;
   for(let gx=0;gx<NAV.nx;gx++) for(let gz=0;gz<NAV.nz;gz++){ const idx=navIdx(gx,gz); if(!NAV.walk[idx]) continue;
-    const x=NAV.ox+(gx+0.5)*NAV.cell, z=NAV.oz+(gz+0.5)*NAV.cell; m.makeTranslation(x, NAV.y[idx]+0.07, z); inst.setMatrixAt(k, m);
-    inst.setColorAt(k, flood.reach[idx]?cGreen:cBlue); k++; }   // green=reachable from you, blue=walkable but cut off
+    const x=NAV.ox+(gx+0.5)*NAV.cell, z=NAV.oz+(gz+0.5)*NAV.cell; const rch=flood.reach[idx]; m.makeTranslation(x, NAV.y[idx]+(rch?0.18:0.06), z); inst.setMatrixAt(k, m);
+    inst.setColorAt(k, rch?cGreen:cBlue); k++; }   // green=reachable from you, blue=walkable but cut off
   inst.instanceMatrix.needsUpdate=true; if(inst.instanceColor) inst.instanceColor.needsUpdate=true; scene.add(inst); NAV.overlay=inst;
   // Demo path to the farthest REACHABLE cell, so it always resolves and shows A* routing around the rocks.
   let pathLen=0;
@@ -9542,7 +9542,8 @@ function buildNavOverlay(){
       pinst.instanceMatrix.needsUpdate=true; scene.add(pinst); NAV.pathOverlay=pinst;
     }
   } catch(e){}
-  if(typeof flashToast==='function') flashToast('Nav: '+cnt+' walkable, '+flood.count+' reachable from you'+(pathLen?(', path '+pathLen):''));
+  const largest=navLargestComponent();
+  if(typeof flashToast==='function') flashToast('Nav: '+cnt+' walkable, '+flood.count+' reachable from you, largest region '+largest+(pathLen?(', path '+pathLen):''));
 }
 function navOverlayToggle(){ NAV.show=!NAV.show; if(NAV.show){ NAV.built=false; buildNavOverlay(); } else _clearNavOverlay(); }
 let NAV_UP = 2.4; const NAV_DOWN = 8.0;            // climbable-UP (set from the bot's jump each build) / droppable-down between adjacent cells
@@ -9594,6 +9595,14 @@ function navFloodReachable(si){   // BFS over links from si: which cells are act
     for(let d=0; d<8; d++){ if(!(mask&(1<<d))) continue; const ni=(cx+DIRS[d][0])*nz+(cz+DIRS[d][1]);
       if(reach[ni]) continue; reach[ni]=1; dist[ni]=dist[cur]+1; count++; q.push(ni); if(dist[ni]>fardist){ fardist=dist[ni]; far=ni; } } }
   return { reach, count, farthest:far, fardist };
+}
+function navLargestComponent(){   // size of the biggest connected walkable region anywhere (diagnostic)
+  if(!NAV.walk) return 0; const N=NAV.walk.length, seen=new Uint8Array(N), DIRS=navDirs(), nz=NAV.nz; let best=0;
+  for(let s=0;s<N;s++){ if(!NAV.walk[s]||seen[s]) continue; let cnt=0; const q=[s]; seen[s]=1; let h=0;
+    while(h<q.length){ const cur=q[h++]; cnt++; const cx=Math.floor(cur/nz), cz=cur%nz, mask=NAV.link[cur];
+      for(let d=0;d<8;d++){ if(!(mask&(1<<d))) continue; const ni=(cx+DIRS[d][0])*nz+(cz+DIRS[d][1]); if(seen[ni]) continue; seen[ni]=1; q.push(ni); } }
+    if(cnt>best) best=cnt; }
+  return best;
 }
 function navCellCenter(i){ const gx=Math.floor(i/NAV.nz), gz=i%NAV.nz; return { x:NAV.ox+(gx+0.5)*NAV.cell, y:NAV.y[i], z:NAV.oz+(gz+0.5)*NAV.cell }; }
 function navFarthestFrom(si){   // walkable cell with the greatest grid distance from si (for the debug demo path)
@@ -11903,7 +11912,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 469 · 2026-06-12';
+const BUILD_VERSION = 'build 470 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
