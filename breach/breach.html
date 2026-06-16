@@ -6228,7 +6228,9 @@ function setTerrainFromCfg(force){
     floor.geometry=new THREE.PlaneGeometry(ARENA*2, ARENA*2);
   }
 }
+const NAV = { cell:1.5, nx:0, nz:0, ox:0, oz:0, walk:null, y:null, built:false, overlay:null, show:false };   // nav grid state (declared here so rebuildArena, which runs during boot, can touch it)
 function rebuildArena(){
+  NAV.built=false;   // arena changed -> the nav grid must be rebuilt
   // floor (flat, or a displaced height-mesh when worldCfg.terrain is set)
   setTerrainFromCfg(true);
   // grid
@@ -9463,7 +9465,6 @@ function _polyCentroid(poly){ let x=0,z=0; for(const p of poly){ x+=p.x; z+=p.z;
 // A coarse walkable-cell grid sampled with the SAME collision helpers the player uses, so "walkable" means a
 // bot could actually stand there. Toggle the green overlay with N to confirm it matches the real geometry
 // before any pathfinding is layered on. Rebuilt on each toggle-on so it reflects the current arena.
-const NAV = { cell:1.5, nx:0, nz:0, ox:0, oz:0, walk:null, y:null, built:false, overlay:null, show:false };
 function navIdx(gx,gz){ return gx*NAV.nz + gz; }
 function navCellOf(x,z){ return { gx:Math.floor((x-NAV.ox)/NAV.cell), gz:Math.floor((z-NAV.oz)/NAV.cell) }; }
 function navWalkable(x,z){   // can a bot stand at this column? Authority = clearAt, the SAME test the player uses.
@@ -9609,6 +9610,26 @@ function navFarthestFrom(si){   // walkable cell with the greatest grid distance
   if(si<0) return -1; const sx=Math.floor(si/NAV.nz), sz=si%NAV.nz; let best=-1, bd=-1;
   for(let i=0;i<NAV.walk.length;i++){ if(!NAV.walk[i]) continue; const dx=Math.floor(i/NAV.nz)-sx, dz=i%NAV.nz-sz; const d=dx*dx+dz*dz; if(d>bd){ bd=d; best=i; } }
   return best;
+}
+// ---- Bot path-following (Step 3): walk the A* route to a destination instead of beelining ----
+function _botRepath(b, destX, destZ){
+  const si=navNearestWalkable(b.pos.x, b.pos.z), gi=navNearestWalkable(destX, destZ);
+  b.path = (si>=0 && gi>=0 && si!==gi) ? navFindPath(si, gi) : null;
+  b.pathI = (b.path && b.path.length>1) ? 1 : 0;   // cell 0 is where we already are; aim at the next one
+  b.pathGoalX = destX; b.pathGoalZ = destZ; b.pathT = 0.5 + Math.random()*0.4;   // jittered repath cadence
+}
+// Returns the next waypoint to steer toward {x,z,y,jump}, or null if there's no usable path (caller beelines).
+function _botFollowPath(b, destX, destZ, dt){
+  if(!NAV.built || !NAV.walk) return null;
+  b.pathT = (b.pathT||0) - dt;
+  const goalMoved = !b.path || Math.hypot((b.pathGoalX||0)-destX, (b.pathGoalZ||0)-destZ) > 3.0;
+  if(b.pathT<=0 || goalMoved) _botRepath(b, destX, destZ);
+  if(!b.path || b.path.length<2) return null;
+  if(b.pathI>=b.path.length) b.pathI=b.path.length-1;
+  let wp=navCellCenter(b.path[b.pathI]);
+  let guard=0;   // advance past waypoints we've effectively reached (horizontal proximity)
+  while(b.pathI < b.path.length-1 && Math.hypot(wp.x-b.pos.x, wp.z-b.pos.z) < NAV.cell*0.9 && guard++<64){ b.pathI++; wp=navCellCenter(b.path[b.pathI]); }
+  return { x:wp.x, z:wp.z, y:wp.y, jump:(wp.y - b.pos.y) > (STEP+0.1) };   // jump when the next cell is a hop up
 }
 function _botHome(){
   // Where a target-less bot heads: the arena objective/center. The spawn region only controls where bots
@@ -9848,6 +9869,7 @@ function botDie(b){
 function updateBots(dt){
   if(NET.mode!=='host' || !pvpMode() || !gameOn || !bots.length) return;
   if(dt>0.05) dt=0.05;   // clamp the timestep: a frame hitch must never let a bot teleport across the map
+  if(!NAV.built && typeof buildNavGrid==='function') buildNavGrid();   // nav grid ready for pathfinding (built once per arena)
   const D=botDiff(), koth = NET.gameMode==='cp', lim=ARENA-2, spd=SPEED*D.spd;
   for(const b of bots){
     if(!b._exitInit){ b._exitInit=true; b._exitT=1.5; }   // on its very first appearance, walk out of the (possibly cramped) spawn before hunting
@@ -9859,7 +9881,7 @@ function updateBots(dt){
         if(b._dieT > fadeStart){ const k=Math.max(0,1-(b._dieT-fadeStart)/0.7); b.mesh.traverse(o=>{ if(o.isMesh && o.material){ const ms=Array.isArray(o.material)?o.material:[o.material]; ms.forEach(m=>{ m.transparent=true; m.opacity=k; }); } }); }
         if(b._dieT >= 2.5){ b.mesh.visible=false; b._dying=false; }
       }
-      if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,(sp.y||0),sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; b.aiState='engage'; b.aiT=0; b.lkp=null; b.lkpFresh=0; b.sawTgt=false; b._stuckT=0; b._exitT=1.5; b._dying=false; b._dieT=0;
+      if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,(sp.y||0),sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; b.aiState='engage'; b.aiT=0; b.lkp=null; b.lkpFresh=0; b.sawTgt=false; b._stuckT=0; b._exitT=1.5; b.path=null; b.pathT=0; b._dying=false; b._dieT=0;
         if(b.mesh){ b.mesh.visible=true; b.mesh.traverse(o=>{ if(o.isMesh && o.material){ const ms=Array.isArray(o.material)?o.material:[o.material]; ms.forEach(m=>{ m.opacity=1; }); } }); b.mesh.position.set(sp.x,(sp.y||0),sp.z); if(typeof setEnemyAnimState==='function') setEnemyAnimState(b.mesh,'idle'); } } continue; }
     b.retargetT-=dt;
     if(b.retargetT<=0 || !_botTargetAlive(b.target)){ b.target=_botAcquire(b); b.retargetT=0.4+Math.random()*0.3; }
@@ -9920,7 +9942,12 @@ function updateBots(dt){
       const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml;
       if(Math.random()<0.012) b.strafe*=-1;
     }
-    else { mvx=dx/dist; mvz=dz/dist; }
+    else {
+      const wp = _botFollowPath(b, destX, destZ, dt);
+      if(wp){ const pxd=wp.x-b.pos.x, pzd=wp.z-b.pos.z, pl=Math.hypot(pxd,pzd)||1; mvx=pxd/pl; mvz=pzd/pl;
+        if(wp.jump && b.grounded!==false){ b.vy=JUMP; b.grounded=false; b.evx=mvx*spd; b.evz=mvz*spd; } }   // hop up a path step, carrying forward onto the ledge
+      else { mvx=dx/dist; mvz=dz/dist; }   // no nav path available -> beeline fallback
+    }
     // SEPARATION: push away from nearby teammates/bots so they don't clump or run into each other.
     { let sx=0, sz=0, near=0;
       for(const other of bots){ if(other===b || other.dead) continue;
@@ -11912,7 +11939,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 470 · 2026-06-12';
+const BUILD_VERSION = 'build 471 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
