@@ -12026,7 +12026,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 479 · 2026-06-12';
+const BUILD_VERSION = 'build 480 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14309,6 +14309,7 @@ function loop(){
   }
   if(pvpMode() && duelDead){ wish.set(0,0,0); moveScale=0; }   // frozen until respawn
   if(_levelLoaderActive){ wish.set(0,0,0); moveScale=0; }   // frozen while the level is still loading
+  if(matchWarmup>0){ wish.set(0,0,0); moveScale=0; }   // frozen during the pre-match GENERATING/countdown (no pre-positioning advantage)
   wish.normalize();
   let _wantCrouch = (keys['ControlLeft']||keys['ControlRight']||padCrouch);   // Ctrl = crouch (C is slide, kept separate)
   if(!_wantCrouch && crouchT > 0.4){   // releasing crouch: only stand if there's headroom for the full body
@@ -14341,7 +14342,7 @@ function loop(){
   }
 
   // jump + gravity
-  if((keys['Space']||padJump||touchJump) && player.onGround && !_levelLoaderActive){ player.vel.y = JUMP; player.onGround=false; sliding=false; SFX.jump(); }
+  if((keys['Space']||padJump||touchJump) && player.onGround && !_levelLoaderActive && matchWarmup<=0){ player.vel.y = JUMP; player.onGround=false; sliding=false; SFX.jump(); }
   touchJump = false;   // tap is consumed for one frame
   player.vel.y -= GRAV*dt;
   // one-shot vertical knock from physics props (e.g. a fast body launching the player)
