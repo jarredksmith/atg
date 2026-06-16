@@ -8483,7 +8483,9 @@ function buildEnemyVisual(body){
       const model = THREE.cloneSkinned(gltf.scene);
       const ty = ENEMY_TYPES[body.userData.enemyType] || ENEMY_TYPES.grunt;
       model.scale.setScalar((mc.scale || 1) * ty.scale);
-      model.traverse(o=>{ if(o.isMesh){ o.castShadow = true; o.receiveShadow = false; if(o.frustumCulled!==undefined) o.frustumCulled = false; } });   // skinned meshes can be culled wrongly by their bind-pose bounds
+      model.traverse(o=>{ if(o.isMesh){ o.castShadow = true; o.receiveShadow = false; if(o.frustumCulled!==undefined) o.frustumCulled = false;
+        if(o.material){ o.material = Array.isArray(o.material) ? o.material.map(m=>m.clone()) : o.material.clone(); }   // give each bot its OWN material so one bot's death-fade (opacity) doesn't fade every other bot sharing the source material (textures stay shared — clone is cheap)
+      } });   // skinned meshes can be culled wrongly by their bind-pose bounds
       body.add(model);
       body.updateMatrixWorld(true); model.updateMatrixWorld(true);
       const wbox = new THREE.Box3().setFromObject(model);
@@ -12041,7 +12043,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 483 · 2026-06-12';
+const BUILD_VERSION = 'build 484 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
