@@ -10050,6 +10050,7 @@ function updateBots(dt){
       if(near){ let sl=Math.hypot(sx,sz); const cap=1.3; if(sl>cap){ sx=sx/sl*cap; sz=sz/sl*cap; } mvx += sx; mvz += sz; const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml; }   // strong enough to un-pile, capped so it can't fling a packed spawn into the walls
     }
     const ox=b.pos.x, oz=b.pos.z;
+    let _gSurf;   // surface height under the bot's resting cell, computed once and shared by the move-test AND the ground resolve (one raycast instead of two)
     if(b.grounded!==false){   // walk only with feet on a surface; while airborne, momentum carries it
       // stuck recovery: if we've been blocked a while, steer perpendicular for a moment to get around it
       if(b._stuckT>0.5){ if(!b._stuckSide) b._stuckSide=(Math.random()<0.5?1:-1); const px=-mvz*b._stuckSide, pz=mvx*b._stuckSide; mvx=mvx*0.5+px*1.2; mvz=mvz*0.5+pz*1.2; const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml; }   // jammed -> follow the wall to ONE consistent side until it slides clear (instead of oscillating in place)
@@ -10057,8 +10058,9 @@ function updateBots(dt){
       const cx=Math.max(-lim,Math.min(lim, b.pos.x+mvx*step)), cz=Math.max(-lim,Math.min(lim, b.pos.z+mvz*step));
       // The arena walls + props are the only movement boundary; the spawn region never blocks motion, so a
       // bot can leave its spawn area and roam the whole map.
-      const okFull=((typeof clearAt!=='function') || clearAt(cx,cz,b.pos.y));
-      if(okFull){ b.pos.x=cx; b.pos.z=cz; }
+      const _candSurf=(typeof surfaceTopAt==='function')?surfaceTopAt(cx,cz):undefined;
+      const okFull=((typeof clearAt!=='function') || clearAt(cx,cz,b.pos.y,_candSurf));
+      if(okFull){ b.pos.x=cx; b.pos.z=cz; _gSurf=_candSurf; }   // moved cleanly to (cx,cz) -> its surface is the standing surface; reuse it
       else {
         // blocked head-on: try sliding along each axis so we skim past walls/props instead of freezing
         const okX = clearAt(cx, b.pos.z, b.pos.y), okZ = clearAt(b.pos.x, cz, b.pos.y);
@@ -10086,7 +10088,7 @@ function updateBots(dt){
       const kd=Math.max(0, 1-((b.grounded?6:0.6))*dt); b.evx*=kd; b.evz*=kd;
       if(Math.abs(b.evx)<0.05) b.evx=0; if(Math.abs(b.evz)<0.05) b.evz=0;
     }
-    { const groundY=(typeof groundHeightAt==='function')?groundHeightAt(b.pos.x,b.pos.z,b.pos.y):terrainHeightAt(b.pos.x,b.pos.z);   // land/stand with the SAME walkable-floor + ramp logic as the player (RAMP_RISE), so bots can stand & climb anywhere the player can — fixes bots dropping off a model's floor onto the terrain underneath and getting trapped
+    { const groundY=(typeof groundHeightAt==='function')?groundHeightAt(b.pos.x,b.pos.z,b.pos.y,_gSurf):terrainHeightAt(b.pos.x,b.pos.z);   // land/stand with the SAME walkable-floor + ramp logic as the player (RAMP_RISE), so bots can stand & climb anywhere the player can — fixes bots dropping off a model's floor onto the terrain underneath and getting trapped
       if(b.pos.y>groundY+0.04 || (b.vy||0)>0){ b.vy=(b.vy||0)-GRAV*dt; b.pos.y+=b.vy*dt; if(b.vy<=0 && b.pos.y<=groundY){ const _imp=-(b.vy||0); b.pos.y=groundY; b.vy=0; b.grounded=true; b._jumpCarry=false; if(gameCfg.fallDamage && gameCfg.fallDamage.on && gameCfg.fallDamage.ai && !b.dead){ const dmg=_fallDamageFor(_imp); if(dmg>0.5){ b.hp-=dmg; if(b.hp<=0) botDie(b); } } } else b.grounded=false; }
       else { b.pos.y=groundY; b.vy=0; b.grounded=true; b._jumpCarry=false; }
     }
@@ -12043,7 +12045,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 484 · 2026-06-12';
+const BUILD_VERSION = 'build 485 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13890,9 +13892,9 @@ function propSurfaceAt(obj, x, z){
   let top = -Infinity; for(const h of hits){ if(h.point.y > top) top = h.point.y; }
   return top;
 }
-function groundHeightAt(x, z, feetY){
+function groundHeightAt(x, z, feetY, surfHint){
   const g = terrainHeightAt(x, z);
-  const top = surfaceTopAt(x, z);
+  const top = (surfHint!==undefined) ? surfHint : surfaceTopAt(x, z);
   if(top === -Infinity) return g;
   if(top <= feetY + STEP) return Math.max(g, top);            // flat ground (or terrain) or a low step
   // Above a step: follow it only if it's a walkable RAMP (a sloped surface), not a tall flat ledge or a wall.
