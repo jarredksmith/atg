@@ -6490,7 +6490,101 @@ function playEnemyClip(root, gltf, clipName){
 // --- 4-state animation set (idle / walk / run / attack) ---------------------------------------------
 // All four actions play at weight 0 except the active one; setEnemyAnimState crossfades between them as
 // the enemy moves or attacks. Clips are auto-resolved by name, with per-state overrides in `clips`.
-const _STATE_RE = { idle:/idle|stand|breath/i, walk:/walk/i, run:/run|sprint|jog/i, attack:/attack|melee|punch|kick|bite|swipe|slash|shoot|fire|cast/i, jump:/jump|leap|hop|fall|air/i, aim:/aim|ads|sight|scope|ready/i, crouch:/crouch|crouched|kneel|duck/i, slide:/slide|slid|dash/i, die:/die|death|dead|killed|defeat/i };
+// --- Third-person animation taxonomy -------------------------------------------------------------
+// One canonical, ordered list of animation SLOTS the character system can map a clip to. Each slot has a
+// key (stable id, used in cfg.clips/clipSpeed/clipHold + the state machine), a short label (editor UI),
+// a group (collapsible editor section), and a name-matching regex (auto-pick a clip when no explicit
+// override is set). The first 9 keys (idle/walk/run/attack/aim/crouch/jump/slide/die) are unchanged so
+// older saved levels keep resolving exactly as before; everything after is additive + optional.
+const ANIM_SLOTS = [
+  // Idle & standing
+  { k:'idle',         g:'Idle & standing', l:'Idle',          re:/idle|stand|breath/i },
+  { k:'idleFidget',   g:'Idle & standing', l:'Idle fidget',   re:/fidget|look.?around|stretch|glance|bored|idle.?\d|idle.?var/i },
+  { k:'idleToCombat', g:'Idle & standing', l:'Idle to combat',re:/combat.?ready|to.?combat|alert|raise.?weapon|ready.?up/i },
+  { k:'turnL',        g:'Idle & standing', l:'Turn L 90\u00b0',re:/turn.?left|left.?turn|turn.?l\b|turn.?90.?l/i },
+  { k:'turnR',        g:'Idle & standing', l:'Turn R 90\u00b0',re:/turn.?right|right.?turn|turn.?r\b|turn.?90.?r/i },
+  { k:'turn180',      g:'Idle & standing', l:'Turn 180\u00b0', re:/turn.?180|180.?turn|about.?face/i },
+  { k:'aim',          g:'Idle & standing', l:'Aim idle',      re:/aim|ads|sight|scope|ready/i },
+  // Locomotion (ground)
+  { k:'walk',       g:'Locomotion (ground)', l:'Walk',        re:/walk/i },
+  { k:'walkBack',   g:'Locomotion (ground)', l:'Walk back',   re:/walk.?back|back.?walk|walk.?bwd/i },
+  { k:'strafeL',    g:'Locomotion (ground)', l:'Strafe L',    re:/strafe.?left|walk.?left|left.?strafe|step.?left/i },
+  { k:'strafeR',    g:'Locomotion (ground)', l:'Strafe R',    re:/strafe.?right|walk.?right|right.?strafe|step.?right/i },
+  { k:'run',        g:'Locomotion (ground)', l:'Run / jog',   re:/run|sprint|jog/i },
+  { k:'runBack',    g:'Locomotion (ground)', l:'Run back',    re:/run.?back|back.?run|jog.?back/i },
+  { k:'runStrafeL', g:'Locomotion (ground)', l:'Run strafe L',re:/run.?left|left.?run|run.?strafe.?l/i },
+  { k:'runStrafeR', g:'Locomotion (ground)', l:'Run strafe R',re:/run.?right|right.?run|run.?strafe.?r/i },
+  { k:'sprint',     g:'Locomotion (ground)', l:'Sprint',      re:/sprint|dash.?run/i },
+  { k:'moveStart',  g:'Locomotion (ground)', l:'Move start',  re:/start|accel|begin.?walk|begin.?run/i },
+  { k:'moveStop',   g:'Locomotion (ground)', l:'Move stop',   re:/stop|decel|halt|plant|skid/i },
+  { k:'pivot180',   g:'Locomotion (ground)', l:'Pivot 180\u00b0',re:/pivot|quick.?turn|spin.?turn/i },
+  // Crouch & stance
+  { k:'crouch',        g:'Crouch & stance', l:'Crouch',       re:/crouch|crouched|kneel|duck/i },
+  { k:'crouchWalk',    g:'Crouch & stance', l:'Crouch walk',  re:/crouch.?walk|crouch.?fwd|sneak/i },
+  { k:'crouchBack',    g:'Crouch & stance', l:'Crouch back',  re:/crouch.?back/i },
+  { k:'crouchStrafeL', g:'Crouch & stance', l:'Crouch L',     re:/crouch.?left|crouch.?strafe.?l/i },
+  { k:'crouchStrafeR', g:'Crouch & stance', l:'Crouch R',     re:/crouch.?right|crouch.?strafe.?r/i },
+  { k:'standToCrouch', g:'Crouch & stance', l:'Stand to crouch',re:/stand.?to.?crouch|to.?crouch|crouch.?down|crouch.?in/i },
+  { k:'crouchToStand', g:'Crouch & stance', l:'Crouch to stand',re:/crouch.?to.?stand|crouch.?up|stand.?up.?from/i },
+  // Jumping & airborne
+  { k:'jumpStart', g:'Jumping & airborne', l:'Jump start', re:/jump.?start|takeoff|jump.?up|launch|leap.?start/i },
+  { k:'jump',      g:'Jumping & airborne', l:'Jump / air', re:/jump|leap|hop|fall|air/i },
+  { k:'jumpLand',  g:'Jumping & airborne', l:'Jump land',  re:/land(?!.?hard)|jump.?end|touchdown|jump.?down/i },
+  { k:'hardLand',  g:'Jumping & airborne', l:'Hard land',  re:/hard.?land|heavy.?land|land.?roll|crash.?land|land.?stagger/i },
+  { k:'fall',      g:'Jumping & airborne', l:'Fall idle',  re:/fall.?idle|falling|fall.?loop|plummet|in.?air.?loop/i },
+  // Traversal
+  { k:'slide', g:'Traversal', l:'Slide', re:/slide|slid|dash/i },
+  // Combat
+  { k:'attack',     g:'Combat', l:'Fire / attack', re:/attack|melee|punch|kick|bite|swipe|slash|shoot|fire|cast/i },
+  { k:'reload',     g:'Combat', l:'Reload',        re:/reload|magazine|mag.?in|clip.?in/i },
+  { k:'meleeLight', g:'Combat', l:'Melee light',   re:/melee.?light|light.?attack|jab|punch.?1|slash.?1/i },
+  { k:'meleeHeavy', g:'Combat', l:'Melee heavy',   re:/melee.?heavy|heavy.?attack|smash|slam/i },
+  { k:'meleeCombo', g:'Combat', l:'Melee combo',   re:/combo|flurry|melee.?\d|attack.?\d/i },
+  { k:'block',      g:'Combat', l:'Block',         re:/block|guard|shield/i },
+  { k:'parry',      g:'Combat', l:'Parry',         re:/parry|deflect|counter/i },
+  { k:'dodge',      g:'Combat', l:'Dodge',         re:/dodge|evade|dive|roll(?!.?land)/i },
+  { k:'equip',      g:'Combat', l:'Equip',         re:/equip|draw.?weapon|unholster|arm.?weapon/i },
+  { k:'holster',    g:'Combat', l:'Holster',       re:/holster|stow|sheath|disarm/i },
+  { k:'throw',      g:'Combat', l:'Throw',         re:/throw|toss|grenade|lob/i },
+  // Damage & death
+  { k:'hitFront', g:'Damage & death', l:'Hit front', re:/hit.?front|front.?hit|flinch.?front|impact.?front|hit.?f\b/i },
+  { k:'hitBack',  g:'Damage & death', l:'Hit back',  re:/hit.?back|back.?hit|flinch.?back|hit.?b\b/i },
+  { k:'hitLeft',  g:'Damage & death', l:'Hit left',  re:/hit.?left|left.?hit|flinch.?left|hit.?l\b/i },
+  { k:'hitRight', g:'Damage & death', l:'Hit right', re:/hit.?right|right.?hit|flinch.?right|hit.?r\b/i },
+  { k:'stagger',  g:'Damage & death', l:'Stagger',   re:/stagger|knockback|stumble|reel/i },
+  { k:'knockdown',g:'Damage & death', l:'Knockdown', re:/knockdown|knocked.?down|fall.?down|floored/i },
+  { k:'getup',    g:'Damage & death', l:'Get up',    re:/get.?up|getup|stand.?up|recover|rise/i },
+  { k:'die',      g:'Damage & death', l:'Death',     re:/die|death|dead|killed|defeat/i },
+  { k:'dieFront', g:'Damage & death', l:'Death front',re:/die.?front|death.?front|front.?death/i },
+  { k:'dieBack',  g:'Damage & death', l:'Death back', re:/die.?back|death.?back|back.?death/i },
+];
+const _STATE_RE = {}; for(const _s of ANIM_SLOTS) _STATE_RE[_s.k] = _s.re;
+// One-shots play once and clamp on the final frame (transitions, reactions, attacks, deaths); the rest loop.
+const _ANIM_ONESHOT = new Set(['idleFidget','idleToCombat','turnL','turnR','turn180','moveStart','moveStop','pivot180','standToCrouch','crouchToStand','jumpStart','jumpLand','hardLand','reload','meleeLight','meleeHeavy','meleeCombo','parry','dodge','equip','holster','throw','hitFront','hitBack','hitLeft','hitRight','stagger','knockdown','getup','die','dieFront','dieBack']);
+// When a requested state has no mapped/resolved clip, walk this chain until one resolves (else idle / first).
+// Chains terminate at idle and never cycle. Lets you map only the clips a model actually ships with.
+const _ANIM_FALLBACK = {
+  idleFidget:'idle', idleToCombat:'aim', turnL:'idle', turnR:'idle', turn180:'idle', aim:'idle',
+  walk:'idle', walkBack:'walk', strafeL:'walk', strafeR:'walk',
+  run:'walk', runBack:'run', runStrafeL:'run', runStrafeR:'run', sprint:'run',
+  moveStart:'walk', moveStop:'idle', pivot180:'run',
+  crouch:'idle', crouchWalk:'crouch', crouchBack:'crouchWalk', crouchStrafeL:'crouchWalk', crouchStrafeR:'crouchWalk', standToCrouch:'crouch', crouchToStand:'idle',
+  jumpStart:'jump', jump:'idle', jumpLand:'idle', hardLand:'jumpLand', fall:'jump',
+  slide:'run',
+  attack:'aim', reload:'attack', meleeLight:'attack', meleeHeavy:'meleeLight', meleeCombo:'meleeLight', block:'aim', parry:'block', dodge:'run', equip:'idle', holster:'idle', throw:'attack',
+  hitFront:'stagger', hitBack:'stagger', hitLeft:'stagger', hitRight:'stagger', stagger:'idle',
+  knockdown:'die', getup:'idle', dieFront:'die', dieBack:'die', die:'idle',
+};
+// Build grouped, collapsible clip-mapping rows for the whole taxonomy. `prefix` keeps player/enemy fold
+// open-states independent; `openGroups` names which sections start expanded; `mkRow(body, slot)` appends
+// one slot's controls into the right section body.
+function _animSlotFolds(host, prefix, openGroups, mkRow){
+  let curG = null, body = null;
+  for(const slot of ANIM_SLOTS){
+    if(slot.g !== curG){ curG = slot.g; body = edFold(host, prefix+'_'+curG.replace(/[^a-z0-9]/gi,''), curG, !!(openGroups && openGroups[curG]), ''); }
+    mkRow(body, slot);
+  }
+}
 function _resolveStateClip(gltf, clips, state){
   const want = clips && clips[state];
   if(want){ const c = gltf.animations.find(a=>(a.name||'')===want); if(c) return c; }   // explicit override
@@ -6501,13 +6595,13 @@ function playEnemyStates(root, gltf, clips){
   if(!gltf || !gltf.animations || !gltf.animations.length) return null;
   const mixer = new THREE.AnimationMixer(root);
   const actions = {};
-  for(const st of ['idle','walk','run','attack','aim','crouch','jump','slide','die']){
+  for(const _slot of ANIM_SLOTS){ const st = _slot.k;
     const clip = _resolveStateClip(gltf, clips, st);
     if(clip){ const a = mixer.clipAction(clip);
       a.userData = a.userData || {}; a.userData.state = st;
       // loop mode is (re)applied on activation in setEnemyAnimState so the editor's hold toggle works live;
       // seed a sane default here (die holds its last frame, the rest loop).
-      if(st==='die'){ a.loop = THREE.LoopOnce; a.clampWhenFinished = true; } else { a.loop = THREE.LoopRepeat; }
+      if(_ANIM_ONESHOT.has(st)){ a.loop = THREE.LoopOnce; a.clampWhenFinished = true; } else { a.loop = THREE.LoopRepeat; }
       a.enabled = true; a.setEffectiveWeight(0); a.play(); actions[st] = a; }
   }
   if(!Object.keys(actions).length){ const a = mixer.clipAction(gltf.animations[0]); a.loop = THREE.LoopRepeat; a.play(); actions.idle = a; }   // no recognizable clip -> loop the first
@@ -6518,12 +6612,8 @@ function playEnemyStates(root, gltf, clips){
 }
 // Resolve a requested state to an available action (graceful fallback when a clip is missing).
 function _stateActionKey(acts, state){
-  if(acts[state]) return state;
-  if(state==='run')  return acts.walk ? 'walk' : (acts.idle ? 'idle' : Object.keys(acts)[0]);
-  if(state==='walk') return acts.run  ? 'run'  : (acts.idle ? 'idle' : Object.keys(acts)[0]);
-  if(state==='attack') return acts.run ? 'run' : (acts.walk ? 'walk' : (acts.idle ? 'idle' : Object.keys(acts)[0]));
-  if(state==='jump') return acts.idle ? 'idle' : (acts.run ? 'run' : Object.keys(acts)[0]);
-  if(state==='die')  return acts.idle ? 'idle' : Object.keys(acts)[0];
+  let s = state, guard = 0;
+  while(s && guard++ < 12){ if(acts[s]) return s; s = _ANIM_FALLBACK[s]; }   // walk the fallback chain to the nearest mapped clip
   return acts.idle ? 'idle' : Object.keys(acts)[0];
 }
 // Re-apply a clip-speed change to any avatar currently PLAYING that state, so the editor slider updates
@@ -6545,7 +6635,7 @@ function setEnemyAnimState(body, state){
   const _cfg = v.userData.animCfg || (body.userData && body.userData.animCfg);
   const _spd = (_cfg && _cfg.clipSpeed && _cfg.clipSpeed[state] != null) ? Math.max(0.1, Math.min(4, +_cfg.clipSpeed[state])) : 1;
   // hold = play once and freeze the final frame; default true for 'die', otherwise loop. Editor can override per state.
-  const _holdDefault = (state === 'die');
+  const _holdDefault = _ANIM_ONESHOT.has(state);
   const _hold = (_cfg && _cfg.clipHold && _cfg.clipHold[state] != null) ? !!_cfg.clipHold[state] : _holdDefault;
   if(_hold){ next.loop = THREE.LoopOnce; next.clampWhenFinished = true; } else { next.loop = THREE.LoopRepeat; next.clampWhenFinished = false; }
   // reset() clears a finished/clamped LoopOnce state — without it, re-entering a held state (e.g. aim, then
@@ -8558,7 +8648,7 @@ function refreshPlayerClipOptions(){
   const names = playerModelClips.slice();
   if(!playerModelCfg.clips) playerModelCfg.clips = { idle:'', walk:'', run:'', attack:'' };
   for(const e of Object.values(playerModelCfg.clips)){ if(e && names.indexOf(e)<0) names.push(e); }
-  for(const st of ['idle','walk','run','attack','aim','crouch','jump','slide','die']){
+  for(const _slot of ANIM_SLOTS){ const st = _slot.k;
     const sel = document.getElementById('edPlayerClip_'+st); if(!sel) continue;
     sel.innerHTML='';
     const auto=document.createElement('option'); auto.value=''; auto.textContent = names.length ? ('Auto — '+st+' by name') : 'Auto — set a model first'; if(!playerModelCfg.clips[st]) auto.selected=true; sel.appendChild(auto);
@@ -8574,7 +8664,7 @@ function enemyClipOptionList(typeKey){   // discovered clips + any saved picks n
 function refreshEnemyClipOptions(){
   const mc = enemyModelCfg(editorEnemyType), names = enemyClipOptionList(editorEnemyType);
   if(!mc.clips) mc.clips = { idle:'', walk:'', run:'', attack:'' };
-  for(const st of ['idle','walk','run','attack']){
+  for(const _slot of ANIM_SLOTS){ const st = _slot.k;
     const sel = document.getElementById('edEnemyClip_'+st); if(!sel) continue;
     sel.innerHTML='';
     const auto=document.createElement('option'); auto.value=''; auto.textContent = names.length ? ('Auto — '+st+' by name') : 'Auto — preview to list clips'; if(!mc.clips[st]) auto.selected=true; sel.appendChild(auto);
@@ -12045,7 +12135,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 485 · 2026-06-12';
+const BUILD_VERSION = 'build 486 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -16616,13 +16706,14 @@ function renderEditorFields(){
     eFaceRow.appendChild(efSp); eFaceRow.appendChild(efSel); eHost.appendChild(eFaceRow);
     // animation states — map each baked clip to a behavior; auto = picked by clip name. Switches live in-game.
     hint(eHost, '<b>Animation states</b> — auto-matched by clip name; override per state. In-game: walk/run while moving, attack in melee or fire range, idle when still.', '6px 0 2px');
-    for(const [stKey, stLabel] of [['idle','Idle'],['walk','Walk'],['run','Run'],['attack','Attack']]){
+    _animSlotFolds(eHost, 'eAnim', { 'Idle & standing':true, 'Locomotion (ground)':true }, (foldBody, _slot)=>{
+      const stKey=_slot.k, stLabel=_slot.l;
       const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
       const sp=document.createElement('span'); sp.textContent=stLabel; sp.style.minWidth='86px';
       const sel=document.createElement('select'); sel.id='edEnemyClip_'+stKey; sel.dataset.state=stKey; sel.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
       sel.onchange=()=>{ mc.clips[stKey]=sel.value; refreshEnemyVisuals(); };
-      row.appendChild(sp); row.appendChild(sel); eHost.appendChild(row);
-    }
+      row.appendChild(sp); row.appendChild(sel); foldBody.appendChild(row);
+    });
     refreshEnemyClipOptions();
     // collider radius — the WIDTH of the damage hit-cylinder shots test against (0 = auto-fit to the model). Movement spacing is separate + automatic.
     const ecRow=document.createElement('label'); ecRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
@@ -17721,7 +17812,8 @@ function renderEditorFields(){
     if(tgt===editorTargets.player){   // avatar animation states (mirror the enemy state machine)
       const acHead=document.createElement('div'); acHead.className='hint'; acHead.style.margin='10px 0 2px'; acHead.innerHTML='<b>Animation states</b> — auto-matched by clip name; override per state. Walk/run switch with the avatar\u2019s movement in-game.';
       urlHost.appendChild(acHead);
-      for(const [stKey, stLabel] of [['idle','Idle'],['walk','Walk'],['run','Run'],['attack','Attack'],['aim','Aim'],['crouch','Crouch'],['jump','Jump'],['slide','Slide'],['die','Death']]){
+      _animSlotFolds(urlHost, 'pAnim', { 'Idle & standing':true, 'Locomotion (ground)':true }, (foldBody, _slot)=>{
+        const stKey=_slot.k, stLabel=_slot.l;
         const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
         const sp=document.createElement('span'); sp.textContent=stLabel; sp.style.minWidth='86px';
         const sel=document.createElement('select'); sel.id='edPlayerClip_'+stKey; sel.dataset.state=stKey; sel.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
@@ -17735,12 +17827,12 @@ function renderEditorFields(){
         hold.checked = (playerModelCfg.clipHold && playerModelCfg.clipHold[stKey]!=null) ? !!playerModelCfg.clipHold[stKey] : (stKey==='die');
         hold.onchange=()=>{ if(!playerModelCfg.clipHold) playerModelCfg.clipHold={}; playerModelCfg.clipHold[stKey]=hold.checked; rebuildAvatars(); };
         const hl=document.createElement('span'); hl.textContent='hold'; holdWrap.appendChild(hold); holdWrap.appendChild(hl);
-        row.appendChild(sp); row.appendChild(sel); row.appendChild(spd); row.appendChild(holdWrap); urlHost.appendChild(row);
-      }
+        row.appendChild(sp); row.appendChild(sel); row.appendChild(spd); row.appendChild(holdWrap); foldBody.appendChild(row);
+      });
       refreshPlayerClipOptions();
       const pbRow=document.createElement('div'); pbRow.className='row2'; pbRow.style.marginTop='4px'; pbRow.style.flexWrap='wrap';
-      for(const st of ['idle','walk','run','attack','aim','crouch','jump','slide','die']){
-        const b=document.createElement('button'); b.textContent=st; b.style.fontSize='11px';
+      for(const _slot of ANIM_SLOTS){ const st=_slot.k;
+        const b=document.createElement('button'); b.textContent=_slot.l; b.title='Preview: '+st; b.style.fontSize='10px';
         b.onclick=()=>{ if(previewAvatar) setEnemyAnimState(previewAvatar, st); };
         pbRow.appendChild(b);
       }
