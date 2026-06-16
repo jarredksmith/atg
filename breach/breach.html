@@ -9513,30 +9513,33 @@ function buildNavOverlay(){
   _clearNavOverlay();
   if(!NAV.built) buildNavGrid();
   if(!NAV.walk) return;
-  let cnt=0; for(let i=0;i<NAV.walk.length;i++) if(NAV.walk[i]) cnt++;
+  let cnt=0; for(let q=0;q<NAV.walk.length;q++) if(NAV.walk[q]) cnt++;
   if(!cnt){ if(typeof flashToast==='function') flashToast('Nav grid: 0 walkable cells'); return; }
+  // Reachability from where the player stands (one connected component over the links).
+  const px=(typeof player!=='undefined'&&player.pos)?player.pos.x:0, pz=(typeof player!=='undefined'&&player.pos)?player.pos.z:0;
+  const si=navNearestWalkable(px,pz);
+  const flood=(si>=0)?navFloodReachable(si):{ reach:new Uint8Array(NAV.walk.length), count:0, farthest:-1 };
   const geo=new THREE.PlaneGeometry(NAV.cell*0.86, NAV.cell*0.86); geo.rotateX(-Math.PI/2);
-  const mat=new THREE.MeshBasicMaterial({ color:0x35e0a0, transparent:true, opacity:0.30, depthWrite:false, side:THREE.DoubleSide });
+  const mat=new THREE.MeshBasicMaterial({ color:0xffffff, transparent:true, opacity:0.34, depthWrite:false, side:THREE.DoubleSide });
   const inst=new THREE.InstancedMesh(geo, mat, cnt); inst.frustumCulled=false; inst.renderOrder=8;
-  const m=new THREE.Matrix4(); let k=0;
+  const m=new THREE.Matrix4(); const cGreen=new THREE.Color(0x35e0a0), cBlue=new THREE.Color(0x2f6f9e); let k=0;
   for(let gx=0;gx<NAV.nx;gx++) for(let gz=0;gz<NAV.nz;gz++){ const idx=navIdx(gx,gz); if(!NAV.walk[idx]) continue;
-    const x=NAV.ox+(gx+0.5)*NAV.cell, z=NAV.oz+(gz+0.5)*NAV.cell; m.makeTranslation(x, NAV.y[idx]+0.07, z); inst.setMatrixAt(k++, m); }
-  inst.instanceMatrix.needsUpdate=true; scene.add(inst); NAV.overlay=inst;
-  // Demo path: from the player to the farthest reachable cell, so the A* route can be eyeballed routing
-  // around the rocks. (Pure debug — bot movement is unchanged until Step 3.)
+    const x=NAV.ox+(gx+0.5)*NAV.cell, z=NAV.oz+(gz+0.5)*NAV.cell; m.makeTranslation(x, NAV.y[idx]+0.07, z); inst.setMatrixAt(k, m);
+    inst.setColorAt(k, flood.reach[idx]?cGreen:cBlue); k++; }   // green=reachable from you, blue=walkable but cut off
+  inst.instanceMatrix.needsUpdate=true; if(inst.instanceColor) inst.instanceColor.needsUpdate=true; scene.add(inst); NAV.overlay=inst;
+  // Demo path to the farthest REACHABLE cell, so it always resolves and shows A* routing around the rocks.
   let pathLen=0;
   try {
-    const px=(typeof player!=='undefined'&&player.pos)?player.pos.x:0, pz=(typeof player!=='undefined'&&player.pos)?player.pos.z:0;
-    const si=navNearestWalkable(px,pz); const gi=navFarthestFrom(si); const path=(si>=0&&gi>=0)?navFindPath(si,gi):null;
+    const gi=flood.farthest; const path=(si>=0&&gi>=0&&gi!==si)?navFindPath(si,gi):null;
     if(path && path.length>1){ pathLen=path.length;
       const pg=new THREE.PlaneGeometry(NAV.cell*0.6, NAV.cell*0.6); pg.rotateX(-Math.PI/2);
-      const pm=new THREE.MeshBasicMaterial({ color:0xff3df0, transparent:true, opacity:0.85, depthWrite:false, depthTest:false, side:THREE.DoubleSide });
+      const pm=new THREE.MeshBasicMaterial({ color:0xff3df0, transparent:true, opacity:0.9, depthWrite:false, depthTest:false, side:THREE.DoubleSide });
       const pinst=new THREE.InstancedMesh(pg, pm, path.length); pinst.frustumCulled=false; pinst.renderOrder=10;
-      const mm=new THREE.Matrix4(); for(let j=0;j<path.length;j++){ const c=navCellCenter(path[j]); mm.makeTranslation(c.x, (c.y||0)+0.16, c.z); pinst.setMatrixAt(j, mm); }
+      const mm=new THREE.Matrix4(); for(let p=0;p<path.length;p++){ const c=navCellCenter(path[p]); mm.makeTranslation(c.x, (c.y||0)+0.16, c.z); pinst.setMatrixAt(p, mm); }
       pinst.instanceMatrix.needsUpdate=true; scene.add(pinst); NAV.pathOverlay=pinst;
     }
   } catch(e){}
-  if(typeof flashToast==='function') flashToast('Nav grid: '+cnt+'/'+(NAV.nx*NAV.nz)+' walkable'+(pathLen?(' · demo path '+pathLen+' cells'):' · no path'));
+  if(typeof flashToast==='function') flashToast('Nav: '+cnt+' walkable, '+flood.count+' reachable from you'+(pathLen?(', path '+pathLen):''));
 }
 function navOverlayToggle(){ NAV.show=!NAV.show; if(NAV.show){ NAV.built=false; buildNavOverlay(); } else _clearNavOverlay(); }
 const NAV_UP = 1.8, NAV_DOWN = 8.0;            // climbable up / droppable down between adjacent cells
@@ -9577,6 +9580,17 @@ function navFindPath(si, gi){
   }
   if(!found) return null;
   const path=[]; let c=gi, lim=N+2; while(c!==-1 && lim-->0){ path.push(c); c=from[c]; } path.reverse(); return path;
+}
+function navFloodReachable(si){   // BFS over links from si: which cells are actually reachable + the farthest one
+  const N=NAV.walk.length, reach=new Uint8Array(N);
+  if(si<0 || si>=N || !NAV.walk[si]) return { reach, count:0, farthest:si, fardist:0 };
+  if(!NAV._fd || NAV._fd.length!==N) NAV._fd=new Float32Array(N);
+  const dist=NAV._fd, DIRS=navDirs(), nz=NAV.nz;
+  const q=[si]; reach[si]=1; dist[si]=0; let head=0, count=1, far=si, fardist=0;
+  while(head<q.length){ const cur=q[head++], cx=Math.floor(cur/nz), cz=cur%nz, mask=NAV.link[cur];
+    for(let d=0; d<8; d++){ if(!(mask&(1<<d))) continue; const ni=(cx+DIRS[d][0])*nz+(cz+DIRS[d][1]);
+      if(reach[ni]) continue; reach[ni]=1; dist[ni]=dist[cur]+1; count++; q.push(ni); if(dist[ni]>fardist){ fardist=dist[ni]; far=ni; } } }
+  return { reach, count, farthest:far, fardist };
 }
 function navCellCenter(i){ const gx=Math.floor(i/NAV.nz), gz=i%NAV.nz; return { x:NAV.ox+(gx+0.5)*NAV.cell, y:NAV.y[i], z:NAV.oz+(gz+0.5)*NAV.cell }; }
 function navFarthestFrom(si){   // walkable cell with the greatest grid distance from si (for the debug demo path)
@@ -11886,7 +11900,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 467 · 2026-06-12';
+const BUILD_VERSION = 'build 468 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
