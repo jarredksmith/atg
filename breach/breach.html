@@ -10075,7 +10075,12 @@ function updateBots(dt){
       else { b.pos.y=groundY; b.vy=0; b.grounded=true; b._jumpCarry=false; }
     }
     b.yaw = (tgt && hasLOS) ? Math.atan2(-(tgt.pos.x-b.pos.x), -(tgt.pos.z-b.pos.z)) : Math.atan2(-mvx,-mvz);   // face the target only while it's visible; otherwise face where we're moving (no x-ray tracking)
-    if(b.mesh){ b.mesh.position.set(b.pos.x,b.pos.y,b.pos.z); if(b.grounded===false){ b._spin=(b._spin||0)+(Math.hypot(b.evx||0,b.evz||0)+Math.abs(b.vy||0))*dt*0.5; b.mesh.rotation.set(b._spin, (b._dispYaw=turnToward(b._dispYaw==null?b.yaw:b._dispYaw, b.yaw, dt, TURN_RATE)), b._spin*0.5); } else { b._spin=0; b.mesh.rotation.set(0, (b._dispYaw=turnToward(b._dispYaw==null?b.yaw:b._dispYaw, b.yaw, dt, TURN_RATE)), 0); }
+    if(b.mesh){ b.mesh.position.set(b.pos.x,b.pos.y,b.pos.z);
+      // Airborne tumble is FLAVOR for a launch (trebuchet, explosion ragdoll), NOT for a path hop —
+      // a bot deliberately jumping up onto a ledge should stay upright, not spin end-over-end.
+      const launched = (b.grounded===false) && !b._jumpCarry;
+      if(launched){ b._spin=(b._spin||0)+(Math.hypot(b.evx||0,b.evz||0)+Math.abs(b.vy||0))*dt*0.5; b.mesh.rotation.set(b._spin, (b._dispYaw=turnToward(b._dispYaw==null?b.yaw:b._dispYaw, b.yaw, dt, TURN_RATE)), b._spin*0.5); }
+      else { b._spin=0; b.mesh.rotation.set(0, (b._dispYaw=turnToward(b._dispYaw==null?b.yaw:b._dispYaw, b.yaw, dt, TURN_RATE)), 0); }
       if(b.mesh.userData.hasModel && b.mesh.userData.visual && b.mesh.userData.visual.userData.stateActions){
         const md=Math.hypot(b.pos.x-ox, b.pos.z-oz);
         let st = md>0.06 ? 'run' : (md>0.015 ? 'walk' : 'idle');
@@ -12021,7 +12026,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 478 · 2026-06-12';
+const BUILD_VERSION = 'build 479 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
