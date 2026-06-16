@@ -9478,28 +9478,25 @@ function navWalkable(x,z){   // can a bot stand at this column? Authority = clea
   // via clearAt, so the nav grid must agree with clearAt — not with the raw boxes).
   return { ok: clearAt(x,z,standY), y: standY };
 }
-function buildNavGrid(){
-  if(typeof clearAt!=='function') return;
+function navBuildAlloc(){
   const lim = ARENA - 1.5;
   NAV.ox = -lim; NAV.oz = -lim;
   NAV.nx = Math.max(1, Math.min(160, Math.ceil((2*lim)/NAV.cell)));
   NAV.nz = NAV.nx;
   const N = NAV.nx*NAV.nz;
   NAV.walk = new Uint8Array(N); NAV.y = new Float32Array(N);
-  for(let gx=0; gx<NAV.nx; gx++){
-    for(let gz=0; gz<NAV.nz; gz++){
-      const x = NAV.ox + (gx+0.5)*NAV.cell, z = NAV.oz + (gz+0.5)*NAV.cell;
-      const w = navWalkable(x,z); const idx = navIdx(gx,gz);
-      if(w && w.ok){ NAV.walk[idx]=1; NAV.y[idx]=w.y; } else { NAV.walk[idx]=0; NAV.y[idx]=(w&&isFinite(w.y))?w.y:0; }
-    }
+}
+function navSampleRow(gx){   // walkability for one column-row (this is the raycast-heavy part)
+  for(let gz=0; gz<NAV.nz; gz++){
+    const x = NAV.ox + (gx+0.5)*NAV.cell, z = NAV.oz + (gz+0.5)*NAV.cell;
+    const w = navWalkable(x,z); const idx = navIdx(gx,gz);
+    if(w && w.ok){ NAV.walk[idx]=1; NAV.y[idx]=w.y; } else { NAV.walk[idx]=0; NAV.y[idx]=(w&&isFinite(w.y))?w.y:0; }
   }
+}
+function navBuildLinks(){
   // Climbable-up height = how high a bot can JUMP onto a ledge (apex rise * 0.85 for a reliable landing).
-  // This is what connects the floor to ledges/steps the bots can hop up to (they couldn't before -> islands).
   NAV_UP = (typeof JUMP!=='undefined' && typeof GRAV!=='undefined' && GRAV>0) ? Math.max(0.6, (JUMP*JUMP/(2*GRAV))*0.85) : 2.4;
-  // 8-neighbour connectivity: two walkable cells link if the height change is climbable (up<=NAV_UP, drop<=NAV_DOWN)
-  // and a diagonal isn't cutting a wall corner (both orthogonal neighbours must also be walkable).
-  NAV.link = new Uint8Array(N);
-  const DIRS = navDirs();
+  const N = NAV.nx*NAV.nz; NAV.link = new Uint8Array(N); const DIRS = navDirs();
   for(let gx=0; gx<NAV.nx; gx++) for(let gz=0; gz<NAV.nz; gz++){
     const idx=navIdx(gx,gz); if(!NAV.walk[idx]) continue; const cy=NAV.y[idx]; let mask=0;
     for(let d=0; d<8; d++){ const ax=gx+DIRS[d][0], az=gz+DIRS[d][1];
@@ -9510,7 +9507,23 @@ function buildNavGrid(){
     }
     NAV.link[idx]=mask;
   }
-  NAV.built = true;
+}
+// Synchronous full build (used by the debug overlay, where a brief hitch is acceptable).
+function buildNavGrid(){
+  if(typeof clearAt!=='function') return;
+  navBuildAlloc();
+  for(let gx=0; gx<NAV.nx; gx++) navSampleRow(gx);
+  navBuildLinks(); NAV.built = true; NAV.building = false;
+}
+// Incremental build (used at match start): sample a few rows per frame so the tab never freezes. Bots
+// beeline (fallback) for the ~1-2s until it's ready.
+function navBuildBegin(){ if(typeof clearAt!=='function') return; navBuildAlloc(); NAV._row=0; NAV.building=true; NAV.built=false; }
+function navBuildStep(maxMs){
+  if(!NAV.building) return;
+  const now=(typeof performance!=='undefined'&&performance.now)?(()=>performance.now()):(()=>Date.now());
+  const t0=now();
+  while(NAV._row < NAV.nx){ navSampleRow(NAV._row++); if(now()-t0 > maxMs) return; }   // yield once the frame budget is spent
+  navBuildLinks(); NAV.building=false; NAV.built=true;
 }
 function _clearNavOverlay(){ for(const key of ['overlay','pathOverlay']){ const o=NAV[key]; if(o){ scene.remove(o); if(o.geometry) o.geometry.dispose(); if(o.material && o.material.dispose) o.material.dispose(); NAV[key]=null; } } }
 function buildNavOverlay(){
@@ -9869,10 +9882,9 @@ function botDie(b){
 function updateBots(dt){
   if(NET.mode!=='host' || !pvpMode() || !gameOn || !bots.length) return;
   if(dt>0.05) dt=0.05;   // clamp the timestep: a frame hitch must never let a bot teleport across the map
-  if(!NAV.built && typeof buildNavGrid==='function') buildNavGrid();   // nav grid ready for pathfinding (built once per arena)
+  if(!NAV.built){ if(!NAV.building && typeof navBuildBegin==='function') navBuildBegin(); if(typeof navBuildStep==='function') navBuildStep(5); }   // build the nav grid incrementally (no match-start freeze); bots beeline until ready
   const D=botDiff(), koth = NET.gameMode==='cp', lim=ARENA-2, spd=SPEED*D.spd;
   for(const b of bots){
-    if(!b._exitInit){ b._exitInit=true; b._exitT=1.5; }   // on its very first appearance, walk out of the (possibly cramped) spawn before hunting
     if(b.dead){
       b.respawnT-=dt;
       if(b._dying && b.mesh){
@@ -9881,13 +9893,12 @@ function updateBots(dt){
         if(b._dieT > fadeStart){ const k=Math.max(0,1-(b._dieT-fadeStart)/0.7); b.mesh.traverse(o=>{ if(o.isMesh && o.material){ const ms=Array.isArray(o.material)?o.material:[o.material]; ms.forEach(m=>{ m.transparent=true; m.opacity=k; }); } }); }
         if(b._dieT >= 2.5){ b.mesh.visible=false; b._dying=false; }
       }
-      if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,(sp.y||0),sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; b.aiState='engage'; b.aiT=0; b.lkp=null; b.lkpFresh=0; b.sawTgt=false; b._stuckT=0; b._exitT=1.5; b.path=null; b.pathT=0; b._dying=false; b._dieT=0;
+      if(b.respawnT<=0){ const sp=randomSpawn(); b.pos.set(sp.x,(sp.y||0),sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b.yaw=sp.yaw; b.hp=b.maxHp; b.dead=false; b.aiState='engage'; b.aiT=0; b.lkp=null; b.lkpFresh=0; b.sawTgt=false; b._stuckT=0; b.path=null; b.pathT=0; b._dying=false; b._dieT=0;
         if(b.mesh){ b.mesh.visible=true; b.mesh.traverse(o=>{ if(o.isMesh && o.material){ const ms=Array.isArray(o.material)?o.material:[o.material]; ms.forEach(m=>{ m.opacity=1; }); } }); b.mesh.position.set(sp.x,(sp.y||0),sp.z); if(typeof setEnemyAnimState==='function') setEnemyAnimState(b.mesh,'idle'); } } continue; }
     b.retargetT-=dt;
     if(b.retargetT<=0 || !_botTargetAlive(b.target)){ b.target=_botAcquire(b); b.retargetT=0.4+Math.random()*0.3; }
     const tgt=b.target;
     b.aiT-=dt;
-    if(b._exitT>0) b._exitT-=dt;
     // ---- perception: can this bot currently SEE its target? track last-known position (lkp) ----
     const hasLOS = !!(tgt && _botLOS(b.pos.x,b.pos.z, tgt.pos.x,tgt.pos.z, b.pos.y));
     const tgtDist = tgt ? Math.hypot(tgt.pos.x-b.pos.x, tgt.pos.z-b.pos.z) : Infinity;
@@ -9913,8 +9924,7 @@ function updateBots(dt){
 
     // ---- destination from state ----
     let destX, destZ, wantFire = hasLOS;
-    if(b._exitT>0){ const h=_botHome(); destX=h.x; destZ=h.z; wantFire=hasLOS; }   // just spawned -> clear the spawn area toward open ground, but still shoot anyone it sees
-    else if(koth && !cpOwnedBy(b.team)){ destX=CP_POS.x; destZ=CP_POS.z; wantFire=hasLOS; }
+    if(koth && !cpOwnedBy(b.team)){ destX=CP_POS.x; destZ=CP_POS.z; wantFire=hasLOS; }
     else if(b.aiState==='retreat' && tgt){
       destX = b.pos.x - (tgt.pos.x-b.pos.x); destZ = b.pos.z - (tgt.pos.z-b.pos.z);   // move directly away
       destX=Math.max(-lim,Math.min(lim,destX)); destZ=Math.max(-lim,Math.min(lim,destZ));
@@ -9936,7 +9946,7 @@ function updateBots(dt){
     // (The spawn region is a spawn-only filter, never a movement cage: a bot's destination is left alone so
     // it can pursue/roam anywhere on the map. The arena walls + props are the only boundary.)
     let dx=destX-b.pos.x, dz=destZ-b.pos.z; const dist=Math.hypot(dx,dz)||1; let mvx,mvz;
-    if(!(b._exitT>0) && b.aiState==='engage' && tgt && hasLOS && dist<Math.max(9,b.prefRange+3) && !(koth && !cpOwnedBy(b.team))){
+    if(b.aiState==='engage' && tgt && hasLOS && dist<Math.max(9,b.prefRange+3) && !(koth && !cpOwnedBy(b.team))){
       const radial = dist < b.prefRange-1 ? -0.5 : (dist > b.prefRange+1 ? 0.5 : 0);
       mvx=((-dz/dist)*b.strafe) + (dx/dist)*radial; mvz=((dx/dist)*b.strafe) + (dz/dist)*radial;
       const ml=Math.hypot(mvx,mvz)||1; mvx/=ml; mvz/=ml;
@@ -9978,7 +9988,7 @@ function updateBots(dt){
       const moved=Math.hypot(b.pos.x-ox, b.pos.z-oz);
       if(moved < step*0.25){ b._stuckT=(b._stuckT||0)+dt; } else { b._stuckT=0; b._stuckSide=0; }   // accrue stuck time when barely moving; clear the wall-follow side once it's moving again
       if(b._stuckT>3.5 && typeof randomSpawn==='function'){   // wall-following failed for a long time -> hop to a fresh open spawn rather than stay frozen
-        const sp=randomSpawn(); b.pos.set(sp.x,(sp.y||0),sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b._stuckT=0; b._stuckSide=0; b._wander=null; b.aiState='engage'; b.aiT=0; b._exitT=1.5;
+        const sp=randomSpawn(); b.pos.set(sp.x,(sp.y||0),sp.z); b.vy=0; b.evx=0; b.evz=0; b.grounded=true; b._stuckT=0; b._stuckSide=0; b._wander=null; b.aiState='engage'; b.aiT=0; b.path=null;
         if(b.mesh) b.mesh.position.set(sp.x,(sp.y||0),sp.z);
       }
     }
@@ -11939,7 +11949,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 471 · 2026-06-12';
+const BUILD_VERSION = 'build 472 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
