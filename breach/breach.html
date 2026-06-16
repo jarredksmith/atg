@@ -6228,7 +6228,7 @@ function setTerrainFromCfg(force){
     floor.geometry=new THREE.PlaneGeometry(ARENA*2, ARENA*2);
   }
 }
-const NAV = { cell:1.5, nx:0, nz:0, ox:0, oz:0, walk:null, y:null, built:false, overlay:null, show:false };   // nav grid state (declared here so rebuildArena, which runs during boot, can touch it)
+const NAV = { cell:2.0, nx:0, nz:0, ox:0, oz:0, walk:null, y:null, built:false, overlay:null, show:false };   // nav grid state (declared here so rebuildArena, which runs during boot, can touch it)
 function rebuildArena(){
   NAV.built=false;   // arena changed -> the nav grid must be rebuilt
   // floor (flat, or a displaced height-mesh when worldCfg.terrain is set)
@@ -9485,7 +9485,7 @@ function navWalkable(x,z){   // can a bot stand at this column? Authority = clea
   // standable even when the model's coarse collider box bulges above the actual surface. insideSolid has no
   // such escape, so those over-occupied boxes made it falsely reject every rock cell (the player walks there
   // via clearAt, so the nav grid must agree with clearAt — not with the raw boxes).
-  return { ok: clearAt(x,z,standY), y: standY };
+  return { ok: clearAt(x,z,standY,gy), y: standY };
 }
 function navBuildAlloc(){
   const lim = ARENA - 1.5;
@@ -9495,13 +9495,12 @@ function navBuildAlloc(){
   const N = NAV.nx*NAV.nz;
   NAV.walk = new Uint8Array(N); NAV.y = new Float32Array(N);
 }
-function navSampleRow(gx){   // walkability for one column-row (this is the raycast-heavy part)
-  for(let gz=0; gz<NAV.nz; gz++){
-    const x = NAV.ox + (gx+0.5)*NAV.cell, z = NAV.oz + (gz+0.5)*NAV.cell;
-    const w = navWalkable(x,z); const idx = navIdx(gx,gz);
-    if(w && w.ok){ NAV.walk[idx]=1; NAV.y[idx]=w.y; } else { NAV.walk[idx]=0; NAV.y[idx]=(w&&isFinite(w.y))?w.y:0; }
-  }
+function navSampleCell(gx,gz){   // walkability for ONE cell (the raycast-heavy part)
+  const x = NAV.ox + (gx+0.5)*NAV.cell, z = NAV.oz + (gz+0.5)*NAV.cell;
+  const w = navWalkable(x,z); const idx = navIdx(gx,gz);
+  if(w && w.ok){ NAV.walk[idx]=1; NAV.y[idx]=w.y; } else { NAV.walk[idx]=0; NAV.y[idx]=(w&&isFinite(w.y))?w.y:0; }
 }
+function navSampleRow(gx){ for(let gz=0; gz<NAV.nz; gz++) navSampleCell(gx,gz); }   // (kept for the synchronous full build)
 function navBuildLinks(){
   // Climbable-up height = how high a bot can JUMP onto a ledge (apex rise * 0.85 for a reliable landing).
   NAV_UP = (typeof JUMP!=='undefined' && typeof GRAV!=='undefined' && GRAV>0) ? Math.max(0.6, (JUMP*JUMP/(2*GRAV))*0.85) : 2.4;
@@ -9526,12 +9525,15 @@ function buildNavGrid(){
 }
 // Incremental build (used at match start): sample a few rows per frame so the tab never freezes. Bots
 // beeline (fallback) for the ~1-2s until it's ready.
-function navBuildBegin(){ if(typeof clearAt!=='function') return; navBuildAlloc(); NAV._row=0; NAV.building=true; NAV.built=false; }
+function navBuildBegin(){ if(typeof clearAt!=='function') return; navBuildAlloc(); NAV._cell=0; NAV.building=true; NAV.built=false; }
+function navBuildProgress(){ const N=NAV.nx*NAV.nz; return N?Math.min(100,Math.floor(100*(NAV._cell||0)/N)):0; }
 function navBuildStep(maxMs){
   if(!NAV.building) return;
   const now=(typeof performance!=='undefined'&&performance.now)?(()=>performance.now()):(()=>Date.now());
-  const t0=now();
-  while(NAV._row < NAV.nx){ navSampleRow(NAV._row++); if(now()-t0 > maxMs) return; }   // yield once the frame budget is spent
+  const t0=now(), total=NAV.nx*NAV.nz; let n=0;
+  while(NAV._cell < total){ navSampleCell((NAV._cell/NAV.nz)|0, NAV._cell%NAV.nz); NAV._cell++;
+    if(((++n)&15)===0 && now()-t0 > maxMs) return;   // check the budget every 16 cells so a frame never overruns
+  }
   navBuildLinks(); NAV.building=false; NAV.built=true;
 }
 function _clearNavOverlay(){ for(const key of ['overlay','pathOverlay']){ const o=NAV[key]; if(o){ scene.remove(o); if(o.geometry) o.geometry.dispose(); if(o.material && o.material.dispose) o.material.dispose(); NAV[key]=null; } } }
@@ -9898,6 +9900,29 @@ function botDie(b){
     setEnemyAnimState(b.mesh, 'die'); b._dying=true;
   } else if(b.mesh){ b.mesh.visible=false; b._dying=false; }   // no death clip -> just hide (FX still plays)
   if(typeof netDeath==='function') netDeath(b.pos.x,b.pos.y||0,b.pos.z);
+}
+let matchWarmup = 0;   // pre-match build/countdown window (host bot matches): bots are held inert until the nav grid is ready
+function _setCountdown(html){
+  let el=document.getElementById('matchCountdown');
+  if(html==null){ if(el) el.style.display='none'; return; }
+  if(!el){ el=document.createElement('div'); el.id='matchCountdown';
+    el.style.cssText='position:absolute;top:40%;left:50%;transform:translate(-50%,-50%);z-index:72;text-align:center;color:#eafff6;font-size:40px;letter-spacing:3px;font-weight:800;text-shadow:0 2px 22px rgba(0,0,0,.75);pointer-events:none;font-family:inherit;';
+    document.body.appendChild(el); }
+  el.style.display=''; el.innerHTML=html;
+}
+// Returns true while the match is still warming up (bots should be held). Builds the nav grid hard while the
+// player waits on the countdown, so open play begins with pathing ready instead of a 5fps grind.
+function navWarmupTick(dt){
+  if(matchWarmup<=0) return false;
+  if(typeof duelInvuln!=='undefined') duelInvuln = Math.max(duelInvuln, 1.0);   // no spawn-shooting during warmup
+  if(!NAV.built){
+    if(typeof navBuildStep==='function') navBuildStep(18);   // big budget: it's a loading screen, smoothness matters less than finishing
+    _setCountdown('GENERATING ARENA<div style="font-size:15px;letter-spacing:2px;margin-top:8px;opacity:.8">'+(typeof navBuildProgress==='function'?navBuildProgress():0)+'%</div>');
+    return true;
+  }
+  matchWarmup -= dt;   // grid ready -> short go countdown
+  if(matchWarmup>0){ _setCountdown(String(Math.max(1,Math.ceil(matchWarmup)))); return true; }
+  _setCountdown('GO!'); setTimeout(()=>_setCountdown(null), 650); matchWarmup=0; return false;
 }
 function updateBots(dt){
   if(NET.mode!=='host' || !pvpMode() || !gameOn || !bots.length) return;
@@ -11977,7 +12002,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 475 · 2026-06-12';
+const BUILD_VERSION = 'build 476 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13827,13 +13852,13 @@ function groundHeightAt(x, z, feetY){
 // body band is a wall; low steps (box top within a step) and overhead clearance pass. This is driven by
 // the per-mesh boxes (not a downward ray), so arbitrary models are solid the same way primitives are —
 // you can't clip into a model just because a ray happened to hit a low internal surface.
-function clearAt(x, z, feetY){
+function clearAt(x, z, feetY, surfHint){
   const R = player.radius;
   // Where the player would stand at this column. Anything filling the body band is a wall — UNLESS that
   // collider's own surface at the contact edge is within a step (a ramp/stairs base you can walk onto).
   // That edge test is what lets you walk straight onto a sloped model from the ground, instead of being
   // fenced a body-radius away by its axis-aligned bounding box (which spans the model's full height).
-  const surf = surfaceTopAt(x, z);
+  const surf = (surfHint!==undefined) ? surfHint : surfaceTopAt(x, z);
   const standY = (surf > -Infinity && surf <= feetY + STEP + 1e-4) ? Math.max(terrainHeightAt(x,z), surf) : feetY;
   const bandLo = standY + STEP, bandHi = standY + effPlayerHeight();
   for(const c of colliders){
@@ -14465,7 +14490,7 @@ function loop(){
   updateFlipbooks(dt);   // sprite-sheet explosions / smoke / fire
   updateLowHp(dt);       // low-health vignette + heartbeat
   updateHurtDir(dt);     // directional hit indicator
-  updateBots(dt);                        // AI opponents (host)
+  if(typeof navWarmupTick==='function' && navWarmupTick(dt)){ /* bots held during pre-match build/countdown */ } else updateBots(dt);
   updateXAnim(dt);                       // moving platforms / doors (all peers)
   tickGrabHint(dt);                      // "[E] Grab" / carry prompt
   updateControlPoint(dt); cpRender();   // KOTH zone capture/score + HUD
@@ -18715,7 +18740,8 @@ function startGame(){
     duelDead=false; duelRespawnTimer=0; duelInvuln=1.2; lastDamagedBy=null;
     if(NET.gameMode==='cp'){ NET.cpOwner=-1; NET.cpCap=0; NET.cpCapTeam=-1; NET.cpContested=false; NET.cpScore={0:0,1:0}; _cpBcT=0; buildCpZone(); } else if(cpZone){ cpZone.visible=false; }
     giveDuelLoadout();
-    if(NET.mode==='host') spawnBots(NET.botCount||0);
+    if(NET.mode==='host'){ spawnBots(NET.botCount||0);
+      if((NET.botCount||0)>0){ if(!NAV.built && typeof navBuildBegin==='function') navBuildBegin(); matchWarmup=3; } }
     const sp = randomSpawn();
     player.pos.set(sp.x, (sp.y!=null?sp.y:terrainHeightAt(sp.x, sp.z))+EYE, sp.z); player.yaw = sp.yaw;
     toSpawn = 0;
