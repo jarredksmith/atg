@@ -8496,7 +8496,7 @@ function giveDuelLoadout(){ owned=['rifle','smg','shotgun','sniper','launcher','
 
 function switchWeapon(key){
   if(!owned.includes(key) || key===curWep || reloading) return;
-  curWep = key; SFX.swap(); showWeaponToast(); updateHUD();
+  curWep = key; SFX.swap(); showWeaponToast(); updateHUD(); if(typeof playOwnAnim==='function') playOwnAnim('equip', 320);   // third-person draw/equip pose
   showWeaponModel(key);   // show this weapon's own viewmodel (loads on first use)
   applyWeaponAim(key);    // load this weapon's saved ADS pose
   applyWeaponMuzzle(key); // load this weapon's saved muzzle position
@@ -10386,7 +10386,7 @@ function duelDie(){
 function duelRespawn(){
   duelDead = false; duelInvuln = 1.2;
   const sp = randomSpawn();
-  player.hp = player.maxHp; player.pos.set(sp.x, (sp.y!=null?sp.y:terrainHeightAt(sp.x, sp.z))+EYE, sp.z); player.vel.set(0,0,0);
+  player.hp = player.maxHp; _ownEvt=null; _lastDieVariant='die'; _ownIdleT=0; _ownFidgetAt=0; _ownFidgetUntil=0; player.pos.set(sp.x, (sp.y!=null?sp.y:terrainHeightAt(sp.x, sp.z))+EYE, sp.z); player.vel.set(0,0,0);
   player.yaw = sp.yaw; player.pitch = 0;
   refillAllWeapons(); buffs.shield=0;
   const ov=document.getElementById('overlay'); if(ov) ov.classList.add('hidden');
@@ -10688,6 +10688,42 @@ let tpMuzSide = 0.5, tpMuzUp = -0.2, tpMuzFwd = 0.6;
 try{ const s=parseFloat(localStorage.getItem('breach_tp_muz_side')); if(!isNaN(s)) tpMuzSide=Math.max(-3,Math.min(3,s)); }catch(e){}
 try{ const u=parseFloat(localStorage.getItem('breach_tp_muz_up')); if(!isNaN(u)) tpMuzUp=Math.max(-2,Math.min(2,u)); }catch(e){}
 try{ const fw=parseFloat(localStorage.getItem('breach_tp_muz_fwd')); if(!isNaN(fw)) tpMuzFwd=Math.max(-1,Math.min(3,fw)); }catch(e){}
+// ...and a SEPARATE set used while aiming: the camera pulls in/over-the-shoulder when you press right-click,
+// so the gun sits differently on screen. The live origin blends hip->aim by adsBlend. Defaults match hip
+// (no change until you tune the aim set).
+let tpMuzAimSide = 0.5, tpMuzAimUp = -0.2, tpMuzAimFwd = 0.6;
+try{ const s=parseFloat(localStorage.getItem('breach_tp_muz_aim_side')); if(!isNaN(s)) tpMuzAimSide=Math.max(-3,Math.min(3,s)); }catch(e){}
+try{ const u=parseFloat(localStorage.getItem('breach_tp_muz_aim_up'));   if(!isNaN(u)) tpMuzAimUp=Math.max(-2,Math.min(2,u)); }catch(e){}
+try{ const fw=parseFloat(localStorage.getItem('breach_tp_muz_aim_fwd')); if(!isNaN(fw)) tpMuzAimFwd=Math.max(-1,Math.min(3,fw)); }catch(e){}
+// The live third-person muzzle origin in WORLD space, blended hip->aim by the current aim ramp. Shared by
+// the actual shot AND the on-screen tuning marker so the dot you line up on the barrel is exactly where the
+// streak starts. side = view-right (level), fwd = view-forward (carries pitch), up = world-up, anchored at
+// the player position (eye) minus a small drop toward the chest.
+const _tpMuzV = (typeof THREE!=='undefined') ? new THREE.Vector3() : null;
+function tpMuzzleWorld(out){
+  out = out || _tpMuzV;
+  const _cy=Math.cos(player.yaw), _sy=Math.sin(player.yaw), _cp=Math.cos(player.pitch), _sp=Math.sin(player.pitch);
+  const _fx=-_cp*_sy, _fy=_sp, _fz=-_cp*_cy;     // view forward (with pitch)
+  const _rx=_cy, _rz=-_sy;                        // view-right (level)
+  const _mb = (typeof adsBlend==='number') ? adsBlend : 0;   // hip -> aim, tracking the right-click ramp
+  const _mS = tpMuzSide + (tpMuzAimSide - tpMuzSide)*_mb;
+  const _mU = tpMuzUp   + (tpMuzAimUp   - tpMuzUp  )*_mb;
+  const _mF = tpMuzFwd  + (tpMuzAimFwd  - tpMuzFwd )*_mb;
+  out.set(player.pos.x + _rx*_mS + _fx*_mF, (player.pos.y - 0.2) + _mU + _fy*_mF, player.pos.z + _rz*_mS + _fz*_mF);
+  return out;
+}
+// Optional bright marker at the live origin so the gunfire start can be dialed onto the gun barrel visually
+// (toggle in the third-person settings). Drawn on top (depthTest off) so it reads through the body.
+let _muzMarker=null, _showMuzOrigin=false;
+try{ _showMuzOrigin = localStorage.getItem('breach_show_muz')==='1'; }catch(e){}
+function _updateMuzMarker(){
+  if(!_showMuzOrigin || !tpMode || !gameOn){ if(_muzMarker) _muzMarker.visible=false; return; }
+  if(!_muzMarker){
+    _muzMarker = new THREE.Mesh(new THREE.SphereGeometry(0.05,14,12), new THREE.MeshBasicMaterial({ color:0xff3df0, depthTest:false, transparent:true, opacity:0.95 }));
+    _muzMarker.renderOrder = 9999; _muzMarker.raycast=()=>{}; scene.add(_muzMarker);
+  }
+  _muzMarker.visible = true; tpMuzzleWorld(_muzMarker.position);
+}
 // Third-person GUN grip: where the held weapon model sits on the character (offset from the body origin) +
 // its orientation and scale. Tunable because models vary; one grip works for any body since we don't rely on bones.
 // Per-WEAPON third-person grip: each weapon model has its own size/origin, so each gets its own placement.
@@ -10704,6 +10740,11 @@ function tpGunGrip(weaponKey){
 }
 function _saveTpGun(){ try{ localStorage.setItem('breach_tp_gun_grips', JSON.stringify(tpGunGrips)); }catch(e){} }
 let _ownAvatar=null, _ownAvatarKey='', _tpCaster=null, _ownPrevX=0, _ownPrevZ=0, _ownSpeed=0;
+// One-shot action overrides for the player's third-person body: a brief timed slot (throw / melee / equip /
+// directional hit-react) that wins over locomotion. Idle-fidget timer breaks up a long idle; _lastDieVariant
+// is the directional death chosen from the killing hit. playOwnAnim is hoisted so earlier triggers can call it.
+let _ownEvt=null, _ownIdleT=0, _ownFidgetAt=0, _ownFidgetUntil=0, _lastDieVariant='die';
+function playOwnAnim(slot, dur){ _ownEvt = { slot, until: performance.now() + (dur||300) }; }
 const _tpBack=new THREE.Vector3(), _tpEye=new THREE.Vector3(), _tpLookAt=new THREE.Vector3();
 function ensureOwnAvatar(){
   const cfg=myCharCfg(); const key=[cfg.url||'', cfg.tint==null?'x':cfg.tint, cfg.scale||1, cfg.face||0, cfg.rx||0, cfg.rz||0, cfg.xoff||0, cfg.yoff||0, cfg.zoff||0, JSON.stringify(cfg.clips||{}), JSON.stringify(cfg.clipSpeed||{}), JSON.stringify(cfg.clipHold||{})].join('|');   // anim config is part of the key so changing a clip / speed / hold rebuilds the live avatar
@@ -10730,7 +10771,9 @@ function updateOwnAvatar(dt){
     _ownSpeed = _ownSpeed*0.6 + md*0.4;   // low-pass: per-frame travel is noisy and flips walk<->run otherwise
     const air = _airborneSlot(a.userData._air || (a.userData._air={}), player.onGround, player.vel.y, dt||0.016);
     let st;
-    if(dead) st='die';                                          // death (directional variants wired in a later pass)
+    const evtLive = _ownEvt && performance.now()<_ownEvt.until;
+    if(dead) st=_lastDieVariant||'die';                         // directional death from the killing hit
+    else if(evtLive) st=_ownEvt.slot;                           // one-shot: throw / melee / equip / hit-react
     else if(performance.now()-lastShot < 250) st='attack';      // firing
     else if(reloading) st='reload';                             // reloading the mag
     else if(sliding && player.onGround) st='slide';             // sprint-slide
@@ -10743,7 +10786,13 @@ function updateOwnAvatar(dt){
       if(sm<0.012) tier='idle';
       else if(typeof sprinting==='function' && sprinting()) tier='sprint';
       else tier = ((sm>0.05 && (cur==='run'||cur==='sprint'||cur.indexOf('run')===0)) || sm>0.11) ? 'run' : 'walk';   // hysteresis: enter run high, hold run low
-      st = (tier==='idle') ? 'idle' : _locoSlot(mvx,mvz,player.yaw,tier);   // forward/back/strafe by movement vs facing
+      if(tier==='idle'){
+        _ownIdleT += (dt||0.016);   // after a quiet spell, play a one-shot fidget, then resume idle
+        if(_ownFidgetAt===0) _ownFidgetAt = 8 + Math.random()*9;
+        if(!_ownFidgetUntil && _ownIdleT >= _ownFidgetAt) _ownFidgetUntil = performance.now()+1400;
+        if(_ownFidgetUntil && performance.now()<_ownFidgetUntil) st='idleFidget';
+        else { if(_ownFidgetUntil){ _ownFidgetUntil=0; _ownIdleT=0; _ownFidgetAt=0; } st='idle'; }
+      } else { _ownIdleT=0; _ownFidgetAt=0; _ownFidgetUntil=0; st=_locoSlot(mvx,mvz,player.yaw,tier); }   // forward/back/strafe by movement vs facing
     }
     setEnemyAnimState(a, st);
   }
@@ -11428,7 +11477,7 @@ loadGrenadeModel();   // preload a saved grenade model (GRENADE is now defined)
 function throwGrenade(){
   if(matchWarmup>0) return;   // no throwing during the pre-match generating/countdown
   if(grenadeCount<=0 || shopOpen) return;
-  grenadeCount--; SFX.throw(); updateHUD();
+  grenadeCount--; SFX.throw(); updateHUD(); if(typeof playOwnAnim==='function') playOwnAnim('throw', 480);
   const mesh = makeGrenadeMesh();
   const origin = new THREE.Vector3(); camera.getWorldPosition(origin);
   mesh.position.copy(origin);
@@ -12182,7 +12231,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 488 · 2026-06-12';
+const BUILD_VERSION = 'build 490 · 2026-06-12';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13296,7 +13345,7 @@ function meleeAttack(wep){
   if(!gameOn || editorOpen || paused) return;
   const now = performance.now();
   if(now - _meleeT < (wep ? 0 : MELEE_CD)) return;   // a weapon is gated by its own fireRate; the bare-fist punch uses MELEE_CD
-  _meleeT = now;
+  _meleeT = now; if(typeof playOwnAnim==='function') playOwnAnim((wep && wep.dmg>=50)?'meleeHeavy':'meleeLight', 360);   // heavy swing for the crowbar, light otherwise
   const RANGE = (wep && wep.reach) || MELEE_RANGE, DMG = (wep && wep.dmg) || MELEE_DMG;
   if(typeof tone==='function') tone({ freq:320, type:'sine', dur:0.07, vol:0.07, slideTo:150 });   // swing whoosh
   const fwd = new THREE.Vector3(); camera.getWorldDirection(fwd);
@@ -13370,16 +13419,7 @@ function shoot(){
   // world point a couple metres ahead — the world-space tracer then visibly emanates from the weapon.
   const muzzleWorld = new THREE.Vector3();
   if(tpMode){
-    // third-person: start the streak from the character's gun, not the FPS viewmodel. Build a camera-local
-    // offset (right/up/forward) anchored on the player so it visually matches where the body holds the gun.
-    const _cy=Math.cos(player.yaw), _sy=Math.sin(player.yaw), _cp=Math.cos(player.pitch), _sp=Math.sin(player.pitch);
-    const _fx=-_cp*_sy, _fy=_sp, _fz=-_cp*_cy;     // view forward
-    const _rx=_cy, _rz=-_sy;                        // view-right (level)
-    muzzleWorld.set(
-      player.pos.x + _rx*tpMuzSide + _fx*tpMuzFwd,
-      (player.pos.y - 0.2) + tpMuzUp + _fy*tpMuzFwd,
-      player.pos.z + _rz*tpMuzSide + _fz*tpMuzFwd
-    );
+    tpMuzzleWorld(muzzleWorld);   // shared with the live tuning marker so the dot you align is exactly where the streak starts
   } else {
     vmMuzzle.getWorldPosition(muzzleWorld); muzzleWorld.project(vmCam);
     _muzNdc.set(muzzleWorld.x, muzzleWorld.y);
@@ -13759,7 +13799,15 @@ function updateLowHp(dt){
   } else { el.style.opacity='0'; _hbT=0; }
 }
 let _hurtDirT=0, _hurtFrom=null; const _HURT_FWD=new THREE.Vector3();
-function hurtDir(sx,sz){ if(sx==null||sz==null) return; _hurtFrom={x:sx,z:sz}; _hurtDirT=0.7; }
+function hurtDir(sx,sz){ if(sx==null||sz==null) return; _hurtFrom={x:sx,z:sz}; _hurtDirT=0.7;
+  // drive a directional hit-react + pick a directional death on the third-person body, relative to body facing
+  const dx=sx-player.pos.x, dz=sz-player.pos.z;
+  const fx=-Math.sin(player.yaw), fz=-Math.cos(player.yaw), rx=Math.cos(player.yaw), rz=-Math.sin(player.yaw);
+  const f=dx*fx+dz*fz, r=dx*rx+dz*rz;
+  let dir; if(Math.abs(f)>=Math.abs(r)) dir = f>=0?'Front':'Back'; else dir = r>0?'Right':'Left';
+  if(typeof playOwnAnim==='function') playOwnAnim('hit'+dir, 240);
+  _lastDieVariant = (dir==='Front') ? 'dieBack' : (dir==='Back' ? 'dieFront' : 'die');   // shot from the front -> fall backward
+}
 function updateHurtDir(dt){
   const el=$('hurtDir'); if(!el) return;
   if(_hurtDirT>0 && _hurtFrom && gameOn && !duelDead){
@@ -14632,6 +14680,7 @@ function loop(){
     if(tpMode && gameOn && !duelDead){ gun.visible=false; tpCameraPushback(); }   // third-person chase cam (first-person above is the default)
   }
   updateOwnAvatar(dt);   // show + place the player's own body in third person (hidden otherwise)
+  _updateMuzMarker();   // live gunfire-origin marker when tuning (third-person, opt-in)
 
   // PvP death killcam — while waiting to respawn, pan the view onto whoever killed you
   if(duelDead && pvpMode()){
@@ -17904,11 +17953,35 @@ function renderEditorFields(){
         mkSlider('Distance', ()=>tpAimDist, v=>tpAimDist=v, 1.5, 10, 0.1, v=>v.toFixed(1)+'m', 'breach_tp_aim_dist');
         mkSlider('Height', ()=>tpAimHeight, v=>tpAimHeight=v, -2, 3, 0.1, v=> v===0?'level':(v>0?'+':'')+v.toFixed(1), 'breach_tp_aim_height');
         const tpHint=document.createElement('div'); tpHint.className='hint'; tpHint.style.cssText='font-size:10px;opacity:0.7;margin:2px 0 0;'; tpHint.textContent='Third-person framing (toggle Camera in the pause menu). The top set is your normal view; the bottom set is what the camera eases to while you hold right-click to aim.'; urlHost.appendChild(tpHint);
+        // gunfire origin (third-person): where the tracer STARTS on screen. A hip set AND a separate AIMING
+        // set, blended by adsBlend so the streak lines up with the gun in both framings. Slider + exact number.
+        const _muz=(label,get,set,softLo,softHi,step,key)=>{
+          const row=document.createElement('div'); row.style.cssText='display:flex;align-items:center;gap:8px;margin:3px 0;';
+          const sp=document.createElement('span'); sp.className='hint'; sp.textContent=label; sp.style.cssText='flex:0 0 64px;font-size:11px;';
+          const rng=document.createElement('input'); rng.type='range'; rng.step=String(step); rng.style.flex='1';
+          const num=document.createElement('input'); num.type='number'; num.step=String(step); num.style.cssText='flex:0 0 70px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:11px;';
+          const fit=(v)=>{ const lo=Math.min(softLo, v-step), hi=Math.max(softHi, v+step); rng.min=String(lo); rng.max=String(hi); };   // grow the track to fit a typed value
+          const sync=()=>{ const v=get(); fit(v); rng.value=String(v); num.value=String(+v.toFixed(4)); };
+          const commit=(v)=>{ if(isNaN(v)) return; set(v); try{ localStorage.setItem(key, String(v)); }catch(e){} sync(); };
+          rng.oninput=()=>commit(parseFloat(rng.value));
+          num.oninput=()=>{ const v=parseFloat(num.value); if(!isNaN(v)){ set(v); try{ localStorage.setItem(key, String(v)); }catch(e){} fit(v); rng.value=String(v); } };   // typing: no clamp, slider follows
+          sync();
+          row.appendChild(sp); row.appendChild(rng); row.appendChild(num); urlHost.appendChild(row);
+        };
         const muzHdr=document.createElement('div'); muzHdr.className='hint'; muzHdr.innerHTML='<b>Gunfire origin (third-person)</b>'; muzHdr.style.margin='7px 0 2px'; urlHost.appendChild(muzHdr);
-        mkSlider('Side', ()=>tpMuzSide, v=>tpMuzSide=v, -3, 3, 0.05, v=> v===0?'center':(v>0?'right ':'left ')+Math.abs(v).toFixed(2), 'breach_tp_muz_side');
-        mkSlider('Up', ()=>tpMuzUp, v=>tpMuzUp=v, -2, 2, 0.05, v=> v===0?'level':(v>0?'+':'')+v.toFixed(2), 'breach_tp_muz_up');
-        mkSlider('Forward', ()=>tpMuzFwd, v=>tpMuzFwd=v, -1, 3, 0.05, v=>v.toFixed(2), 'breach_tp_muz_fwd');
-        const muzHint=document.createElement('div'); muzHint.className='hint'; muzHint.style.cssText='font-size:10px;opacity:0.7;margin:2px 0 0;'; muzHint.textContent='Where the bullet streak STARTS in third-person, so it lines up with the character\'s gun (the shot itself still goes through the crosshair).'; urlHost.appendChild(tpHint);
+        { const mkRow=document.createElement('label'); mkRow.style.cssText='display:flex;align-items:center;gap:6px;font-size:11px;color:#9fe6cf;cursor:pointer;margin:1px 0 4px;';
+          const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=_showMuzOrigin; cb.style.cssText='width:13px;height:13px;accent-color:var(--accent);';
+          cb.onchange=()=>{ _showMuzOrigin=cb.checked; try{ localStorage.setItem('breach_show_muz', _showMuzOrigin?'1':'0'); }catch(e){} };
+          const cl=document.createElement('span'); cl.innerHTML='Show origin marker <span style="opacity:.6">(a pink dot in third-person \u2014 line it up on the barrel; hold right-click to set the aim origin)</span>';
+          mkRow.appendChild(cb); mkRow.appendChild(cl); urlHost.appendChild(mkRow); }
+        _muz('Side',    ()=>tpMuzSide, v=>tpMuzSide=v, -3, 3, 0.01, 'breach_tp_muz_side');
+        _muz('Up',      ()=>tpMuzUp,   v=>tpMuzUp=v,   -2, 2, 0.01, 'breach_tp_muz_up');
+        _muz('Forward', ()=>tpMuzFwd,  v=>tpMuzFwd=v,  -1, 3, 0.01, 'breach_tp_muz_fwd');
+        const muzAimHdr=document.createElement('div'); muzAimHdr.className='hint'; muzAimHdr.innerHTML='<b>\u2026when aiming (right-click)</b>'; muzAimHdr.style.margin='6px 0 2px'; urlHost.appendChild(muzAimHdr);
+        _muz('Side',    ()=>tpMuzAimSide, v=>tpMuzAimSide=v, -3, 3, 0.01, 'breach_tp_muz_aim_side');
+        _muz('Up',      ()=>tpMuzAimUp,   v=>tpMuzAimUp=v,   -2, 2, 0.01, 'breach_tp_muz_aim_up');
+        _muz('Forward', ()=>tpMuzAimFwd,  v=>tpMuzAimFwd=v,  -1, 3, 0.01, 'breach_tp_muz_aim_fwd');
+        const muzHint=document.createElement('div'); muzHint.className='hint'; muzHint.style.cssText='font-size:10px;opacity:0.7;margin:2px 0 0;'; muzHint.textContent='Where the bullet streak STARTS in third-person so it lines up with the gun (the shot still goes through the crosshair). Turn on the marker above, then drag Side/Up/Forward until the pink dot sits on the muzzle. The lower set is the AIMING origin \u2014 hold right-click while tuning so the dot tracks the pulled-in camera.'; urlHost.appendChild(muzHint);
         const gripHdr=document.createElement('div'); gripHdr.className='hint'; gripHdr.innerHTML='<b>Held gun grip (third-person)</b> &mdash; per weapon'; gripHdr.style.margin='7px 0 2px'; urlHost.appendChild(gripHdr);
         // weapon picker: each weapon keeps its OWN grip. Clicking one rebinds the sliders to that weapon's grip
         // (and equips it so the preview shows the right model).
