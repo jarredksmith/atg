@@ -12404,7 +12404,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 495 · 2026-06-17';
+const BUILD_VERSION = 'build 496 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -18097,7 +18097,8 @@ function renderEditorFields(){
       _animSlotFolds(urlHost, 'pAnim', { 'Idle & standing':true, 'Locomotion (ground)':true }, (foldBody, _slot)=>{
         const stKey=_slot.k, stLabel=_slot.l;
         const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
-        const sp=document.createElement('span'); sp.textContent=stLabel; sp.style.minWidth='86px';
+        const sp=document.createElement('span'); sp.textContent=stLabel; sp.style.cssText='min-width:86px;cursor:pointer;text-decoration:underline dotted;text-decoration-color:#3a5a52;text-underline-offset:2px;'; sp.title='Click to preview this clip';
+        sp.onclick=(e)=>{ e.preventDefault(); e.stopPropagation(); if(previewAvatar) setEnemyAnimState(previewAvatar, stKey); };   // click the name to preview the clip (replaces the old button grid)
         const sel=document.createElement('select'); sel.id='edPlayerClip_'+stKey; sel.dataset.state=stKey; sel.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
         sel.onchange=()=>{ playerModelCfg.clips[stKey]=sel.value; rebuildAvatars(); };
         const spd=document.createElement('input'); spd.type='number'; spd.min='0.1'; spd.max='4'; spd.step='0.05'; spd.title='Playback speed (1 = normal)';
@@ -18117,13 +18118,6 @@ function renderEditorFields(){
         row.appendChild(sp); row.appendChild(sel); row.appendChild(spd); row.appendChild(holdWrap); row.appendChild(ipWrap); foldBody.appendChild(row);
       });
       refreshPlayerClipOptions();
-      const pbRow=document.createElement('div'); pbRow.className='row2'; pbRow.style.marginTop='4px'; pbRow.style.flexWrap='wrap';
-      for(const _slot of ANIM_SLOTS){ const st=_slot.k;
-        const b=document.createElement('button'); b.textContent=_slot.l; b.title='Preview: '+st; b.style.fontSize='10px';
-        b.onclick=()=>{ if(previewAvatar) setEnemyAnimState(previewAvatar, st); };
-        pbRow.appendChild(b);
-      }
-      urlHost.appendChild(pbRow);
       // third-person camera framing: side / distance / height. Live-applied + persisted.
       { const tpHdr=document.createElement('div'); tpHdr.className='hint'; tpHdr.innerHTML='<b>Third-person camera</b>'; tpHdr.style.margin='8px 0 2px'; urlHost.appendChild(tpHdr);
         const mkSlider=(label, get, set, lo, hi, step, fmt, key)=>{
@@ -18225,7 +18219,7 @@ function renderEditorFields(){
         _grip('Scale', ()=>tpGunGrip().scale, v=>tpGunGrip().scale=v, 0.05, 5, 0.01, 'breach_tp_gun_scale');
         const gripHint=document.createElement('div'); gripHint.className='hint'; gripHint.style.cssText='font-size:10px;opacity:0.7;margin:2px 0 0;'; gripHint.textContent='Each weapon stores its OWN grip \u2014 pick a weapon above, then position its model. Drag the slider or type any number (no limit). Tune it in third-person with a model loaded.'; urlHost.appendChild(gripHint);
       }
-      const pHint=document.createElement('div'); pHint.className='hint'; pHint.style.margin='3px 0 0'; pHint.textContent='The teal arrow points the character’s FORWARD (where it runs/aims). If your model faces the opposite way, set Facing to 180 (under Transform) to flip it. Tap a state to test its clip.';
+      const pHint=document.createElement('div'); pHint.className='hint'; pHint.style.margin='3px 0 0'; pHint.textContent='The teal arrow points the character’s FORWARD (where it runs/aims). If your model faces the opposite way, set Facing to 180 (under Transform) to flip it. Click a state name to preview its clip.';
       urlHost.appendChild(pHint);
     }
   }
