@@ -6677,6 +6677,20 @@ function _airborneSlot(s, grounded, vy, dt){
   if(vy<-2.5) return 'fall';                       // descending
   return 'jump';                                   // apex / neutral air
 }
+// _turnInPlaceSlot: while standing still, a quick body-yaw change triggers a turn-step one-shot. Returns a
+// slot ONLY on the frame the step should (re)fire — otherwise null — so the caller plays it once through the
+// one-shot channel. Accumulates signed turn within a burst so a wide fast swing reads as a 180 rather than a
+// 90. dyaw>0 turns to the avatar's left (avatars face -Z). `s` is a per-avatar scratch store.
+function _turnInPlaceSlot(s, dyaw, dt){
+  const rate = dt>0 ? Math.abs(dyaw)/dt : 0;
+  if(rate < 1.6){ s.turning=false; s.accum=0; s.last=''; return null; }   // < ~92 deg/s -> standing still, not a deliberate turn; reset the burst
+  s.accum = (s.accum||0) + dyaw;                                          // signed cumulative yaw this burst
+  const dir = dyaw>0 ? 'turnL' : 'turnR';
+  if(Math.abs(s.accum) >= 2.4 && rate >= 2.24){ s.last='turn180'; s.accum=0; s.cd=0.5; s.turning=true; return 'turn180'; }   // fast (>=~128 deg/s) + wide (>=~137 deg) -> about-face, reset the burst
+  if(!s.turning || s.last!==dir){ s.turning=true; s.last=dir; s.cd=0.5; return dir; }   // (re)fire on the start of a turn or a direction flip
+  s.cd = (s.cd||0) - dt; if(s.cd<=0){ s.cd=0.5; return dir; }             // sustained same-direction spin: re-step on a ~0.5s cadence
+  return null;
+}
 // Set WHEN the prop animates: 'auto' (on spawn) / 'interact' (E) / 'signal' (only via a signal).
 function setPropAnimTrigger(obj, trig){
   trig = (trig==='interact'||trig==='signal') ? trig : 'auto';
@@ -10386,7 +10400,7 @@ function duelDie(){
 function duelRespawn(){
   duelDead = false; duelInvuln = 1.2;
   const sp = randomSpawn();
-  player.hp = player.maxHp; _ownEvt=null; _lastDieVariant='die'; _ownIdleT=0; _ownFidgetAt=0; _ownFidgetUntil=0; player.pos.set(sp.x, (sp.y!=null?sp.y:terrainHeightAt(sp.x, sp.z))+EYE, sp.z); player.vel.set(0,0,0);
+  player.hp = player.maxHp; _ownEvt=null; _lastDieVariant='die'; _ownIdleT=0; _ownFidgetAt=0; _ownFidgetUntil=0; _ownPrevYaw=null; _ownPrevCrouch=false; player.pos.set(sp.x, (sp.y!=null?sp.y:terrainHeightAt(sp.x, sp.z))+EYE, sp.z); player.vel.set(0,0,0);
   player.yaw = sp.yaw; player.pitch = 0;
   refillAllWeapons(); buffs.shield=0;
   const ov=document.getElementById('overlay'); if(ov) ov.classList.add('hidden');
@@ -10741,9 +10755,11 @@ function tpGunGrip(weaponKey){
 function _saveTpGun(){ try{ localStorage.setItem('breach_tp_gun_grips', JSON.stringify(tpGunGrips)); }catch(e){} }
 let _ownAvatar=null, _ownAvatarKey='', _tpCaster=null, _ownPrevX=0, _ownPrevZ=0, _ownSpeed=0;
 // One-shot action overrides for the player's third-person body: a brief timed slot (throw / melee / equip /
-// directional hit-react) that wins over locomotion. Idle-fidget timer breaks up a long idle; _lastDieVariant
-// is the directional death chosen from the killing hit. playOwnAnim is hoisted so earlier triggers can call it.
-let _ownEvt=null, _ownIdleT=0, _ownFidgetAt=0, _ownFidgetUntil=0, _lastDieVariant='die';
+// directional hit-react / turn-in-place / stand<->crouch transition) that wins over locomotion. Idle-fidget
+// timer breaks up a long idle; _lastDieVariant is the directional death chosen from the killing hit. _ownPrevYaw
+// / _ownPrevCrouch are last-frame values for turn-step + crouch-toggle edge detection. playOwnAnim is hoisted
+// so earlier triggers can call it.
+let _ownEvt=null, _ownIdleT=0, _ownFidgetAt=0, _ownFidgetUntil=0, _lastDieVariant='die', _ownPrevYaw=null, _ownPrevCrouch=false;
 function playOwnAnim(slot, dur){ _ownEvt = { slot, until: performance.now() + (dur||300) }; }
 const _tpBack=new THREE.Vector3(), _tpEye=new THREE.Vector3(), _tpLookAt=new THREE.Vector3();
 function ensureOwnAvatar(){
@@ -10769,6 +10785,16 @@ function updateOwnAvatar(dt){
     const mvx=player.pos.x-_ownPrevX, mvz=player.pos.z-_ownPrevZ;   // planar travel this frame: direction + magnitude
     const md = Math.hypot(mvx, mvz);
     _ownSpeed = _ownSpeed*0.6 + md*0.4;   // low-pass: per-frame travel is noisy and flips walk<->run otherwise
+    // turn-in-place + stand<->crouch transition stabs: one-shots that ride the same channel as throw/melee.
+    if(_ownPrevYaw==null) _ownPrevYaw = player.yaw;
+    const _dyaw = player.yaw - _ownPrevYaw;   // body-yaw change this frame (player.yaw is unwrapped -> true signed delta)
+    const _evtBusy = _ownEvt && performance.now() < _ownEvt.until;
+    if(!dead && player.onGround && !_evtBusy && !crouching && !sliding && !reloading && !(ads||padAds||touchAds) && (performance.now()-lastShot>=250) && _ownSpeed<0.012){
+      const _ts = _turnInPlaceSlot(a.userData._turn || (a.userData._turn={}), _dyaw, dt||0.016);   // standing still + rotating -> footwork step (turnL / turnR / turn180)
+      if(_ts) playOwnAnim(_ts, _ts==='turn180' ? 420 : 340);
+    } else if(a.userData._turn){ const _t=a.userData._turn; _t.turning=false; _t.accum=0; _t.last=''; }   // left the idle-stand state -> disarm the turn burst so it re-arms cleanly
+    if(!dead){ if(crouching && !_ownPrevCrouch) playOwnAnim('standToCrouch', 300); else if(!crouching && _ownPrevCrouch) playOwnAnim('crouchToStand', 300); }   // crouch toggle edge -> transition stab, then settle into crouch/stand
+    _ownPrevCrouch = crouching;
     const air = _airborneSlot(a.userData._air || (a.userData._air={}), player.onGround, player.vel.y, dt||0.016);
     let st;
     const evtLive = _ownEvt && performance.now()<_ownEvt.until;
@@ -10796,7 +10822,7 @@ function updateOwnAvatar(dt){
     }
     setEnemyAnimState(a, st);
   }
-  _ownPrevX=player.pos.x; _ownPrevZ=player.pos.z;
+  _ownPrevX=player.pos.x; _ownPrevZ=player.pos.z; _ownPrevYaw=player.yaw;
 }
 function tpCameraPushback(){
   // orbit the camera around a fixed pivot on the character: place it straight back along the view axis so the
@@ -12231,7 +12257,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 490 · 2026-06-12';
+const BUILD_VERSION = 'build 491 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
