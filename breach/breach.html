@@ -10575,15 +10575,19 @@ function _findRootBone(root){
   for(const b of bones){ let d=0, p=b.parent; while(p){ if(p.isBone) d++; p=p.parent; } if(d<bestDepth){ bestDepth=d; best=b; } }
   return best;
 }
-// Per-frame in-place lock: if the avatar's CURRENT animation state is flagged "in place" (editor toggle), hold
-// the root bone's horizontal position at its rest pose so a clip that walks forward animates on the spot. Keeps
-// the vertical bob + limb motion; non-destructive (never touches the shared clip keyframes). Runs AFTER the
-// mixer update and the seat re-pin, so it wins over the bone's animated x/z for the frame.
+// Per-frame in-place lock: if the avatar's CURRENT state is flagged "in place" (editor toggle), hold the root
+// bone's horizontal position so a clip that walks forward animates on the spot. The hold target is tracked LIVE
+// from unlocked (idle/standing) frames — not the bind pose — so a moving clip lines up exactly with where idle
+// seats the body (build 495 fix); the captured rest is only the initial fallback. Keeps the vertical bob + limb
+// motion; non-destructive. Runs AFTER the mixer update and seat re-pin, so it wins over the bone's animated x/z.
 function _lockRootMotion(v){
   if(!v) return; const rb=v.userData.rootBone; if(!rb) return;
   const cfg=v.userData.animCfg, st=v.userData.animState;
-  if(!(cfg && cfg.clipInPlace && st && cfg.clipInPlace[st])) return;   // only the states you ticked in the editor
-  const r=v.userData.rootRest; if(r){ rb.position.x=r.x; rb.position.z=r.z; }
+  const locked = !!(cfg && cfg.clipInPlace && st && cfg.clipInPlace[st]);   // is the current state ticked "in place"?
+  let ref=v.userData.rootLockXZ;
+  if(!ref){ const rr=v.userData.rootRest; ref=v.userData.rootLockXZ={ x: rr?rr.x:rb.position.x, z: rr?rr.z:rb.position.z }; }
+  if(locked){ rb.position.x=ref.x; rb.position.z=ref.z; }   // hold at the standing baseline so it aligns with idle
+  else { ref.x=rb.position.x; ref.z=rb.position.z; }        // not locked -> follow the live hips so the next locked clip matches where idle sits
 }
 // ---- third-person weapon AIM (build 494): the body only yaws, so the gun stayed level and the tracer ran off
 // at odd angles when you looked up/down. We add the missing pitch. A spine/chest bone carries a natural share
@@ -12400,7 +12404,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 494 · 2026-06-17';
+const BUILD_VERSION = 'build 495 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
