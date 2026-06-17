@@ -10523,8 +10523,8 @@ function makeNameSprite(text, team){
 const remoteBodyGeo = new THREE.CapsuleGeometry(0.5, 1.2, 4, 8);
 // ---- Player avatar (what teammates / duel opponents see). Default = blue capsule; swappable for a GLB. ----
 const PLAYER_MODEL0 = { url:'', scale:1, face:0, rx:0, rz:0, yoff:0, xoff:0, zoff:0, thumb:'', clips:{ idle:'', walk:'', run:'', attack:'' } };   // thumb = Poly Pizza/Sketchfab preview image; face/rx/rz in radians
-let playerModelCfg = Object.assign({}, PLAYER_MODEL0, { clips:{ idle:'', walk:'', run:'', attack:'' }, clipSpeed:{}, clipHold:{} });
-function _sanitizeCharCfg(c){ c=c||{}; return { name:(typeof c.name==='string'&&c.name)||'Character', url:c.url||'', scale:+c.scale||1, face:+c.face||0, rx:+c.rx||0, rz:+c.rz||0, xoff:+c.xoff||0, yoff:+c.yoff||0, zoff:+c.zoff||0, thumb:(typeof c.thumb==='string'?c.thumb:''), clips:Object.assign({idle:'',walk:'',run:'',attack:''}, (c.clips&&typeof c.clips==='object')?c.clips:{}), clipSpeed:Object.assign({}, (c.clipSpeed&&typeof c.clipSpeed==='object')?c.clipSpeed:{}), clipHold:Object.assign({}, (c.clipHold&&typeof c.clipHold==='object')?c.clipHold:{}) }; }
+let playerModelCfg = Object.assign({}, PLAYER_MODEL0, { clips:{ idle:'', walk:'', run:'', attack:'' }, clipSpeed:{}, clipHold:{}, clipInPlace:{} });
+function _sanitizeCharCfg(c){ c=c||{}; return { name:(typeof c.name==='string'&&c.name)||'Character', url:c.url||'', scale:+c.scale||1, face:+c.face||0, rx:+c.rx||0, rz:+c.rz||0, xoff:+c.xoff||0, yoff:+c.yoff||0, zoff:+c.zoff||0, thumb:(typeof c.thumb==='string'?c.thumb:''), clips:Object.assign({idle:'',walk:'',run:'',attack:''}, (c.clips&&typeof c.clips==='object')?c.clips:{}), clipSpeed:Object.assign({}, (c.clipSpeed&&typeof c.clipSpeed==='object')?c.clipSpeed:{}), clipHold:Object.assign({}, (c.clipHold&&typeof c.clipHold==='object')?c.clipHold:{}), clipInPlace:Object.assign({}, (c.clipInPlace&&typeof c.clipInPlace==='object')?c.clipInPlace:{}) }; }
 let charRoster = (savedLevel && Array.isArray(savedLevel.roster)) ? savedLevel.roster.map(_sanitizeCharCfg) : [];   // authored multiplayer character models
 let myRosterIdx = -1;   // which roster character the local player picked (-1 = default player model)
 const CHARACTERS = [
@@ -10561,6 +10561,29 @@ function _findHandBone(root){
   ];
   for(const test of tiers){ const hit=bones.find(test); if(hit) return hit; }
   return null;
+}
+// Find the skeleton's root bone — where clips usually carry forward travel ("root motion"). Prefer the
+// conventional hips/pelvis/root names; else the topmost bone (fewest bone-ancestors). Cached per model so the
+// per-clip "In place" lock can hold this bone's x/z at rest and cancel a clip that walks the body off its spot.
+function _findRootBone(root){
+  if(!root) return null;
+  const bones=[]; root.traverse(o=>{ if(o.isBone) bones.push(o); });
+  if(!bones.length) return null;
+  const named = bones.find(b=>/hips|pelvis|root/i.test(b.name||''));
+  if(named) return named;
+  let best=bones[0], bestDepth=Infinity;
+  for(const b of bones){ let d=0, p=b.parent; while(p){ if(p.isBone) d++; p=p.parent; } if(d<bestDepth){ bestDepth=d; best=b; } }
+  return best;
+}
+// Per-frame in-place lock: if the avatar's CURRENT animation state is flagged "in place" (editor toggle), hold
+// the root bone's horizontal position at its rest pose so a clip that walks forward animates on the spot. Keeps
+// the vertical bob + limb motion; non-destructive (never touches the shared clip keyframes). Runs AFTER the
+// mixer update and the seat re-pin, so it wins over the bone's animated x/z for the frame.
+function _lockRootMotion(v){
+  if(!v) return; const rb=v.userData.rootBone; if(!rb) return;
+  const cfg=v.userData.animCfg, st=v.userData.animState;
+  if(!(cfg && cfg.clipInPlace && st && cfg.clipInPlace[st])) return;   // only the states you ticked in the editor
+  const r=v.userData.rootRest; if(r){ rb.position.x=r.x; rb.position.z=r.z; }
 }
 function _applyGunGrip(gun, weaponKey, gripOverride){
   if(!gun) return;
@@ -10662,6 +10685,7 @@ function buildAvatarVisual(g, cfg){
       model.rotation.x = (mc.rx||0); model.rotation.z = (mc.rz||0); model.rotation.y += (mc.face||0);   // full orient: pitch / roll / facing
       g.userData.visual=model; g.userData.hasModel=true;
       model.userData.seat={ p:model.position.clone(), q:model.quaternion.clone(), s:model.scale.clone() };   // re-pinned each frame so root-motion can't fling the model
+      { const _rb=_findRootBone(model); if(_rb){ model.userData.rootBone=_rb; model.userData.rootRest={ x:_rb.position.x, z:_rb.position.z }; } }   // for the per-clip "In place" lock (build 493): hold this bone's x/z at rest to cancel a clip's forward travel
       g.userData.centerLocal = { x:(mc.xoff||0), y:(mc.yoff||0) + h*0.5, z:(mc.zoff||0) };   // visual centre in group space -> chase-cam pivot
       const hb=h*0.82; const px=new THREE.Mesh(new THREE.CylinderGeometry(fr,fr,hb,10), _ENEMY_PROXY_MAT); px.position.y=hb/2; g.add(px); g.userData.hitProxy=px; if(g.userData.noHit) px.raycast=()=>{};
       const rs=Math.min(Math.max(fr*0.7,0.26),0.45); const hpx=_mkHeadProxy(h-rs, rs); g.add(hpx); g.userData.headProxy=hpx; if(g.userData.noHit) hpx.raycast=()=>{};
@@ -10913,7 +10937,7 @@ function tpCameraPushback(){
   if(side || height){ _tpLookAt.set(camx + fx, camy + fy, camz + fz); camera.lookAt(_tpLookAt); }
 }
 // ---- per-player characters: each player owns + broadcasts their avatar config; others build from it ----
-function myCharCfg(){ const c=(myRosterIdx>=0 && charRoster[myRosterIdx]) ? charRoster[myRosterIdx] : playerModelCfg; return { url:c.url||'', scale:c.scale||1, face:c.face||0, rx:c.rx||0, rz:c.rz||0, xoff:c.xoff||0, yoff:c.yoff||0, zoff:c.zoff||0, thumb:c.thumb||'', clips:Object.assign({}, c.clips||{}), clipSpeed:Object.assign({}, c.clipSpeed||{}), clipHold:Object.assign({}, c.clipHold||{}), tint:(CHARACTERS[myCharIdx]?CHARACTERS[myCharIdx].color:null) }; }
+function myCharCfg(){ const c=(myRosterIdx>=0 && charRoster[myRosterIdx]) ? charRoster[myRosterIdx] : playerModelCfg; return { url:c.url||'', scale:c.scale||1, face:c.face||0, rx:c.rx||0, rz:c.rz||0, xoff:c.xoff||0, yoff:c.yoff||0, zoff:c.zoff||0, thumb:c.thumb||'', clips:Object.assign({}, c.clips||{}), clipSpeed:Object.assign({}, c.clipSpeed||{}), clipHold:Object.assign({}, c.clipHold||{}), clipInPlace:Object.assign({}, c.clipInPlace||{}), tint:(CHARACTERS[myCharIdx]?CHARACTERS[myCharIdx].color:null) }; }
 function applyRemoteChar(id, cfg){ if(cfg==null || +id===NET.myId) return; NET.charById[id]=cfg; const rp=NET.players[id]; if(rp){ rp.modelCfg=cfg; if(rp.mesh){ buildAvatarVisual(rp.mesh, cfg); if(teamMode() && NET.teams[id]!=null) tintAvatar(rp.mesh, NET.teams[id]); } } }
 function broadcastMyChar(){ const cfg=myCharCfg(); if(NET.mode==='host'){ NET.charById[0]=cfg; for(const id in NET.conns){ try{ NET.conns[id].send({t:'char', from:0, cfg}); }catch(e){} } } else if(NET.mode==='client' && NET.conn){ try{ NET.conn.send({t:'char', cfg}); }catch(e){} } }
 let _charBcT=null;
@@ -12318,7 +12342,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 492 · 2026-06-17';
+const BUILD_VERSION = 'build 493 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14580,6 +14604,14 @@ function loop(){
   if(_ownAvatar){ const v=_ownAvatar.userData.visual, s=v&&v.userData.seat; if(s){ v.position.copy(s.p); v.quaternion.copy(s.q); v.scale.copy(s.s); } }   // third-person body: hold its seated offset (xoff/yoff/zoff) against animation root-motion
   if(typeof previewEnemy!=='undefined' && previewEnemy){ const v=previewEnemy.userData.visual, s=v&&v.userData.seat; if(s){ v.position.copy(s.p); v.quaternion.copy(s.q); v.scale.copy(s.s); }
     if(previewCollider && previewCollider.userData.cyl){ const r=previewEnemy.userData.footprint||0.9; previewCollider.userData.cyl.scale.set(r,1,r); } }
+  // in-place lock (build 493): cancel forward travel on any clip flagged "In place" in the editor. Runs AFTER
+  // the seat re-pin above so the bone's animated x/z is overridden for this frame; no-ops for capsules / states
+  // not flagged (so it's free for everyone else).
+  for(const en of enemies){ if(en.mesh) _lockRootMotion(en.mesh.userData.visual); }
+  for(const id in NET.players){ const m=NET.players[id].mesh; if(m) _lockRootMotion(m.userData.visual); }
+  if(previewAvatar) _lockRootMotion(previewAvatar.userData.visual);
+  if(_ownAvatar) _lockRootMotion(_ownAvatar.userData.visual);
+  if(typeof previewEnemy!=='undefined' && previewEnemy) _lockRootMotion(previewEnemy.userData.visual);
 
   // aim-down-sights: smoothly blend toward aimed state, drive FOV + crosshair
   const adsTarget = (ads || padAds || touchAds || editorAimPreview) ? 1 : 0;
@@ -15084,7 +15116,7 @@ function prsTransform(min,max,perAxisScale){
 function applyPlayerLevel(pl){ if(!pl) return; if(pl.state) Object.assign(editorTargets.player.state, pl.state);
   playerModelCfg.url=(pl.url||'').trim(); playerModelCfg.thumb=(pl.thumb||''); const s=editorTargets.player.state;
   playerModelCfg.scale=s.s||1; playerModelCfg.face=(s.face||0)*RAD; playerModelCfg.yoff=s.yoff||0; playerModelCfg.xoff=s.xoff||0; playerModelCfg.zoff=s.zoff||0;
-  playerModelCfg.clips=Object.assign({ idle:'', walk:'', run:'', attack:'' }, pl.clips||{}); playerModelCfg.clipSpeed=Object.assign({}, pl.clipSpeed||{}); playerModelCfg.clipHold=Object.assign({}, pl.clipHold||{}); rebuildAvatars(); }
+  playerModelCfg.clips=Object.assign({ idle:'', walk:'', run:'', attack:'' }, pl.clips||{}); playerModelCfg.clipSpeed=Object.assign({}, pl.clipSpeed||{}); playerModelCfg.clipHold=Object.assign({}, pl.clipHold||{}); playerModelCfg.clipInPlace=Object.assign({}, pl.clipInPlace||{}); rebuildAvatars(); }
 const editorTargets = {
   gun: {
     label: 'Gun',
@@ -15666,7 +15698,7 @@ function serializeLevel(){
     aim:     { state: Object.assign({}, editorTargets.aim.state) },
     aimWep:  JSON.parse(JSON.stringify(aimByWep)),
     station: { url: stationModelUrl, state: Object.assign({}, editorTargets.station.state) },
-    player:  { url: playerModelCfg.url, thumb: playerModelCfg.thumb||'', state: Object.assign({}, editorTargets.player.state), clips: Object.assign({}, playerModelCfg.clips), clipSpeed: Object.assign({}, playerModelCfg.clipSpeed||{}), clipHold: Object.assign({}, playerModelCfg.clipHold||{}) },
+    player:  { url: playerModelCfg.url, thumb: playerModelCfg.thumb||'', state: Object.assign({}, editorTargets.player.state), clips: Object.assign({}, playerModelCfg.clips), clipSpeed: Object.assign({}, playerModelCfg.clipSpeed||{}), clipHold: Object.assign({}, playerModelCfg.clipHold||{}), clipInPlace: Object.assign({}, playerModelCfg.clipInPlace||{}) },
     world:   Object.assign({}, worldCfg),
     chest:   { url: chestModelUrl, scale: chestModelScale, randomOff: !randomLootOn },
     coin:    { url: coinCfg.url, scale: coinCfg.scale, on: coinCfg.on !== false },
@@ -15685,7 +15717,7 @@ function serializeLevel(){
     fx: Object.assign({}, fxCfg),
     deathFx: Object.assign({}, deathFxCfg),
     tracer: Object.assign({}, tracerCfg),
-    roster: charRoster.map(c=>({ name:c.name, url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, thumb:c.thumb||'', clips:Object.assign({},c.clips||{}), clipSpeed:Object.assign({},c.clipSpeed||{}), clipHold:Object.assign({},c.clipHold||{}) })),
+    roster: charRoster.map(c=>({ name:c.name, url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, thumb:c.thumb||'', clips:Object.assign({},c.clips||{}), clipSpeed:Object.assign({},c.clipSpeed||{}), clipHold:Object.assign({},c.clipHold||{}), clipInPlace:Object.assign({},c.clipInPlace||{}) })),
     pickupModels: Object.keys(pickupModels).reduce((a,k)=>{ const m=pickupModels[k]; if(m&&m.url){ a[k]={ url:m.url, scale:m.scale||1 }; } return a; }, {}),
     keyNames: Object.keys(keyNames).reduce((a,k)=>{ const n=(keyNames[k]||'').trim(); if(n) a[k]=n; return a; }, {}),
     game:    { mode: gameCfg.mode, winWaves: gameCfg.winWaves, upgrades: gameCfg.upgrades !== false, objective: gameCfg.objective, surviveSecs: gameCfg.surviveSecs, extractHold: gameCfg.extractHold, extractRadius: gameCfg.extractRadius, bossWave: gameCfg.bossWave, noRespawn: !!gameCfg.noRespawn, spawnRegion: { on: !!gameCfg.spawnRegion.on, shape: gameCfg.spawnRegion.shape||'circle', x: +gameCfg.spawnRegion.x, z: +gameCfg.spawnRegion.z, r: +gameCfg.spawnRegion.r, poly: (gameCfg.spawnRegion.poly||[]).map(p=>({ x:+p.x, z:+p.z })) } , fallDamage: { on: !!gameCfg.fallDamage.on, player: gameCfg.fallDamage.player!==false, ai: gameCfg.fallDamage.ai!==false, minSpeed: +gameCfg.fallDamage.minSpeed, perUnit: +gameCfg.fallDamage.perUnit }, crushDamage: { on: !!gameCfg.crushDamage.on, player: gameCfg.crushDamage.player!==false, ai: gameCfg.crushDamage.ai!==false, minSpeed: +gameCfg.crushDamage.minSpeed, perUnit: +gameCfg.crushDamage.perUnit }, crosshair: { style: gameCfg.crosshair.style, size: +gameCfg.crosshair.size, thickness: +gameCfg.crosshair.thickness, gap: +gameCfg.crosshair.gap, dot: !!gameCfg.crosshair.dot, color: gameCfg.crosshair.color } },
@@ -15798,8 +15830,8 @@ function showCampaignInterstitial(fromName, clearedNum, toIdx, total, onContinue
   _interTimer=setTimeout(tick,1000);
 }
 function _restoreLoadout(c){ if(!c) return; owned.length=0; for(const k of c.owned) owned.push(k); for(const k in c.ammo){ if(WEAPONS[k]){ WEAPONS[k].mag=c.ammo[k].mag; WEAPONS[k].reserve=c.ammo[k].reserve; } } curWep=(c.wep && owned.includes(c.wep))?c.wep:owned[0]; player.hp=Math.max(1, c.hp||player.hp); if(typeof switchWeapon==='function') switchWeapon(curWep); if(typeof updateHUD==='function') updateHUD(); }
-function _snapshotPlayerCharCfg(name){ const c=playerModelCfg; return _sanitizeCharCfg({ name:name||'Character', url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, thumb:c.thumb, clips:Object.assign({},c.clips||{}), clipSpeed:Object.assign({},c.clipSpeed||{}), clipHold:Object.assign({},c.clipHold||{}) }); }
-function _loadCharIntoEditor(i){ const c=charRoster[i]; if(!c) return; pushUndoSnapshot(); Object.assign(playerModelCfg, { url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, clips:Object.assign({},c.clips||{}), clipSpeed:Object.assign({},c.clipSpeed||{}), clipHold:Object.assign({},c.clipHold||{}) }); editorActive='player'; if(typeof ensurePlayerPreview==='function') ensurePlayerPreview(true); if(typeof previewAvatar!=='undefined' && previewAvatar && typeof buildAvatarVisual==='function') buildAvatarVisual(previewAvatar); if(typeof renderEditorFields==='function') renderEditorFields(); if(typeof flashToast==='function') flashToast('Loaded "'+(c.name||'Character')+'" onto the Player tab'); }
+function _snapshotPlayerCharCfg(name){ const c=playerModelCfg; return _sanitizeCharCfg({ name:name||'Character', url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, thumb:c.thumb, clips:Object.assign({},c.clips||{}), clipSpeed:Object.assign({},c.clipSpeed||{}), clipHold:Object.assign({},c.clipHold||{}), clipInPlace:Object.assign({},c.clipInPlace||{}) }); }
+function _loadCharIntoEditor(i){ const c=charRoster[i]; if(!c) return; pushUndoSnapshot(); Object.assign(playerModelCfg, { url:c.url, scale:c.scale, face:c.face, rx:c.rx, rz:c.rz, xoff:c.xoff, yoff:c.yoff, zoff:c.zoff, clips:Object.assign({},c.clips||{}), clipSpeed:Object.assign({},c.clipSpeed||{}), clipHold:Object.assign({},c.clipHold||{}), clipInPlace:Object.assign({},c.clipInPlace||{}) }); editorActive='player'; if(typeof ensurePlayerPreview==='function') ensurePlayerPreview(true); if(typeof previewAvatar!=='undefined' && previewAvatar && typeof buildAvatarVisual==='function') buildAvatarVisual(previewAvatar); if(typeof renderEditorFields==='function') renderEditorFields(); if(typeof flashToast==='function') flashToast('Loaded "'+(c.name||'Character')+'" onto the Player tab'); }
 function renderCharRosterPanel(){
   const host = editorEl && editorEl.querySelector('#edCharRoster'); if(!host) return;
   host.innerHTML='';
@@ -18010,7 +18042,12 @@ function renderEditorFields(){
         hold.checked = (playerModelCfg.clipHold && playerModelCfg.clipHold[stKey]!=null) ? !!playerModelCfg.clipHold[stKey] : (stKey==='die');
         hold.onchange=()=>{ if(!playerModelCfg.clipHold) playerModelCfg.clipHold={}; playerModelCfg.clipHold[stKey]=hold.checked; rebuildAvatars(); };
         const hl=document.createElement('span'); hl.textContent='hold'; holdWrap.appendChild(hold); holdWrap.appendChild(hl);
-        row.appendChild(sp); row.appendChild(sel); row.appendChild(spd); row.appendChild(holdWrap); foldBody.appendChild(row);
+        const ipWrap=document.createElement('label'); ipWrap.title='Lock this clip in place \u2014 cancels root-motion forward travel so the body animates on the spot (tick it for Walk / Run / strafe clips that drift)'; ipWrap.style.cssText='flex:0 0 auto;display:flex;align-items:center;gap:3px;font-size:10px;color:#7fb8a6;cursor:pointer;';
+        const ip=document.createElement('input'); ip.type='checkbox'; ip.style.cssText='width:13px;height:13px;accent-color:var(--accent);';
+        ip.checked = !!(playerModelCfg.clipInPlace && playerModelCfg.clipInPlace[stKey]);
+        ip.onchange=()=>{ if(!playerModelCfg.clipInPlace) playerModelCfg.clipInPlace={}; playerModelCfg.clipInPlace[stKey]=ip.checked; rebuildAvatars(); };
+        const ipl=document.createElement('span'); ipl.textContent='in place'; ipWrap.appendChild(ip); ipWrap.appendChild(ipl);
+        row.appendChild(sp); row.appendChild(sel); row.appendChild(spd); row.appendChild(holdWrap); row.appendChild(ipWrap); foldBody.appendChild(row);
       });
       refreshPlayerClipOptions();
       const pbRow=document.createElement('div'); pbRow.className='row2'; pbRow.style.marginTop='4px'; pbRow.style.flexWrap='wrap';
