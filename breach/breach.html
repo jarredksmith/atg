@@ -10714,8 +10714,69 @@ try{ const fw=parseFloat(localStorage.getItem('breach_tp_muz_aim_fwd')); if(!isN
 // streak starts. side = view-right (level), fwd = view-forward (carries pitch), up = world-up, anchored at
 // the player position (eye) minus a small drop toward the chest.
 const _tpMuzV = (typeof THREE!=='undefined') ? new THREE.Vector3() : null;
+// Per-weapon barrel-tip nudge in GUN-LOCAL space (x/y/z in the model's own axes). Added on top of the auto
+// barrel tip below; because it rides the gun model, one value is correct in both hip and aim framings.
+let tpGunMuz = {};
+try{ const v=localStorage.getItem('breach_tp_gun_muz'); if(v){ const o=JSON.parse(v); if(o && typeof o==='object') tpGunMuz=o; } }catch(e){}
+function _gunMuzNudge(weaponKey){ const k=weaponKey||(typeof curWep!=='undefined'?curWep:'rifle'); if(!tpGunMuz[k]) tpGunMuz[k]={x:0,y:0,z:0}; return tpGunMuz[k]; }
+function _saveGunMuz(){ try{ localStorage.setItem('breach_tp_gun_muz', JSON.stringify(tpGunMuz)); }catch(e){} }
+// --- Auto muzzle: find the gun barrel tip from the loaded model so the tracer starts at the real gun in both
+// hip and aim framings (it rides gun.matrixWorld -> the hand animation, recoil, and per-weapon grip). Prefer a
+// node named like a muzzle; else take the longest axis of the gun's LOCAL bounding box as the barrel. Resolved
+// once per loaded gun, cached on gun.userData._muz. Grip rotation lives on `gun` itself, so the gun-local box
+// is the authored model frame (barrel on an axis); transforming the tip back through gun.matrixWorld re-applies
+// the grip + animation, landing the point on the on-screen barrel.
+const _MUZ_NODE_RE = /muzzle|barrel|nozzle|muz|flash|tip/i;
+const _muzInv = (typeof THREE!=='undefined') ? new THREE.Matrix4() : null, _muzM = (typeof THREE!=='undefined') ? new THREE.Matrix4() : null;
+const _muzP = (typeof THREE!=='undefined') ? new THREE.Vector3() : null, _mwA = (typeof THREE!=='undefined') ? new THREE.Vector3() : null, _mwB = (typeof THREE!=='undefined') ? new THREE.Vector3() : null;
+function _resolveGunMuzzle(gun){
+  if(!gun) return null;
+  let node=null;
+  gun.traverse(o=>{ if(!node && o!==gun && o.name && _MUZ_NODE_RE.test(o.name)) node=o; });
+  if(node){ gun.userData._muz={ mode:'node', node }; return gun.userData._muz; }   // explicit muzzle node -> use it directly
+  gun.updateWorldMatrix(true,false);
+  _muzInv.copy(gun.matrixWorld).invert();
+  const lbox=new THREE.Box3(); lbox.makeEmpty();
+  gun.traverse(o=>{ if(o.isMesh && o.geometry){
+    if(!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+    const gb=o.geometry.boundingBox; if(!gb) return;
+    _muzM.multiplyMatrices(_muzInv, o.matrixWorld);   // mesh-local -> gun-local (strips the grip rotation)
+    for(let i=0;i<8;i++){ _muzP.set(i&1?gb.max.x:gb.min.x, i&2?gb.max.y:gb.min.y, i&4?gb.max.z:gb.min.z).applyMatrix4(_muzM); lbox.expandByPoint(_muzP); }
+  } });
+  if(lbox.isEmpty()){ gun.userData._muz=null; return null; }
+  const size=lbox.getSize(new THREE.Vector3()), c=lbox.getCenter(new THREE.Vector3());
+  let ax='z'; if(size.x>=size.y && size.x>=size.z) ax='x'; else if(size.y>=size.x && size.y>=size.z) ax='y';   // longest dimension = the barrel
+  const a=c.clone(), b=c.clone(); a[ax]=lbox.min[ax]; b[ax]=lbox.max[ax];   // the two ends of the barrel axis, in gun-local space
+  gun.userData._muz={ mode:'geom', ends:[a,b] };
+  return gun.userData._muz;
+}
+// World barrel tip for a live gun: resolve the gun-local tip (+ per-weapon nudge) and push it through the
+// gun's world matrix. Picks the barrel end that points downrange (projects further along view-forward) so the
+// model's authoring direction doesn't matter. Returns false if there's no usable gun (caller uses the fallback).
+function _gunMuzzleWorld(gun, weaponKey, out){
+  const m = gun.userData._muz || _resolveGunMuzzle(gun);
+  if(!m) return false;
+  gun.updateWorldMatrix(true,false);
+  let lx,ly,lz;
+  if(m.mode==='node'){ m.node.getWorldPosition(_mwA); gun.worldToLocal(_mwA); lx=_mwA.x; ly=_mwA.y; lz=_mwA.z; }
+  else {
+    _mwA.copy(m.ends[0]).applyMatrix4(gun.matrixWorld);
+    _mwB.copy(m.ends[1]).applyMatrix4(gun.matrixWorld);
+    const _cp=Math.cos(player.pitch), _cy=Math.cos(player.yaw), _sy=Math.sin(player.yaw);
+    const fx=-_cp*_sy, fy=Math.sin(player.pitch), fz=-_cp*_cy;   // view forward
+    const e = ((_mwA.x*fx+_mwA.y*fy+_mwA.z*fz) >= (_mwB.x*fx+_mwB.y*fy+_mwB.z*fz)) ? m.ends[0] : m.ends[1];   // downrange end
+    lx=e.x; ly=e.y; lz=e.z;
+  }
+  const nz=_gunMuzNudge(weaponKey); lx+=nz.x||0; ly+=nz.y||0; lz+=nz.z||0;   // per-weapon gun-local nudge (rides the model -> one value works hip + aim)
+  out.set(lx,ly,lz).applyMatrix4(gun.matrixWorld);
+  return true;
+}
 function tpMuzzleWorld(out){
   out = out || _tpMuzV;
+  // primary: the real gun barrel tip on the live local body — correct in hip AND aim, and it tracks the hand animation.
+  const _gun = (typeof _ownAvatar!=='undefined' && _ownAvatar && _ownAvatar.userData) ? _ownAvatar.userData.gun : null;
+  if(_gun && _gunMuzzleWorld(_gun, (typeof curWep!=='undefined'?curWep:'rifle'), out)) return out;
+  // fallback (no gun model yet / capsule body / mid-load): the eye-relative offset, blended hip->aim.
   const _cy=Math.cos(player.yaw), _sy=Math.sin(player.yaw), _cp=Math.cos(player.pitch), _sp=Math.sin(player.pitch);
   const _fx=-_cp*_sy, _fy=_sp, _fz=-_cp*_cy;     // view forward (with pitch)
   const _rx=_cy, _rz=-_sy;                        // view-right (level)
@@ -12257,7 +12318,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 491 · 2026-06-17';
+const BUILD_VERSION = 'build 492 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -18007,7 +18068,24 @@ function renderEditorFields(){
         _muz('Side',    ()=>tpMuzAimSide, v=>tpMuzAimSide=v, -3, 3, 0.01, 'breach_tp_muz_aim_side');
         _muz('Up',      ()=>tpMuzAimUp,   v=>tpMuzAimUp=v,   -2, 2, 0.01, 'breach_tp_muz_aim_up');
         _muz('Forward', ()=>tpMuzAimFwd,  v=>tpMuzAimFwd=v,  -1, 3, 0.01, 'breach_tp_muz_aim_fwd');
-        const muzHint=document.createElement('div'); muzHint.className='hint'; muzHint.style.cssText='font-size:10px;opacity:0.7;margin:2px 0 0;'; muzHint.textContent='Where the bullet streak STARTS in third-person so it lines up with the gun (the shot still goes through the crosshair). Turn on the marker above, then drag Side/Up/Forward until the pink dot sits on the muzzle. The lower set is the AIMING origin \u2014 hold right-click while tuning so the dot tracks the pulled-in camera.'; urlHost.appendChild(muzHint);
+        const muzHint=document.createElement('div'); muzHint.className='hint'; muzHint.style.cssText='font-size:10px;opacity:0.7;margin:2px 0 0;'; muzHint.textContent='FALLBACK only \u2014 used when no gun model is loaded (capsule body). The streak now starts at the gun barrel automatically; these Side/Up/Forward sets only position the origin off the camera when there is no model. The lower set is the aiming version.'; urlHost.appendChild(muzHint);
+        // Per-weapon barrel-tip nudge in the gun model's own axes. The auto tip (from the model) is usually
+        // right; this is a small correction that rides the gun, so one value is correct in hip AND aim. Bound to
+        // the weapon picked under "Held gun grip" below (changing it re-renders these rows).
+        const muzNHdr=document.createElement('div'); muzNHdr.className='hint'; muzNHdr.innerHTML='<b>Barrel-tip nudge</b> &mdash; '+((WEAPONS[curWep]&&WEAPONS[curWep].name)||curWep)+' (rides the gun)'; muzNHdr.style.margin='7px 0 2px'; urlHost.appendChild(muzNHdr);
+        const _muzN=(label,axis)=>{
+          const row=document.createElement('div'); row.style.cssText='display:flex;align-items:center;gap:8px;margin:3px 0;';
+          const sp=document.createElement('span'); sp.className='hint'; sp.textContent=label; sp.style.cssText='flex:0 0 64px;font-size:11px;';
+          const rng=document.createElement('input'); rng.type='range'; rng.step='0.01'; rng.style.flex='1';
+          const num=document.createElement('input'); num.type='number'; num.step='0.01'; num.style.cssText='flex:0 0 70px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:11px;';
+          const fit=(v)=>{ rng.min=String(Math.min(-1, v-0.01)); rng.max=String(Math.max(1, v+0.01)); };
+          const sync=()=>{ const v=_gunMuzNudge(curWep)[axis]||0; fit(v); rng.value=String(v); num.value=String(+v.toFixed(4)); };
+          rng.oninput=()=>{ const v=parseFloat(rng.value); if(!isNaN(v)){ _gunMuzNudge(curWep)[axis]=v; _saveGunMuz(); sync(); } };
+          num.oninput=()=>{ const v=parseFloat(num.value); if(!isNaN(v)){ _gunMuzNudge(curWep)[axis]=v; _saveGunMuz(); fit(v); rng.value=String(v); } };   // typing: no clamp, slider follows
+          sync(); row.appendChild(sp); row.appendChild(rng); row.appendChild(num); urlHost.appendChild(row);
+        };
+        _muzN('Local X','x'); _muzN('Local Y','y'); _muzN('Local Z','z');
+        const muzNHint=document.createElement('div'); muzNHint.className='hint'; muzNHint.style.cssText='font-size:10px;opacity:0.7;margin:2px 0 0;'; muzNHint.textContent='Turn on the origin marker above, then drag whichever axis slides the pink dot onto the muzzle. These are the gun model\u2019s own axes, so it reads the same hip or aiming. Leave at 0 to use the bare auto tip.'; urlHost.appendChild(muzNHint);
         const gripHdr=document.createElement('div'); gripHdr.className='hint'; gripHdr.innerHTML='<b>Held gun grip (third-person)</b> &mdash; per weapon'; gripHdr.style.margin='7px 0 2px'; urlHost.appendChild(gripHdr);
         // weapon picker: each weapon keeps its OWN grip. Clicking one rebinds the sliders to that weapon's grip
         // (and equips it so the preview shows the right model).
