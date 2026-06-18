@@ -6570,6 +6570,11 @@ const ANIM_SLOTS = [
   { k:'equip',      g:'Combat', l:'Equip',         re:/equip|draw.?weapon|unholster|arm.?weapon/i },
   { k:'holster',    g:'Combat', l:'Holster',       re:/holster|stow|sheath|disarm/i },
   { k:'throw',      g:'Combat', l:'Throw',         re:/throw|toss|grenade|lob/i },
+  // Movement + firing (optional combined clips — shoot while moving; fall back to plain locomotion if a model lacks them)
+  { k:'walkFire',   g:'Movement + firing', l:'Walk + fire',   re:/walk.?(fire|shoot|attack)|(fire|shoot|aim).?walk/i },
+  { k:'runFire',    g:'Movement + firing', l:'Run + fire',    re:/(run|jog).?(fire|shoot|attack)|(fire|shoot|aim).?(run|jog)/i },
+  { k:'crouchFire', g:'Movement + firing', l:'Crouch + fire', re:/crouch.?(fire|shoot|attack)|(fire|shoot|aim).?crouch/i },
+  { k:'sprintFire', g:'Movement + firing', l:'Sprint + fire', re:/sprint.?(fire|shoot|attack)|(fire|shoot|aim).?sprint/i },
   // Damage & death
   { k:'hitFront', g:'Damage & death', l:'Hit front', re:/hit.?front|front.?hit|flinch.?front|impact.?front|hit.?f\b/i },
   { k:'hitBack',  g:'Damage & death', l:'Hit back',  re:/hit.?back|back.?hit|flinch.?back|hit.?b\b/i },
@@ -6595,6 +6600,7 @@ const _ANIM_FALLBACK = {
   crouch:'idle', crouchWalk:'crouch', crouchBack:'crouchWalk', crouchStrafeL:'crouchWalk', crouchStrafeR:'crouchWalk', standToCrouch:'crouch', crouchToStand:'idle',
   jumpStart:'jump', jump:'idle', jumpLand:'idle', hardLand:'jumpLand', fall:'jump',
   slide:'run',
+  walkFire:'walk', runFire:'run', crouchFire:'crouchWalk', sprintFire:'sprint',   // no combined clip -> show the movement (legs still animate)
   attack:'aim', reload:'attack', meleeLight:'attack', meleeHeavy:'meleeLight', meleeCombo:'meleeLight', block:'aim', parry:'block', dodge:'run', equip:'idle', holster:'idle', throw:'attack',
   hitFront:'stagger', hitBack:'stagger', hitLeft:'stagger', hitRight:'stagger', stagger:'idle',
   knockdown:'die', getup:'idle', dieFront:'die', dieBack:'die', die:'idle',
@@ -6687,6 +6693,9 @@ function _locoSlot(mx, mz, yaw, family){
   if(fwd) return f>=0 ? family : (runFam ? 'runBack' : 'walkBack');   // forward keeps the tier (incl. sprint)
   return runFam ? (r>0?'runStrafeR':'runStrafeL') : (r>0?'strafeR':'strafeL');
 }
+// _fireSlot: upgrade a locomotion family to its "moving + shooting" slot. Returns null when standing
+// still (caller uses the plain attack/aim pose). Combined slots gracefully fall back to plain loco.
+function _fireSlot(family){ return family==='sprint'?'sprintFire':family==='crouch'?'crouchFire':family==='run'?'runFire':family==='walk'?'walkFire':null; }
 // _airborneSlot: jump takeoff / air / fall / landing sub-states from grounded + vertical velocity. `s` is a
 // tiny per-character store kept on the avatar/bot. Returns null when fully grounded (caller uses locomotion).
 function _airborneSlot(s, grounded, vy, dt){
@@ -8220,6 +8229,7 @@ applyControlMode();
 if(isTouch && document.body) document.body.classList.add('touch');
 addEventListener('touchstart', ()=>{ if(_ctrlPref==='desktop') return; isTouch = true; if(document.body) document.body.classList.add('touch'); }, { once:true, passive:true });          // or reveal as soon as a real touch happens
 let touchMoveX=0, touchMoveZ=0, touchSprint=false, touchFiring=false, touchAds=false, touchJump=false, touchLookDX=0, touchLookDY=0;
+let _jumpHeldPrev=false; const JUMP_CD=0.5;   // jump must be a fresh press, and at least JUMP_CD seconds apart — stops hold-to-bunny-hop
 const TOUCH_LOOK_SENS = 0.0042, TOUCH_ADS_SENS = 0.0022;
 // Pointer Lock isn't supported on iOS Safari (the methods are undefined). Route every call through these
 // guards so a missing API can't throw — touch devices steer via the on-screen look pad instead.
@@ -10336,7 +10346,7 @@ function updateBots(dt){
           else if(b._turnSt){ b._turnSt.turning=false; b._turnSt.accum=0; b._turnSt.last=''; } }   // left idle-stand -> disarm the burst so it re-arms cleanly
         let st;
         if(b._evt && performance.now()<b._evt.until) st=b._evt.slot;   // directional hit-react flinch (wins over fire/loco, below death)
-        else if(b._fireAnimT && performance.now()<b._fireAnimT) st='attack';
+        else if(b._fireAnimT && performance.now()<b._fireAnimT){ const _bt=md>0.06?'run':(md>0.015?'walk':null); st=(_bt?(_fireSlot(_bt)||'attack'):'attack'); }   // combined move+fire while moving
         else { const air=_airborneSlot(b._air||(b._air={}), b.grounded!==false, b.vy||0, dt);   // jumpStart/jump/fall/land while path-hopping or launched
           if(air) st=air;
           else { const tier = md>0.06?'run':(md>0.015?'walk':'idle'); st=(tier==='idle')?'idle':_locoSlot(mvx,mvz,b.yaw,tier); } }   // strafes/back-pedals show when orbiting a target it's facing
@@ -11062,7 +11072,7 @@ function updateOwnAvatar(dt){
     const evtLive = _ownEvt && performance.now()<_ownEvt.until;
     if(dead) st=_lastDieVariant||'die';                         // directional death from the killing hit
     else if(evtLive) st=_ownEvt.slot;                           // one-shot: throw / melee / equip / hit-react
-    else if(performance.now()-lastShot < 250) st='attack';      // firing
+    else if(performance.now()-lastShot < 250){ const _ff = crouching ? 'crouch' : (typeof sprinting==='function'&&sprinting()) ? 'sprint' : (_ownSpeed>0.11?'run':'walk'); st = (_ownSpeed>=0.012 ? (_fireSlot(_ff)||'attack') : 'attack'); }   // firing: combined move+fire when moving, else the standing attack pose
     else if(reloading) st='reload';                             // reloading the mag
     else if(sliding && player.onGround) st='slide';             // sprint-slide
     else if(air) st=air;                                        // jumpStart / jump / fall / jumpLand / hardLand
@@ -11391,7 +11401,7 @@ function netInterpolate(dt){
       if(rp.ads && md<0.05 && !rp.crouch) _st='aim';                  // aiming (right-click) pose, standing
       if(rp.air) _st='jump';                                          // airborne flag travels in the state packet
       if(rp.slide) _st='slide';                                       // sliding flag travels in the state packet
-      if(rp._fireT && performance.now() < rp._fireT) _st='attack';    // brief attack pose after a networked shot
+      if(rp._fireT && performance.now() < rp._fireT){ const _rf = rp.crouch ? 'crouch' : (tier==='run'?'run':(tier==='walk'?'walk':null)); _st=(_rf?(_fireSlot(_rf)||'attack'):'attack'); }   // brief move+fire (or standing attack) after a networked shot
       if(rp._hitT && performance.now() < rp._hitT) _st=['hitFront','hitBack','hitLeft','hitRight'][rp._hitDir||0];   // directional hit-react (wins over loco, below death)
       if(rp.hp!=null && rp.hp<=0) _st = (rp._hitDir===0?'dieBack':rp._hitDir===1?'dieFront':'die');   // directional death (front hit -> fall backward), else flat die
       { const _cy=rp.mesh.rotation.y; if(rp._turnPrevYaw==null) rp._turnPrevYaw=_cy; let _dyaw=_cy-rp._turnPrevYaw; _dyaw=Math.atan2(Math.sin(_dyaw),Math.cos(_dyaw)); rp._turnPrevYaw=_cy;   // build 504: turn-in-place from the smoothed mesh yaw (network-safe)
@@ -12560,7 +12570,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 516 · 2026-06-17';
+const BUILD_VERSION = 'build 518 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15057,8 +15067,12 @@ function loop(){
     if(slideT<=0 || !player.onGround){ sliding=false; slideCD=0.55; }
   }
 
-  // jump + gravity
-  if((keys['Space']||padJump||touchJump) && player.onGround && !_levelLoaderActive && matchWarmup<=0){ player.vel.y = JUMP; player.onGround=false; sliding=false; SFX.jump(); }
+  // jump + gravity — edge-triggered (a fresh press) and rate-limited, so holding the key can't bunny-hop
+  if(player.jumpCd>0) player.jumpCd-=dt;
+  const _jHeld = !!(keys['Space']||padJump);
+  const _jPressed = (_jHeld && !_jumpHeldPrev) || touchJump;   // rising edge for held inputs; the touch button is already a one-frame pulse
+  if(_jPressed && player.onGround && (player.jumpCd||0)<=0 && !_levelLoaderActive && matchWarmup<=0){ player.vel.y = JUMP; player.onGround=false; sliding=false; player.jumpCd=JUMP_CD; SFX.jump(); }
+  _jumpHeldPrev = _jHeld;
   touchJump = false;   // tap is consumed for one frame
   player.vel.y -= GRAV*dt;
   // one-shot vertical knock from physics props (e.g. a fast body launching the player)
