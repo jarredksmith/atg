@@ -9935,14 +9935,8 @@ function sendToPlayer(id, msg){
   else if(NET.mode==='client'){ if(NET.conn) try{ NET.conn.send(msg); }catch(e){} }   // client's only peer is the host (id 0)
 }
 function netStatus(msg){ const el=document.getElementById('mpStatus'); if(el) el.textContent = msg || ''; }
-// after a "Replay" reload, pre-fill the room code and nudge the player to host/join again
-(function restoreReplay(){
-  let r=null; try{ const v=sessionStorage.getItem('breach_replay'); if(v){ r=JSON.parse(v); sessionStorage.removeItem('breach_replay'); } }catch(e){}
-  if(!r) return;
-  const apply=()=>{ const inp=document.getElementById('mpCode'); if(inp && r.code) inp.value=r.code;
-    netStatus(r.wasHost ? ('Replay: you hosted '+(r.code||'')+' \u2014 start a new match to play again.') : ('Replay: re-join code '+(r.code||'')+' (host must restart).')); };
-  if(document.readyState!=='loading') apply(); else document.addEventListener('DOMContentLoaded', apply);
-})();
+// (Replay is now an in-place rematch over the live connection — see hostRematch/replayMatch — so there is
+//  no reload to restore from.)
 
 // Players the host simulates against (enemy targeting + coin pickup). Each has a credit()/hurt()
 // that routes locally or over the wire. In solo or on a client this is just the local player.
@@ -10538,11 +10532,26 @@ function toggleMatchMenu(){
   el.style.display='flex';
 }
 function closeMatchMenu(){ _matchMenuOpen=false; const el=document.getElementById('matchMenu'); if(el) el.style.display='none'; }
+// In-place multiplayer rematch over the LIVE connection (no reload). The match ended on a flag, not a
+// disconnect, so every peer is still connected — we just reset the scores and re-run the normal start path
+// (the same {t:'begin'} broadcast + startGame() that begins the very first match).
+function hostRematch(){
+  if(NET.mode!=='host') return;
+  for(const id in NET.conns){ try{ NET.conns[id].send({t:'begin'}); }catch(e){} }   // clients restart exactly as they did at match start
+  if(typeof closeMatchMenu==='function') closeMatchMenu();
+  startGame();   // clears entities, respawns bots, resets gameOver, hides the result overlay, re-shows the HUD, re-locks
+  if(pvpMode()){
+    NET.duelScore[0]=0;
+    for(const id in NET.conns) NET.duelScore[+id]=0;
+    for(const b of bots) NET.duelScore[b.id]=0;   // bots are already 0 from spawnBots; explicit for safety
+    for(const id in NET.conns){ try{ NET.conns[id].send({t:'score', s:NET.duelScore}); }catch(e){} }   // push the fresh 0–0 so every HUD resets
+    if(typeof duelHUD==='function') duelHUD(); if(typeof renderScoreboard==='function') renderScoreboard();
+  }
+}
 function replayMatch(){
-  // P2P can't reliably re-sync a live rematch (the host may have left; PeerJS ids change), so the robust path
-  // is to drop back to the menu with the room code remembered + pre-filled, ready to host/join again in one tap.
-  try{ sessionStorage.setItem('breach_replay', JSON.stringify({ wasHost:NET.mode==='host', code:NET.roomCode||'', gameMode:NET.gameMode, killTarget:NET.killTarget })); }catch(e){}
-  NET.mode='off'; NET.gameMode='coop'; location.reload();
+  if(NET.mode==='host'){ hostRematch(); }                            // host restarts everyone immediately
+  else if(NET.mode==='client'){ sendToPlayer(0, {t:'rematchReq'});   // ask the host to restart; we re-enter on its {t:'begin'}
+    if(typeof flashToast==='function') flashToast('Rematch requested \u2014 waiting for the host\u2026'); }
 }
 function showDuelResult(winnerId, winnerTeam){
   gameOn=false; gameOver=true; safeExitPointerLock();
@@ -11441,6 +11450,7 @@ function handleClientMsg(conn, msg){
   else if(msg.t==='pMov'){ if(netApplyMovProp(msg.nid, msg.x)) relayProp({t:'pMov', nid:msg.nid, x:msg.x}, id); } // a client moved a prop
   else if(msg.t==='death'){ playerDeathFx(msg.p[0], msg.p[1], msg.p[2]); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send(msg); }catch(e){} } } }   // a client died -> show + relay the pop
   else if(msg.t==='chat'){ const nm=(NET.players[id]&&NET.players[id].name)||msg.name||('P'+id); const tx=(''+(msg.text||'')).slice(0,200); addChatLine(nm, tx); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'chat', name:nm, text:tx}); }catch(e){} } } }   // a client chatted -> show + relay to the others
+  else if(msg.t==='rematchReq'){ if(gameOver) hostRematch(); }   // a client asked to replay; only honor it once the match has actually ended (so it can't force a mid-match restart)
 }
 function handleHostMsg(msg){
   if(msg.t==='welcome'){
@@ -11460,7 +11470,7 @@ function handleHostMsg(msg){
     netStatus('Connected'); showRoomBadge(NET.roomCode);
     if(msg.phase==='lobby'){ showClientLobby(); } else { startGame(); }
   }
-  else if(msg.t==='begin'){ NET.phase='playing'; closeModal('lobby'); startGame(); }
+  else if(msg.t==='begin'){ NET.phase='playing'; closeModal('lobby'); if(typeof closeMatchMenu==='function') closeMatchMenu(); startGame(); }
   else if(msg.t==='lobby'){ NET.lobbyRoster=msg.players||[]; if(NET.phase==='lobby') renderLobby(NET.lobbyRoster); }
   else if(msg.t==='world'){ applyWorld(msg); }
   else if(msg.t==='hurt'){ applyEnemyDamageToSelf(msg.d); }
@@ -12526,7 +12536,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 511 · 2026-06-17';
+const BUILD_VERSION = 'build 512 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
