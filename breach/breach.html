@@ -10361,7 +10361,7 @@ function updateBots(dt){
         const aim=_bv2.set(tgt.pos.x-b.pos.x, ty-1.4, tgt.pos.z-b.pos.z).normalize();
         aim.x+=(Math.random()*2-1)*D.spread; aim.y+=(Math.random()*2-1)*D.spread*0.75; aim.z+=(Math.random()*2-1)*D.spread; aim.normalize();
         const o=[b.pos.x,1.4,b.pos.z], d=[aim.x,aim.y,aim.z];
-        remoteFire(b.id, o, d); b._fireAnimT=performance.now()+260; for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'fire', from:b.id, o, d}); }catch(e){} }
+        remoteFire(b.id, o, d); b._fireAnimT=performance.now()+480; for(const cid in NET.conns){ try{ NET.conns[cid].send({t:'fire', from:b.id, o, d}); }catch(e){} }
         if(Math.random()<D.hit) _botDamage(b, tgt, D.dmgMin+Math.random()*D.dmgRand);
       }
     }
@@ -11394,7 +11394,8 @@ function netInterpolate(dt){
     rp.mesh.rotation.y += dy*k;
     if(rp.mesh.userData.hasModel && rp.mesh.userData.visual && rp.mesh.userData.visual.userData.stateActions){
       const _dx=rp.mesh.position.x-_px, _dz=rp.mesh.position.z-_pz, md=Math.hypot(_dx,_dz);   // per-frame travel + direction
-      const tier = md>0.10 ? 'run' : (md>0.02 ? 'walk' : 'idle');
+      rp._aspd = (rp._aspd||0)*0.7 + md*0.3;   // low-pass: raw interpolation deltas are spiky and flip the tier frame-to-frame otherwise
+      const tier = rp._aspd > (rp._wasRun?0.06:0.105) ? 'run' : (rp._aspd>0.02 ? 'walk' : 'idle'); rp._wasRun=(tier==='run');   // hysteresis: enter run high, hold it low
       if(rp.hs!=null && rp.hs!==rp._lastHs){ rp._lastHs=rp.hs; rp._hitT=performance.now()+260; rp._hitDir=(rp.hd|0); }   // a fresh networked hit -> directional flinch one-shot
       let _st = rp.crouch ? (md>0.02 ? _locoSlot(_dx,_dz,rp.yaw,'crouch') : 'crouch')
                           : (tier==='idle' ? 'idle' : _locoSlot(_dx,_dz,rp.yaw,tier));   // directional locomotion (fwd/back/strafe), matching the local body
@@ -12418,7 +12419,7 @@ function remoteFire(pid, o, d){
   tracer(from, from.clone().addScaledVector(dir, 60));
   muzzleFlashAt(from);
   const rp=NET.players[pid];
-  if(rp){ rp._fireT = performance.now()+220; if(rp.mesh) setEnemyAnimState(rp.mesh,'attack'); }   // brief attack pose (held in netInterpolate)
+  if(rp){ rp._fireT = performance.now()+480; }   // netInterpolate owns the rp pose (attack vs move+fire); the longer hold bridges the gap between shots so it doesn't flicker shot-to-shot
   if(typeof SFX!=='undefined' && SFX.shootAt){ SFX.shootAt(from); }   // distance-attenuated shot (falls back to nothing if unsupported)
 }
 function tracer(from, to, force){
@@ -12570,7 +12571,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 518 · 2026-06-17';
+const BUILD_VERSION = 'build 519 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
