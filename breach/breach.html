@@ -7652,20 +7652,60 @@ if(!(savedLevel && Array.isArray(savedLevel.props))) generateOriginalScene();
 // { color: 0xrrggbb, intensity, distance, t:[x,y,z] }. A small marker sphere (editor-only)
 // makes each light selectable; the PointLight itself always lights the scene.
 const SCENE_LIGHTS = [];
-const lightModels = [];   // live light groups (group holds the PointLight + an editor marker)
+const lightModels = [];   // live light groups (group holds the light + an editor marker)
+// Aim a spot/directional light from a [yaw,pitch] heading (pitch -1.57 = straight down). Also orients the
+// editor direction-stick so you can see where it points.
+function _aimLight(g, yaw, pitch){
+  g.userData.dir=[yaw,pitch];
+  const L=g.userData.light; const cp=Math.cos(pitch);
+  const dx=Math.sin(yaw)*cp, dy=Math.sin(pitch), dz=Math.cos(yaw)*cp;
+  if(L && L.target) L.target.position.set(dx*5, dy*5, dz*5);   // target is a child of g -> local offset along the aim
+  const st=g.userData.dirStick;
+  if(st){ st.quaternion.setFromUnitVectors(_UP_Y, new THREE.Vector3(dx,dy,dz).normalize()); st.position.set(dx*0.9, dy*0.9, dz*0.9); }
+}
+const _UP_Y = new THREE.Vector3(0,1,0);
+// Serialize a live light group back to its authoring opts (used by save / duplicate / type-swap / code export).
+function _lightOpts(g){
+  const L=g.userData.light, type=g.userData.ltype||'point';
+  const hx=(c)=>(Math.round(c.r*255)<<16)|(Math.round(c.g*255)<<8)|Math.round(c.b*255);
+  const o={ type, color:hx(L.color), intensity:+L.intensity, t:[g.position.x,g.position.y,g.position.z] };
+  if(type==='point'||type==='spot') o.distance=+L.distance;
+  if(type==='spot'){ o.angle=+L.angle; o.penumbra=+L.penumbra; }
+  if(type==='spot'||type==='dir') o.dir=(g.userData.dir||[0,-1.3]).slice();
+  if(type==='hemi') o.ground=hx(L.groundColor);
+  return o;
+}
 function buildLight(opts){
-  const g = new THREE.Group();
-  const light = new THREE.PointLight(opts.color, opts.intensity, opts.distance);
-  g.add(light);
+  const type=opts.type||'point';
+  const g=new THREE.Group();
+  const col=(opts.color!=null?opts.color:0xffe6a0), inten=(opts.intensity!=null?opts.intensity:8);
+  let light, mcol;
+  if(type==='spot'){
+    light=new THREE.SpotLight(col, inten, (opts.distance!=null?opts.distance:30), (opts.angle!=null?opts.angle:0.6), (opts.penumbra!=null?opts.penumbra:0.4));
+    light.target=new THREE.Object3D(); g.add(light.target); g.add(light); mcol=0xffd166;
+  } else if(type==='dir'){
+    light=new THREE.DirectionalLight(col, inten);
+    light.target=new THREE.Object3D(); g.add(light.target); g.add(light); mcol=0xeafff7;
+  } else if(type==='hemi'){
+    light=new THREE.HemisphereLight(col, (opts.ground!=null?opts.ground:0x222a30), inten); g.add(light); mcol=0x9fd8ff;
+  } else {
+    light=new THREE.PointLight(col, inten, (opts.distance!=null?opts.distance:22)); g.add(light); mcol=col;
+  }
   const marker = new THREE.Mesh(
     new THREE.SphereGeometry(0.45, 12, 12),
-    new THREE.MeshBasicMaterial({ color: opts.color, wireframe: true, transparent: true, opacity: 0.8 })
+    new THREE.MeshBasicMaterial({ color: mcol, wireframe: true, transparent: true, opacity: 0.85 })
   );
   marker.visible = false;   // shown only while the editor is open (toggleEditor handles it)
   g.add(marker);
-  g.position.set(opts.t[0], opts.t[1], opts.t[2]);
   g.userData.light = light;
   g.userData.marker = marker;
+  g.userData.ltype = type;
+  if(type==='spot' || type==='dir'){   // direction stick (child of the marker, so it shows/hides with it)
+    const st=new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,1.8,6), new THREE.MeshBasicMaterial({color:mcol}));
+    marker.add(st); g.userData.dirStick=st;
+    const d=opts.dir||[0,-1.3]; _aimLight(g, d[0], d[1]);
+  }
+  g.position.set(opts.t[0], opts.t[1], opts.t[2]);
   scene.add(g);
   lightModels.push(g);
   return g;
@@ -12465,7 +12505,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 507 · 2026-06-17';
+const BUILD_VERSION = 'build 508 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15540,42 +15580,57 @@ const editorTargets = {
     selectable: true,
     isLights: true,
     addable: true,
-    state: { px:0, py:4, pz:0, intensity:8, distance:22, r:255, g:230, b:160 },
-    fields: [
-      { k:'px', label:'Pos X', min:-65, max:65, step:STEP_POS },
-      { k:'py', label:'Pos Y', min:0, max:30, step:STEP_POS },
-      { k:'pz', label:'Pos Z', min:-65, max:65, step:STEP_POS },
-      { k:'intensity', label:'Intensity', min:0, max:40, step:0.1 },
-      { k:'distance',  label:'Range', min:1, max:80, step:0.5 },
-      { k:'r', label:'Red',   min:0, max:255, step:1 },
-      { k:'g', label:'Green', min:0, max:255, step:1 },
-      { k:'b', label:'Blue',  min:0, max:255, step:1 },
-    ],
+    state: { px:0, py:4, pz:0, intensity:8, distance:22, angle:0.6, penumbra:0.4, dyaw:0, dpitch:-1.3, r:255, g:230, b:160, gr:34, gg:42, gb:48 },
+    get fields(){
+      const t=(this.obj()&&this.obj().userData.ltype)||'point';
+      const pos=[{ k:'px', label:'Pos X', min:-65, max:65, step:STEP_POS },{ k:'py', label:'Pos Y', min:0, max:30, step:STEP_POS },{ k:'pz', label:'Pos Z', min:-65, max:65, step:STEP_POS }];
+      const it={ k:'intensity', label:'Intensity', min:0, max:40, step:0.1 };
+      const di={ k:'distance', label:'Range', min:1, max:80, step:0.5 };
+      const an={ k:'angle', label:'Cone angle', min:0.05, max:1.5, step:0.01 };
+      const pe={ k:'penumbra', label:'Edge softness', min:0, max:1, step:0.01 };
+      const yw={ k:'dyaw', label:'Aim yaw', min:-3.1416, max:3.1416, step:0.02 };
+      const pi={ k:'dpitch', label:'Aim pitch', min:-1.5708, max:1.5708, step:0.02 };
+      const rgb=[{ k:'r', label:'Red', min:0, max:255, step:1 },{ k:'g', label:'Green', min:0, max:255, step:1 },{ k:'b', label:'Blue', min:0, max:255, step:1 }];
+      const grnd=[{ k:'gr', label:'Ground R', min:0, max:255, step:1 },{ k:'gg', label:'Ground G', min:0, max:255, step:1 },{ k:'gb', label:'Ground B', min:0, max:255, step:1 }];
+      if(t==='spot') return [...pos, it, di, an, pe, yw, pi, ...rgb];
+      if(t==='dir')  return [...pos, it, yw, pi, ...rgb];
+      if(t==='hemi') return [...pos, it, ...rgb, ...grnd];
+      return [...pos, it, di, ...rgb];   // point
+    },
     count(){ return lightModels.length; },
     obj(){ return lightModels[this.idx] || null; },
-    sync(){ const g=this.obj(); if(!g) return; const L=g.userData.light;
+    sync(){ const g=this.obj(); if(!g) return; const L=g.userData.light, t=g.userData.ltype||'point';
       this.state.px=g.position.x; this.state.py=g.position.y; this.state.pz=g.position.z;
-      this.state.intensity=L.intensity; this.state.distance=L.distance;
-      this.state.r=Math.round(L.color.r*255); this.state.g=Math.round(L.color.g*255); this.state.b=Math.round(L.color.b*255); },
-    apply(){ const g=this.obj(), s=this.state; if(!g) return;
+      this.state.intensity=L.intensity;
+      if(t==='point'||t==='spot') this.state.distance=L.distance;
+      if(t==='spot'){ this.state.angle=L.angle; this.state.penumbra=L.penumbra; }
+      if(t==='spot'||t==='dir'){ const d=g.userData.dir||[0,-1.3]; this.state.dyaw=d[0]; this.state.dpitch=d[1]; }
+      this.state.r=Math.round(L.color.r*255); this.state.g=Math.round(L.color.g*255); this.state.b=Math.round(L.color.b*255);
+      if(t==='hemi'){ this.state.gr=Math.round(L.groundColor.r*255); this.state.gg=Math.round(L.groundColor.g*255); this.state.gb=Math.round(L.groundColor.b*255); } },
+    apply(){ const g=this.obj(), s=this.state; if(!g) return; const L=g.userData.light, t=g.userData.ltype||'point';
       g.position.set(s.px,s.py,s.pz);
-      const L=g.userData.light;
-      L.intensity=s.intensity; L.distance=s.distance;
+      L.intensity=s.intensity;
+      if(t==='point'||t==='spot') L.distance=s.distance;
+      if(t==='spot'){ L.angle=Math.max(0.02, Math.min(Math.PI/2-0.01, s.angle)); L.penumbra=Math.max(0, Math.min(1, s.penumbra)); }
+      if(t==='spot'||t==='dir') _aimLight(g, s.dyaw, s.dpitch);
       L.color.setRGB(s.r/255, s.g/255, s.b/255);
-      if(g.userData.marker) g.userData.marker.material.color.setRGB(s.r/255, s.g/255, s.b/255);
+      if(t==='hemi') L.groundColor.setRGB(s.gr/255, s.gg/255, s.gb/255);
+      if(t==='point' && g.userData.marker) g.userData.marker.material.color.setRGB(s.r/255, s.g/255, s.b/255);   // point markers track their color; typed lights keep a type-coded marker
     },
     code(){
       let body = '// ===== Scene lights =====\n'
-        + '// { color: 0xRRGGBB, intensity, distance, t: [x, y, z] }\n'
+        + '// point: {type:"point",color,intensity,distance,t}  spot:{...,angle,penumbra,dir:[yaw,pitch]}  dir:{type:"dir",color,intensity,dir}  hemi:{type:"hemi",color,ground,intensity}\n'
         + 'const SCENE_LIGHTS = [\n';
-      const hex = g=>{ const L=g.userData.light; const n=(Math.round(L.color.r*255)<<16)|(Math.round(L.color.g*255)<<8)|Math.round(L.color.b*255); return '0x'+n.toString(16).padStart(6,'0'); };
-      if(lightModels.length){
-        for(const g of lightModels){ const L=g.userData.light;
-          body += '  { color: ' + hex(g) + ', intensity: ' + (+L.intensity).toFixed(2) + ', distance: ' + (+L.distance).toFixed(2)
-               + ', t: [' + fmt(g.position.x) + ', ' + fmt(g.position.y) + ', ' + fmt(g.position.z) + '] },\n';
-        }
-      } else {
-        for(const L of SCENE_LIGHTS) body += '  { color: 0x' + (L.color>>>0).toString(16).padStart(6,'0') + ', intensity: ' + L.intensity + ', distance: ' + L.distance + ', t: [' + L.t.map(fmt).join(', ') + '] },\n';
+      const list = lightModels.length ? lightModels.map(_lightOpts) : SCENE_LIGHTS;
+      for(const o of list){
+        const parts = ['type:"'+(o.type||'point')+'"', 'color:0x'+((o.color>>>0)&0xffffff).toString(16).padStart(6,'0'), 'intensity:'+(+o.intensity).toFixed(2)];
+        if(o.distance!=null) parts.push('distance:'+(+o.distance).toFixed(2));
+        if(o.angle!=null) parts.push('angle:'+(+o.angle).toFixed(3));
+        if(o.penumbra!=null) parts.push('penumbra:'+(+o.penumbra).toFixed(2));
+        if(o.dir) parts.push('dir:['+(+o.dir[0]).toFixed(3)+', '+(+o.dir[1]).toFixed(3)+']');
+        if(o.ground!=null) parts.push('ground:0x'+((o.ground>>>0)&0xffffff).toString(16).padStart(6,'0'));
+        parts.push('t:['+o.t.map(fmt).join(', ')+']');
+        body += '  { ' + parts.join(', ') + ' },\n';
       }
       body += '];';
       return body;
@@ -15893,12 +15948,28 @@ function duplicateSelectedProp(){
 function duplicateSelectedLight(){
   const g = lightModels[editorTargets.lights.idx]; if(!g) return;
   pushUndoSnapshot();
-  const L = g.userData.light;
-  const hex = (Math.round(L.color.r*255)<<16)|(Math.round(L.color.g*255)<<8)|Math.round(L.color.b*255);
-  const ng = buildLight({ color:hex, intensity:L.intensity, distance:L.distance,
-                          t:[g.position.x + DUP_OFFSET, g.position.y, g.position.z] });
+  const o = _lightOpts(g); o.t=[g.position.x + DUP_OFFSET, g.position.y, g.position.z];
+  const ng = buildLight(o);
   if(ng.userData.marker) ng.userData.marker.visible = true;
   editorActive='lights'; editorTargets.lights.idx = lightModels.length-1; selLights=[ng]; renderEditorFields();
+}
+// Swap a placed light to a different three.js light type in place, keeping shared params (color/intensity/
+// position) and filling sensible defaults for whatever the new type adds.
+function changeLightType(idx, type){
+  const g = lightModels[idx]; if(!g || (g.userData.ltype||'point')===type) return;
+  pushUndoSnapshot();
+  const o = _lightOpts(g); o.type=type;
+  if(type==='spot'){ if(o.angle==null)o.angle=0.6; if(o.penumbra==null)o.penumbra=0.4; if(!o.dir)o.dir=[0,-1.3]; if(o.distance==null)o.distance=30; }
+  else if(type==='dir'){ if(!o.dir)o.dir=[0,-1.3]; }
+  else if(type==='hemi'){ if(o.ground==null)o.ground=0x222a30; }
+  else if(type==='point'){ if(o.distance==null)o.distance=22; }
+  removeLight(idx);
+  const ng = buildLight(o);                                   // appended at the end…
+  lightModels.splice(lightModels.indexOf(ng),1); lightModels.splice(idx,0,ng);   // …moved back to its slot so order/selection holds
+  if(ng.userData.marker) ng.userData.marker.visible = true;
+  editorActive='lights'; editorTargets.lights.idx=idx; selLights=[ng];
+  if(typeof syncSelToIdx==='function') syncSelToIdx();
+  renderEditorFields();
 }
 function duplicateSelected(){
   if(editorActive==='props') duplicateSelectedProp();
@@ -15969,7 +16040,7 @@ function serializeLevel(){
     coin:    { url: coinCfg.url, scale: coinCfg.scale, on: coinCfg.on !== false },
     enemies: ENEMY_TYPE_KEYS.reduce((a,k)=>{ const m=enemyModelCfg(k); a[k]={ url:m.url, scale:m.scale, face:m.face, cr:m.cr, ch:m.ch, yoff:m.yoff, xoff:m.xoff, zoff:m.zoff, clip:m.clip, clips:Object.assign({}, m.clips), clipSpeed:Object.assign({}, m.clipSpeed||{}), clipHold:Object.assign({}, m.clipHold||{}), clipInPlace:Object.assign({}, m.clipInPlace||{}) }; return a; }, {}),
     props:   propModels.filter(o=>o && !o.userData.runtime).map(propEntry),
-    lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
+    lights:  lightModels.map(g=>_lightOpts(g)),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
     pickupsOn: pickupsOn,
     pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind })),
@@ -18550,6 +18621,18 @@ function renderEditorFields(){
     add.onclick = ()=>{ addSceneLight(); };
     row.appendChild(add);
     urlHost.appendChild(row);
+    const g0 = tgt.obj();
+    if(g0){   // type picker for the selected light
+      const lab = document.createElement('label'); lab.className='field';
+      const sp = document.createElement('span'); sp.textContent='Type';
+      const sel = document.createElement('select');
+      sel.style.cssText='flex:1;background:#0c1418;color:#cfeee2;border:1px solid #2a3a42;border-radius:5px;padding:3px 5px;font:inherit;';
+      for(const [v,labl] of [['point','Point'],['spot','Spotlight'],['dir','Directional'],['hemi','Hemisphere']]){
+        const op=document.createElement('option'); op.value=v; op.textContent=labl; if((g0.userData.ltype||'point')===v) op.selected=true; sel.appendChild(op);
+      }
+      sel.onchange = ()=>{ changeLightType(tgt.idx, sel.value); };
+      lab.appendChild(sp); lab.appendChild(sel); urlHost.appendChild(lab);
+    }
   }
   if(tgt.isSpawns){
     const row = document.createElement('div'); row.className='row2'; row.style.marginBottom='4px';
