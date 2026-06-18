@@ -343,7 +343,7 @@
   #scoreboard .sbRow.me { background:rgba(var(--accent-rgb),0.16); color:#eafff7; }
   #scoreboard .sbName { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #scoreboard .sbK { color:#ffd166; }
-  body.touch #scoreboard { top: calc(86px + env(safe-area-inset-top)); right: calc(8px + env(safe-area-inset-right)); left:auto; min-width:118px; font-size:11px; padding:4px 6px; }
+  body.touch #scoreboard { top: calc(86px + env(safe-area-inset-top)); right: calc(8px + env(safe-area-inset-right)); left:auto; min-width:118px; max-width:46vw; max-height:40vh; overflow:hidden; font-size:11px; padding:4px 6px; }
   #killFeed { position:fixed; bottom:104px; left:18px; z-index:41; display:flex; flex-direction:column; gap:3px; pointer-events:none; font:600 12px ui-monospace,monospace; }
   #killFeed .kfRow { background:rgba(5,10,12,0.62); border:1px solid rgba(var(--accent-rgb),0.18); border-radius:5px; padding:2px 7px; opacity:1; transition:opacity .8s; display:flex; align-items:center; gap:6px; white-space:nowrap; }
   #killFeed .kfRow.kfFade { opacity:0; }
@@ -396,6 +396,7 @@
     display:flex; flex-direction:column; align-items:center; gap:12px; min-width:280px;
     padding:30px 36px; border:1px solid rgba(var(--accent-rgb),.22); border-radius:16px;
     background:rgba(8,16,18,.7); box-shadow:0 20px 60px rgba(0,0,0,.5);
+    max-height:92vh; max-height:calc(100dvh - 16px); overflow-y:auto;
   }
   #pauseMenu h2 {
     font-family:var(--display-font); color:var(--accent); letter-spacing:8px;
@@ -470,6 +471,18 @@
   .pauseAudio .paLbl { display:flex; gap:9px; align-items:center; color:#9fe6cf; font-size:12px; letter-spacing:1px; }
   .pauseAudio .paLbl input[type=range] { flex:1; accent-color:var(--accent); }
   .pauseAudio .paLbl input[type=checkbox] { width:15px; height:15px; accent-color:var(--accent); cursor:pointer; }
+  /* Landscape phones / short viewports: compact every in-game menu so nothing is cut off (cards also scroll). */
+  @media (max-height:560px){
+    #pauseMenu .pauseCard{ padding:14px 24px; gap:7px; }
+    #pauseMenu h2{ font-size:21px; letter-spacing:5px; margin:0 0 2px; }
+    .pBtnPrimary{ padding:8px 22px; font-size:14px; }
+    .pBtnGhost, .pBtnExit{ padding:7px 18px; font-size:12px; }
+    .pauseAudio{ padding:7px 12px; gap:5px; margin:2px 0; }
+    .modalCard{ padding:16px 20px; max-height:calc(100dvh - 12px); }
+    .modalCard h2{ font-size:19px; margin:0 0 8px; }
+    #shop{ padding:14px 20px; }
+    .shopTitle{ font-size:20px; } .shopSub{ margin:3px 0 10px; } .shopItem{ padding:8px 12px; margin-bottom:5px; }
+  }
 
   /* Buff indicators */
   #buffs { position:absolute; top:90px; left:26px; display:flex; flex-direction:column; gap:8px; }
@@ -491,7 +504,7 @@
     transition:opacity .3s; }
 
   /* Shop menu (chest / station) */
-  #shop { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); z-index:72;
+  #shop { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); z-index:72; max-height:92vh; max-height:calc(100dvh - 16px); overflow-y:auto;
     width:min(560px,90vw); background:linear-gradient(150deg,rgba(8,20,24,.98),rgba(6,14,18,.98));
     border:1px solid rgba(var(--accent-rgb),.4); padding:26px 30px; pointer-events:auto;
     clip-path:polygon(0 0,100% 0,100% 94%,97% 100%,0 100%);
@@ -10479,6 +10492,7 @@ function toggleMatchMenu(){
   if(!onResult) mk('Resume', 'rgba(56,245,181,0.18)', ()=>closeMatchMenu());
   mk(isHost?'Replay match':'Rejoin / replay', 'rgba(56,200,245,0.18)', ()=>replayMatch());
   mk('Back to menu', 'rgba(255,45,85,0.18)', ()=>{ NET.mode='off'; NET.gameMode='coop'; location.reload(); });
+  if(isTouch) mk('\u273f Customize controls', 'rgba(56,245,181,0.12)', ()=>{ closeMatchMenu(); if(typeof enterTouchEdit==='function') enterTouchEdit(); });   // mobile: reach the HUD layout editor mid-match (move/resize the kill list, sticks, etc.)
   el.style.display='flex';
 }
 function closeMatchMenu(){ _matchMenuOpen=false; const el=document.getElementById('matchMenu'); if(el) el.style.display='none'; }
@@ -12451,7 +12465,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 505 · 2026-06-17';
+const BUILD_VERSION = 'build 506 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12635,7 +12649,7 @@ addEventListener('contextmenu', e=>{ if(gameOn) e.preventDefault(); });
 const TOUCH_EDITABLE = ['tStick','tFire','tAim','tJump','tReload','tNade','tWeapon','tUse'];
 const TOUCH_LABEL = { tStick:'Move', tFire:'Fire', tAim:'Aim', tJump:'Jump', tReload:'Reload', tNade:'Grenade', tWeapon:'Weapon', tUse:'Use', stats:'Health', ammoPanel:'Ammo', minimap:'Map', score:'Score' };
 const TSTICK_BASE = 120;   // px (matches body.touch #tStick); user scale multiplies this
-const HUD_EDITABLE = ['stats','ammoPanel','minimap','score'];   // read-only HUD panels: movable + sizable, no gameplay handlers
+const HUD_EDITABLE = ['stats','ammoPanel','minimap','score','scoreboard'];   // read-only HUD panels: movable + sizable, no gameplay handlers ('scoreboard' = the MP kill list)
 const ALL_EDITABLE = TOUCH_EDITABLE.concat(HUD_EDITABLE);
 let touchOpacity = (()=>{ const v=parseFloat(localStorage.getItem('breach_touch_opacity')); return (v>=0.2 && v<=1)?v:1; })();
 let touchHand = (localStorage.getItem('breach_touch_hand')==='left') ? 'left' : 'right';
