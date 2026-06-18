@@ -712,7 +712,6 @@
     <h2>PAUSED</h2>
     <button id="pauseResume" class="pBtnPrimary">Resume</button>
     <button id="pauseEditHud" class="pBtnGhost" style="display:none">✿ Customize controls</button>
-    <button id="pauseMoveMode" class="pBtnGhost">Movement: Classic</button>
     <button id="pauseCamMode" class="pBtnGhost">Camera: First person</button>
     <button id="pauseSprintMode" class="pBtnGhost">Sprint: Hold</button>
     <div class="pauseAudio">
@@ -7556,7 +7555,7 @@ const dynamicProps = [];   // prop meshes flagged dynamic (userData.phys = { id,
 let nextDynId = 1;
 let physWorld = null;
 // --- experimental: Rapier kinematic-character-controller movement (toggle; classic stays the default) ---
-let playerPhysMode = (()=>{ try{ return localStorage.getItem('breach_player_phys')==='1'; }catch(e){ return false; } })();
+let playerPhysMode = true;   // physics-based movement is the default for release; the in-game toggle was removed. The Rapier KCC still auto-falls-back to classic for the session if it ever throws (see _kccBroken).
 // Impact / hit particle FX (tunable in the editor under Scene > Impact FX; serialized with the level)
 const DEFAULT_FX = { color:0xffd9a0, size:1, count:1, life:1, spread:0.55, gravity:1, glow:true, flash:true };
 let fxCfg = _sanitizeFx(savedLevel && savedLevel.fx);   // load saved impact FX on boot (boot path reads savedLevel.* directly)
@@ -12505,7 +12504,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 508 · 2026-06-17';
+const BUILD_VERSION = 'build 509 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -19885,7 +19884,6 @@ function openPause(){
   paused = true; firing = false; ads = false;
   safeExitPointerLock();
   const eh=document.getElementById('pauseEditHud'); if(eh) eh.style.display = isTouch ? '' : 'none';
-  const mm0=document.getElementById('pauseMoveMode'); if(mm0) mm0.textContent='Movement: '+(playerPhysMode?'Physics (beta)':'Classic');
   const pm=document.getElementById('pauseMenu'); if(pm) pm.classList.remove('hidden');
 }
 function resumeGame(){
@@ -19913,7 +19911,6 @@ function bindPauseMenu(){
   const pb=document.getElementById('pauseBtn'); if(pb) pb.onclick=openPause;
   const r=document.getElementById('pauseResume'); if(r) r.onclick=resumeGame;
   const eh=document.getElementById('pauseEditHud'); if(eh) eh.onclick=()=>{ const pm=document.getElementById('pauseMenu'); if(pm) pm.classList.add('hidden'); enterTouchEdit(); };
-  const mm=document.getElementById('pauseMoveMode'); if(mm){ const upd=()=>{ mm.textContent='Movement: '+(playerPhysMode?'Physics (beta)':'Classic'); }; upd(); mm.onclick=()=>{ playerPhysMode=!playerPhysMode; _kccBroken=false; try{ localStorage.setItem('breach_player_phys', playerPhysMode?'1':'0'); }catch(e){} upd(); }; }
   const smb=document.getElementById('pauseSprintMode'); if(smb){ const upds=()=>{ smb.textContent='Sprint: '+(_sprintMode==='toggle'?'Toggle':'Hold'); }; upds(); smb.onclick=()=>{ _sprintMode = _sprintMode==='toggle'?'hold':'toggle'; _sprintToggled=false; try{ localStorage.setItem('breach_sprint_mode', _sprintMode); }catch(e){} upds(); }; }
   const cmb=document.getElementById('pauseCamMode'); if(cmb){ const updc=()=>{ cmb.textContent='Camera: '+(tpMode?'Third person':'First person'); }; updc(); cmb.onclick=()=>{ tpMode=!tpMode; try{ localStorage.setItem('breach_tp', tpMode?'1':'0'); }catch(e){} updc(); }; }
   const x=document.getElementById('pauseExit'); if(x) x.onclick=exitToMenu;
