@@ -442,8 +442,8 @@
     transition:border-color .15s,color .15s;
   }
   .modalClose:hover { border-color:var(--accent); color:#eafff7; }
-  #instrModal #controls { margin:0; color:#9fe6cf; font-size:13px; letter-spacing:1.5px; line-height:2; text-align:center; }
-  #instrModal #controls b { color:var(--accent); }
+  #instrModal #controls, #instrModal #controlsTouch { margin:0; color:#9fe6cf; font-size:13px; letter-spacing:1.5px; line-height:2; text-align:center; }
+  #instrModal #controls b, #instrModal #controlsTouch b { color:var(--accent); }
   .mpSection {
     margin:10px 0; padding:13px 15px; border-radius:10px; text-align:left;
     background:rgba(255,255,255,.02); border:1px solid rgba(255,255,255,.06); border-left:3px solid #2a6e5c;
@@ -636,6 +636,14 @@
       <b>ESC</b> pause &nbsp;·&nbsp; <b>P</b> open the in-game model/transform editor<br>
       <span style="color:#ffd166">Kill enemies for ◆ credits — spend them at the ammo station and supply caches.</span>
       <div id="padNote" style="display:none;margin-top:10px;color:var(--accent)">🎮 Controller connected — <b>L-stick</b> move · <b>R-stick</b> look · <b>RT</b> fire · <b>LT</b> aim · <b>A</b> jump · <b>X</b> reload · <b>Y</b> use · <b>B</b> grenade · <b>LB/RB</b> weapons · <b>L3</b> sprint · <b>any button</b> deploys &nbsp; <span style="color:#5a7d72">(press <b>`</b> for controller test)</span></div>
+    </div>
+    <div id="controlsTouch" style="display:none">
+      <b>Left stick</b> move · push to the edge to <b>sprint</b><br>
+      <b>Drag the right side</b> to look · <b>FIRE</b> to shoot (drag while firing to aim)<br>
+      <b>AIM</b> toggle zoom · <b>JUMP</b> · <b>reload</b> · <b>grenade</b> · <b>swap weapon</b> · <b>USE</b> station / cache<br>
+      Tap the <b>minimap</b> to open the full map · pause with the <b>❚❚</b> button<br>
+      <span style="color:#ffd166">Kill enemies for credits — spend them at the ammo station and supply caches.</span>
+      <div class="hint" style="margin-top:10px;color:var(--accent)">Tip: pause → <b>✿ Customize controls</b> to move or resize any on-screen button.</div>
     </div>
   </div>
 </div>
@@ -12536,7 +12544,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 512 · 2026-06-17';
+const BUILD_VERSION = 'build 513 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -19871,7 +19879,9 @@ function bindMenu(){
   const j=document.getElementById('mpJoin'); if(j) j.onclick=startJoin;
   const fs=document.getElementById('fsBtn');
   if(fs){ if(!fsSupported()){ fs.style.display='none'; } else { fs.style.display=''; fs.onclick=toggleFullscreen; syncFsBtn(); } }   // desktop only
-  const ib=document.getElementById('instrBtn'); if(ib) ib.onclick=()=>openModal('instrModal');
+  const ib=document.getElementById('instrBtn'); if(ib) ib.onclick=()=>{ syncInstrControls(); openModal('instrModal'); };
+  // First run: greet a cold visitor with the instructions once (device-aware), then never auto-open again.
+  try{ if(!localStorage.getItem('breach_seen')){ localStorage.setItem('breach_seen','1'); syncInstrControls(); openModal('instrModal'); } }catch(e){}
   const hb=document.getElementById('helpBtn'); if(hb) hb.onclick=()=>{ try{ window.open('breach-help.html','_blank'); }catch(e){} };   // full docs, hosted beside the game
   const cb=document.getElementById('ctrlBtn');
   if(cb){
@@ -19960,6 +19970,11 @@ function bindPauseMenu(){
   }
 }
 // Generic modal open/close (instructions + multiplayer). Backdrop click or ✕ closes.
+function syncInstrControls(){   // show the controls that match this device — touch layout on phones/tablets, keyboard + mouse otherwise
+  const kb=document.getElementById('controls'), tc=document.getElementById('controlsTouch');
+  if(kb) kb.style.display = isTouch ? 'none' : '';
+  if(tc) tc.style.display = isTouch ? '' : 'none';
+}
 function openModal(id){ const m=document.getElementById(id); if(m) m.classList.remove('hidden'); }
 function closeModal(id){ const m=document.getElementById(id); if(m) m.classList.add('hidden'); }
 function bindModals(){
