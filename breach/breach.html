@@ -12504,7 +12504,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 509 · 2026-06-17';
+const BUILD_VERSION = 'build 510 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -19444,6 +19444,7 @@ function startGame(){
   if(typeof _prewarmMatchModels==='function') _prewarmMatchModels();   // kick off known players' character GLBs BEFORE the gate so the loader waits for them
   if(_levelAssetsPending()){ showLevelLoader(); waitAssetsThenReveal(); }   // hold a loading screen so assets (models, sky, textures) don't pop in mid-game
   clearMovementInput();   // start fresh: no input held over from a previous round/death
+  mapWaypoint=null;   // drop any waypoint left over from a previous mission (e.g. a solo marker bleeding into a multiplayer round)
   if(_pathPreviewGroup){ scene.remove(_pathPreviewGroup); _pathPreviewGroup=null; }   // hide editor path markers during play
   closeModal('mpModal'); closeModal('instrModal');   // drop any open menu modal as the world starts
   if(typeof ensurePlayerPreview==='function') ensurePlayerPreview(false);   // drop the editor's stand-in avatar
