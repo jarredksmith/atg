@@ -216,6 +216,9 @@
     color:#cfeee2; font-size:12px; font-weight:700; letter-spacing:.5px; display:flex; align-items:center; justify-content:center;
     touch-action:none; -webkit-tap-highlight-color:transparent; }
   .tBtn.on { background:rgba(var(--accent-rgb),.35); color:#eafff7; border-color:var(--accent); }
+  .tBtn svg { width:48%; height:48%; display:block; }   /* outlined action icons (reload/grenade/swap) scale with the button */
+  #upgrade .upIcon { width:46px; height:46px; color:var(--accent); display:grid; place-items:center; }
+  #upgrade .upIcon svg { width:100%; height:100%; }
   #tFire { right:28px; bottom:42px; width:94px; height:94px; font-size:14px; }
   #tAim { right:138px; bottom:74px; width:66px; height:66px; }
   #tJump { right:46px; bottom:150px; width:64px; height:64px; }
@@ -545,9 +548,9 @@
     <button class="tBtn" id="tFire">FIRE</button>
     <button class="tBtn" id="tAim">AIM</button>
     <button class="tBtn" id="tJump">JUMP</button>
-    <button class="tBtn" id="tReload">⟳</button>
-    <button class="tBtn" id="tNade">💣</button>
-    <button class="tBtn" id="tWeapon">⇄</button>
+    <button class="tBtn" id="tReload"></button>
+    <button class="tBtn" id="tNade"></button>
+    <button class="tBtn" id="tWeapon"></button>
     <button class="tBtn" id="tUse">USE</button>
   </div>
 
@@ -11671,15 +11674,34 @@ function updateBuffs(dt){
 const RUN0 = { dmgMul:1, fireMul:1, speedMul:1, coinMul:1, lifesteal:0, regen:0, grenadePerWave:0 };
 let run = { ...RUN0 };                 // run-scoped modifiers; stays neutral (RUN0) in co-op
 let choosingUpgrade = false;
+// Outlined gameplay icons — same language as the editor tabs (24x24, currentColor stroke) so nothing
+// relies on the device emoji font (which renders the grenade etc. inconsistently, worst of all on mobile).
+const GAME_ICON = (()=>{
+  const s=(inner)=>'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+inner+'</svg>';
+  return {
+    dmg:    s('<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5Z"/>'),
+    rof:    s('<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>'),
+    hp:     s('<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.29 1.51 4.04 3 5.5l7 7Z"/>'),
+    speed:  s('<polyline points="6 13 12 7 18 13"/><polyline points="6 18 12 12 18 18"/>'),
+    leech:  s('<path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5S12.5 5.5 12 3c-.5 2.5-2 4.9-4 6.5S5 13 5 15a7 7 0 0 0 7 7Z"/>'),
+    coin:   s('<path d="M6 3h12l3 5.5L12 22 3 8.5Z"/><path d="M3 8.5h18"/><path d="M8 3 6 8.5 12 22 18 8.5 16 3"/>'),
+    regen:  s('<rect x="3" y="6" width="18" height="14" rx="2"/><path d="M8 6V4.5A1.5 1.5 0 0 1 9.5 3h5A1.5 1.5 0 0 1 16 4.5V6"/><path d="M12 10.5v5M9.5 13h5"/>'),
+    nade:   s('<circle cx="11" cy="15" r="6"/><path d="M11 9V7.6"/><rect x="8.8" y="4.3" width="4.4" height="3.3" rx="0.8"/><path d="M13.2 4.7c2.2 0 3.3 1.1 3.3 2.8"/>'),
+    weapon: s('<path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/>'),
+    reload: s('<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>'),
+  };
+})();
+{ const _b=(id,svg)=>{ const e=document.getElementById(id); if(e) e.innerHTML=svg; };   // swap the mobile action glyphs for clean icons
+  _b('tNade', GAME_ICON.nade); _b('tWeapon', GAME_ICON.weapon); _b('tReload', GAME_ICON.reload); }
 const UPGRADES = [
-  { id:'dmg',   icon:'🔥', name:'High-Velocity Rounds', desc:'+25% weapon damage',         apply(){ run.dmgMul *= 1.25; } },
-  { id:'rof',   icon:'⚡', name:'Trigger Job',          desc:'+15% fire rate',             apply(){ run.fireMul *= 0.85; } },
-  { id:'hp',    icon:'❤️', name:'Reinforced Plating',   desc:'+25 max HP (and heal up)',   apply(){ player.maxHp += 25; player.hp = Math.min(player.maxHp, player.hp + 25); } },
-  { id:'speed', icon:'🥾', name:'Combat Stims',         desc:'+12% move speed',            apply(){ run.speedMul *= 1.12; } },
-  { id:'leech', icon:'🩸', name:'Vampiric Rounds',      desc:'Heal 4 HP per kill',         apply(){ run.lifesteal += 4; } },
-  { id:'coin',  icon:'◆',  name:'Scavenger',            desc:'+30% credits from kills',    apply(){ run.coinMul *= 1.3; } },
-  { id:'regen', icon:'✚',  name:'Field Medic',          desc:'Heal 25 HP each wave',       apply(){ run.regen += 25; } },
-  { id:'nade',  icon:'💣', name:'Munitions Cache',      desc:'+1 grenade now & each wave', apply(){ run.grenadePerWave += 1; grenadeCount += 1; updateHUD(); } },
+  { id:'dmg',   icon:GAME_ICON.dmg,   name:'High-Velocity Rounds', desc:'+25% weapon damage',         apply(){ run.dmgMul *= 1.25; } },
+  { id:'rof',   icon:GAME_ICON.rof,   name:'Trigger Job',          desc:'+15% fire rate',             apply(){ run.fireMul *= 0.85; } },
+  { id:'hp',    icon:GAME_ICON.hp,    name:'Reinforced Plating',   desc:'+25 max HP (and heal up)',   apply(){ player.maxHp += 25; player.hp = Math.min(player.maxHp, player.hp + 25); } },
+  { id:'speed', icon:GAME_ICON.speed, name:'Combat Stims',         desc:'+12% move speed',            apply(){ run.speedMul *= 1.12; } },
+  { id:'leech', icon:GAME_ICON.leech, name:'Vampiric Rounds',      desc:'Heal 4 HP per kill',         apply(){ run.lifesteal += 4; } },
+  { id:'coin',  icon:GAME_ICON.coin,  name:'Scavenger',            desc:'+30% credits from kills',    apply(){ run.coinMul *= 1.3; } },
+  { id:'regen', icon:GAME_ICON.regen, name:'Field Medic',          desc:'Heal 25 HP each wave',       apply(){ run.regen += 25; } },
+  { id:'nade',  icon:GAME_ICON.nade,  name:'Munitions Cache',      desc:'+1 grenade now & each wave', apply(){ run.grenadePerWave += 1; grenadeCount += 1; updateHUD(); } },
 ];
 function pickUpgrades(n){
   const pool = UPGRADES.slice(), out = [];
@@ -11716,7 +11738,7 @@ function showUpgradePicker(opts, onPick){
     c.style.cssText = 'width:200px;min-height:150px;background:linear-gradient(160deg,rgba(10,22,26,.95),rgba(8,16,20,.9));border:1px solid rgba(56,245,181,.35);border-radius:10px;color:#cfeee2;padding:18px;cursor:pointer;display:flex;flex-direction:column;gap:10px;align-items:center;text-align:center;transition:all .12s;';
     c.onmouseenter=()=>{ c.style.borderColor='var(--accent)'; c.style.transform='translateY(-4px)'; };
     c.onmouseleave=()=>{ c.style.borderColor='rgba(56,245,181,.35)'; c.style.transform='none'; };
-    c.innerHTML = '<div style="font-size:40px">'+u.icon+'</div><div style="font-weight:700;font-size:15px;color:#eafff7">'+u.name+'</div><div style="font-size:13px;color:#9fe6cf;line-height:1.4">'+u.desc+'</div>';
+    c.innerHTML = '<div class="upIcon">'+u.icon+'</div><div style="font-weight:700;font-size:15px;color:#eafff7">'+u.name+'</div><div style="font-size:13px;color:#9fe6cf;line-height:1.4">'+u.desc+'</div>';
     c.onclick=()=>{ el.remove(); onPick(u); };
     row.appendChild(c);
   }
@@ -12504,7 +12526,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 510 · 2026-06-17';
+const BUILD_VERSION = 'build 511 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
