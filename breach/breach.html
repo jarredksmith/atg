@@ -234,7 +234,7 @@
   body.touch #scoreVal { font-size:15px; }
   body.touch #creditsVal { font-size:15px; }
   body.touch #score .label { font-size:9px; }
-  body.touch #minimap { width:66px; height:66px; top: calc(8px + env(safe-area-inset-top)); left: calc(8px + env(safe-area-inset-left)); }
+  body.touch #minimap { width:66px; height:66px; top: calc(8px + env(safe-area-inset-top)); left: calc(8px + env(safe-area-inset-left)); pointer-events:auto; z-index:41; cursor:pointer; }
   body.touch #prompt { pointer-events:auto; z-index:45; cursor:pointer; bottom:150px; }
   body.touch #prompt b { background:rgba(var(--accent-rgb),.32); }
   body.editing #tFire, body.editing #tAim, body.editing #tJump, body.editing #tReload, body.editing #tNade, body.editing #tWeapon, body.editing #tUse { display:none !important; }
@@ -348,7 +348,7 @@
   #killFeed .kfRow { background:rgba(5,10,12,0.62); border:1px solid rgba(var(--accent-rgb),0.18); border-radius:5px; padding:2px 7px; opacity:1; transition:opacity .8s; display:flex; align-items:center; gap:6px; white-space:nowrap; }
   #killFeed .kfRow.kfFade { opacity:0; }
   #killFeed .kfArrow { color:#ff6b6b; }
-  body.touch #killFeed { top: calc(140px + env(safe-area-inset-top)); left: calc(8px + env(safe-area-inset-left)); bottom:auto; font-size:10px; gap:2px; }
+  body.touch #killFeed { top: calc(76px + env(safe-area-inset-top)); left:50%; transform:translateX(-50%); right:auto; bottom:auto; align-items:center; max-width:80vw; font-size:10px; gap:2px; }
   #chatBox { position:fixed; bottom:132px; left:18px; z-index:42; display:flex; flex-direction:column; gap:3px; max-width:340px; font:600 12px ui-monospace,monospace; }
   #chatLog { display:flex; flex-direction:column; gap:3px; pointer-events:none; }
   #chatLog .chatRow { background:rgba(5,10,12,0.62); border:1px solid rgba(79,208,255,0.22); border-radius:5px; padding:2px 7px; opacity:1; transition:opacity .8s; word-break:break-word; }
@@ -12465,7 +12465,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 506 · 2026-06-17';
+const BUILD_VERSION = 'build 507 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13983,9 +13983,10 @@ const _zIn=_mapBtn('+','Zoom in'); _zIn.onclick=()=>{ mapZoom=Math.max(MAP_ZMIN,
 const _wpClear=_mapBtn('\u232b','Clear waypoint'); _wpClear.onclick=()=>{ mapWaypoint=null; };
 _mapCtl.appendChild(_zOut); _mapCtl.appendChild(_zIn); _mapCtl.appendChild(_wpClear); bigmapEl.appendChild(_mapCtl);
 
-// tapping (or clicking) the minimap expands it into the full map — the mobile entry point, and a handy desktop shortcut
+// tapping (or clicking) the minimap expands it into the full map — the mobile entry point, and a handy desktop
+// shortcut. pointerdown (not click) so it fires reliably on touch, matching the rest of the touch controls.
 miniCanvas.style.cursor='pointer';
-miniCanvas.addEventListener('click', ()=>{ if(!touchEditMode && gameOn && !editorOpen && !shopOpen && !chatOpen && !mapOpen && !paused) openBigMap(); });
+miniCanvas.addEventListener('pointerdown', (e)=>{ if(touchEditMode || !gameOn || editorOpen || shopOpen || chatOpen || mapOpen || paused) return; e.preventDefault(); e.stopPropagation(); openBigMap(); });
 
 let score = 0, wave = 1, toSpawn = 0;
 let surviveLeft = 0;   // seconds left in a Survival-objective run (also the Defend hold countdown)
