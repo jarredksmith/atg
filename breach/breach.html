@@ -12558,7 +12558,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 514 · 2026-06-17';
+const BUILD_VERSION = 'build 515 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12746,6 +12746,9 @@ const HUD_EDITABLE = ['stats','ammoPanel','minimap','score','scoreboard'];   // 
 const ALL_EDITABLE = TOUCH_EDITABLE.concat(HUD_EDITABLE);
 let touchOpacity = (()=>{ const v=parseFloat(localStorage.getItem('breach_touch_opacity')); return (v>=0.2 && v<=1)?v:1; })();
 let touchHand = (localStorage.getItem('breach_touch_hand')==='left') ? 'left' : 'right';
+// Per-player touch sensitivity (multiplies the base look/aim turn rate). Default 1 = current feel; 0.3–3x range.
+let touchLookMul = (()=>{ const v=parseFloat(localStorage.getItem('breach_touch_looksens')); return (v>=0.3 && v<=3)?v:1; })();
+let touchAdsMul  = (()=>{ const v=parseFloat(localStorage.getItem('breach_touch_adssens'));  return (v>=0.3 && v<=3)?v:1; })();
 function applyTouchChrome(){
   const tu=document.getElementById('touchUI'); if(tu) tu.style.opacity = touchOpacity;     // global control transparency
   const lk=document.getElementById('tLook'); if(lk){ if(touchHand==='left'){ lk.style.left='0'; lk.style.right='42%'; } else { lk.style.left=''; lk.style.right=''; } }   // look-drag side
@@ -12794,7 +12797,7 @@ function enterTouchEdit(){
     const row1=document.createElement('div'); row1.style.cssText='display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;';
     const lbl=document.createElement('span'); lbl.textContent='Drag to move \u00b7 tap to size'; lbl.style.cssText='color:#eafff7;font:600 12px/1.2 ui-monospace,monospace;margin-right:4px;';
     const reset=document.createElement('button'); reset.textContent='Reset'; reset.style.cssText='padding:5px 12px;font:600 12px ui-monospace,monospace;background:#0c1418;color:#cfeee2;border:1px solid #2a3a42;border-radius:6px;';
-    reset.onclick=(e)=>{ e.stopPropagation(); touchLayout={}; _teSel=null; touchOpacity=1; touchHand='right'; try{ localStorage.setItem('breach_touch_opacity','1'); localStorage.setItem('breach_touch_hand','right'); }catch(_){} saveTouchLayout(); applyTouchLayout(); applyTouchChrome(); oSlider.value=1; _teHighlight(); _teSyncSize(); };
+    reset.onclick=(e)=>{ e.stopPropagation(); touchLayout={}; _teSel=null; touchOpacity=1; touchHand='right'; touchLookMul=1; touchAdsMul=1; try{ localStorage.setItem('breach_touch_opacity','1'); localStorage.setItem('breach_touch_hand','right'); localStorage.setItem('breach_touch_looksens','1'); localStorage.setItem('breach_touch_adssens','1'); }catch(_){} saveTouchLayout(); applyTouchLayout(); applyTouchChrome(); oSlider.value=1; if(lookSl){ lookSl.value=1; lookSl.oninput(); } if(adsSl){ adsSl.value=1; adsSl.oninput(); } _teHighlight(); _teSyncSize(); };
     const done=document.createElement('button'); done.textContent='Done'; done.style.cssText='padding:5px 14px;font:600 12px ui-monospace,monospace;background:var(--accent);color:#04110c;border:none;border-radius:6px;';
     done.onclick=(e)=>{ e.stopPropagation(); exitTouchEdit(); };
     row1.appendChild(lbl); row1.appendChild(reset); row1.appendChild(done); bar.appendChild(row1);
@@ -12806,6 +12809,21 @@ function enterTouchEdit(){
     oSlider.addEventListener('pointerdown', e=>e.stopPropagation());
     oSlider.oninput=()=>{ touchOpacity=+oSlider.value; try{ localStorage.setItem('breach_touch_opacity', touchOpacity); }catch(_){} applyTouchChrome(); };
     row2.appendChild(flip); row2.appendChild(oLab); row2.appendChild(oSlider); bar.appendChild(row2);
+    // Look / Aim sensitivity — multiplies the base turn rate so players can tune the feel to taste.
+    const senseRow=document.createElement('div'); senseRow.style.cssText='display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap;border-top:1px solid rgba(56,245,181,0.18);padding-top:6px;';
+    const mkSens=(label, get, set, key)=>{
+      const lab=document.createElement('span'); lab.textContent=label; lab.style.cssText='color:#eafff7;font:600 11px ui-monospace,monospace;';
+      const val=document.createElement('span'); val.style.cssText='color:#9fe6cf;font:600 11px ui-monospace,monospace;min-width:32px;';
+      const sl=document.createElement('input'); sl.type='range'; sl.min='0.3'; sl.max='3'; sl.step='0.05'; sl.value=get(); sl.style.cssText='width:96px;accent-color:var(--accent);';
+      val.textContent=(+get()).toFixed(2)+'\u00d7';
+      sl.addEventListener('pointerdown', e=>e.stopPropagation());
+      sl.oninput=()=>{ set(+sl.value); val.textContent=(+sl.value).toFixed(2)+'\u00d7'; try{ localStorage.setItem(key, sl.value); }catch(_){} };
+      senseRow.appendChild(lab); senseRow.appendChild(sl); senseRow.appendChild(val);
+      return sl;
+    };
+    const lookSl=mkSens('Look', ()=>touchLookMul, v=>touchLookMul=v, 'breach_touch_looksens');
+    const adsSl =mkSens('Aim',  ()=>touchAdsMul,  v=>touchAdsMul=v,  'breach_touch_adssens');
+    bar.appendChild(senseRow);
     const sizeRow=document.createElement('div'); sizeRow.style.cssText='display:none;gap:8px;align-items:center;justify-content:center;border-top:1px solid rgba(56,245,181,0.18);padding-top:6px;';
     const sName=document.createElement('span'); sName.style.cssText='color:#9fe6cf;font:600 11px ui-monospace,monospace;min-width:54px;text-align:right;';
     const sLab=document.createElement('span'); sLab.textContent='Size'; sLab.style.cssText='color:#eafff7;font:600 11px ui-monospace,monospace;';
@@ -14938,7 +14956,7 @@ function loop(){
 
   pollGamepad(dt);   // controller input feeds the same flags as keyboard/mouse
   if(isTouch && !shopOpen && !choosingUpgrade){   // touch look (also drives the editor fly camera): applied here since there's no pointer lock on mobile
-    const tsens = (ads||touchAds) ? TOUCH_ADS_SENS : TOUCH_LOOK_SENS;
+    const tsens = (ads||touchAds) ? (TOUCH_ADS_SENS*touchAdsMul) : (TOUCH_LOOK_SENS*touchLookMul);
     player.yaw   -= touchLookDX * tsens;
     player.pitch  = Math.max(-1.5, Math.min(1.5, player.pitch - touchLookDY * tsens));
   }
