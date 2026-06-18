@@ -11203,9 +11203,10 @@ function upsertEnemyMesh(e){
     mesh.position.set(e.p[0], e.p[1], e.p[2]); mesh.userData.enemyId=e.id;
     buildEnemyVisual(mesh);   // same per-type model (or capsule) the host uses; enemy models arrive with the level sync
     scene.add(mesh);
-    em={ mesh, target:new THREE.Vector3(e.p[0],e.p[1],e.p[2]) }; NET.enemyMeshes[e.id]=em;
+    em={ mesh, target:new THREE.Vector3(e.p[0],e.p[1],e.p[2]), _lastHs:(e.hs||0) }; NET.enemyMeshes[e.id]=em;
   }
   em.target.set(e.p[0], e.p[1], e.p[2]);
+  em.hd=e.hd||0; em.hs=e.hs||0;
 }
 function upsertCoinMesh(c){
   let m=NET.coinMeshes[c.id];
@@ -11221,7 +11222,7 @@ function serializeWorld(){
   for(const id in NET.players){ const rp=NET.players[id];
     P.push({ id:+id, p:[rp.posEye.x,rp.posEye.y,rp.posEye.z], y:rp.yaw, pi:rp.pitch||0, w:rp.wep, g:(rp.grip?[rp.grip.x,rp.grip.y,rp.grip.z,rp.grip.yaw,rp.grip.pitch,rp.grip.roll,rp.grip.scale]:null), hp:rp.hp, j:rp.air?1:0, sl:rp.slide?1:0, ad:rp.ads?1:0, cr:rp.crouch?1:0, hd:rp.hd||0, hs:rp.hs||0, n:rp.name }); }
   for(const b of bots){ if(b.dead && !b._dying) continue; P.push({ id:b.id, p:[b.pos.x,EYE,b.pos.z], y:b.yaw, pi:0, w:0, hp:(b.dead?0:b.hp), hd:b._netHitDir||0, hs:b._netHitSeq||0, n:b.name }); }   // build 502: keep dead-but-dying bots in the snapshot (+ hd/hs) so clients play the directional death, then they prune on respawn
-  const E=enemies.map(e=>({ id:e.id, p:[e.mesh.position.x,e.mesh.position.y,e.mesh.position.z] }));
+  const E=enemies.map(e=>({ id:e.id, p:[e.mesh.position.x,e.mesh.position.y,e.mesh.position.z], hd:e._netHitDir||0, hs:e._netHitSeq||0 }));
   const C=coins.map(c=>({ id:c.id, p:[c.mesh.position.x,c.mesh.position.z] }));
   // dynamic physics props (position + orientation) so clients see them roll
   const D = dynamicProps.length ? dynamicProps.filter(o=>o.userData.nid).map(o=>({ id:o.userData.nid, p:[o.position.x,o.position.y,o.position.z], q:[o.quaternion.x,o.quaternion.y,o.quaternion.z,o.quaternion.w] })) : undefined;
@@ -11400,7 +11401,20 @@ function netInterpolate(dt){
     } }
   if(NET.mode==='client'){
     for(const id in NET.powerupMeshes){ const m=NET.powerupMeshes[id]; if(m.visible) _animatePickup(m, dt); }
-    for(const id in NET.enemyMeshes){ const em=NET.enemyMeshes[id]; em.mesh.position.lerp(em.target, k); const _ey=Math.atan2(player.pos.x - em.mesh.position.x, player.pos.z - em.mesh.position.z) + (em.mesh.userData.hasModel ? (em.mesh.userData.faceOff||0) : 0); em.mesh.rotation.set(0, turnToward(em.mesh.rotation.y, _ey, dt, TURN_RATE), 0); }
+    for(const id in NET.enemyMeshes){ const em=NET.enemyMeshes[id];
+      const _px=em.mesh.position.x, _pz=em.mesh.position.z;
+      em.mesh.position.lerp(em.target, k);
+      const _ey=Math.atan2(player.pos.x - em.mesh.position.x, player.pos.z - em.mesh.position.z) + (em.mesh.userData.hasModel ? (em.mesh.userData.faceOff||0) : 0);
+      em.mesh.rotation.set(0, turnToward(em.mesh.rotation.y, _ey, dt, TURN_RATE), 0);
+      if(em.mesh.userData.hasModel && em.mesh.userData.visual && em.mesh.userData.visual.userData.stateActions){
+        const _dx=em.mesh.position.x-_px, _dz=em.mesh.position.z-_pz, md=Math.hypot(_dx,_dz);   // per-frame travel
+        const eyaw=em.mesh.rotation.y - (em.mesh.userData.faceOff||0);
+        if(em.hs!=null && em.hs!==em._lastHs){ em._lastHs=em.hs; em._hitT=performance.now()+260; em._hitDir=(em.hd|0); }   // fresh networked hit -> directional flinch one-shot (co-op, build 514)
+        let _st = md>0.10 ? _locoSlot(_dx,_dz,eyaw,'run') : (md>0.02 ? _locoSlot(_dx,_dz,eyaw,'walk') : 'idle');
+        if(em._hitT && performance.now() < em._hitT) _st=['hitFront','hitBack','hitLeft','hitRight'][em._hitDir||0];   // flinch wins over locomotion
+        setEnemyAnimState(em.mesh, _st);
+      }
+    }
     for(const o of dynamicProps){ const tp=o.userData._netTarget; if(tp){ o.position.lerp(new THREE.Vector3(tp[0],tp[1],tp[2]), k); } }
     if(_clientBeaconOn && extractZone){ const pulse=0.6+0.4*Math.sin(performance.now()*0.004);
       if(extractZone.userData.ring) extractZone.userData.ring.material.opacity=0.5+0.4*pulse;
@@ -11429,7 +11443,7 @@ function netTick(dt){
 function handleClientMsg(conn, msg){
   const id=conn._pid;
   if(msg.t==='st'){ setRemoteState(id, msg); }
-  else if(msg.t==='hit'){ const en=enemies.find(e=>e.id===msg.e); if(en){ spark(en.mesh.position, 0xff6b6b); enemyHurt(en, msg.d, null, null); } }
+  else if(msg.t==='hit'){ const en=enemies.find(e=>e.id===msg.e); if(en){ spark(en.mesh.position, 0xff6b6b); const _s=NET.players[id]; enemyHurt(en, msg.d, (_s&&_s.posEye)?_s.posEye.x:null, (_s&&_s.posEye)?_s.posEye.z:null); } }
   else if(msg.t==='name'){ const rp=ensureRemotePlayer(id, msg.n); rp.name=msg.n; rp.mesh.userData._name=msg.n; if(rp.mesh.userData.label){ rp.mesh.remove(rp.mesh.userData.label); const l=makeNameSprite(msg.n, teamMode()?NET.teams[id]:undefined); l.position.y=2.5; rp.mesh.add(l); rp.mesh.userData.label=l; } if(msg.char){ applyRemoteChar(id, msg.char); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'char', from:id, cfg:msg.char}); }catch(e){} } } } if(NET.phase==='lobby') refreshLobby(); }
   else if(msg.t==='pvpHit'){ applyPvpDamage(msg.d, msg.from); }       // a client shot the host
   else if(msg.t==='fire'){ remoteFire(id, msg.o, msg.d); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'fire', from:id, o:msg.o, d:msg.d}); }catch(e){} } } }   // show + relay the shot
@@ -12544,7 +12558,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 513 · 2026-06-17';
+const BUILD_VERSION = 'build 514 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13819,7 +13833,9 @@ function enemyHurt(en, dmg, sx, sz){
   const now=performance.now();
   if(sx!=null && now>(en._evtCd||0) && en.mesh && en.mesh.userData.visual && en.mesh.userData.visual.userData.stateActions){
     const eyaw = en.mesh.rotation.y - (en.mesh.userData.faceOff||0);   // logical facing (strip the model's facing offset)
-    en._evt = { slot:'hit'+_reactDir(sx-en.mesh.position.x, sz-en.mesh.position.z, eyaw), until:now+220 }; en._evtCd=now+300;
+    const _dn=_reactDir(sx-en.mesh.position.x, sz-en.mesh.position.z, eyaw);
+    en._evt = { slot:'hit'+_dn, until:now+220 }; en._evtCd=now+300;
+    en._netHitDir=(_dn==='Front'?0:_dn==='Back'?1:_dn==='Left'?2:3); en._netHitSeq=((en._netHitSeq||0)+1)&255;   // build 514: replicate the flinch so co-op clients see enemies react too
   }
   return false;
 }
