@@ -8170,6 +8170,11 @@ addEventListener('keydown', e=>{
   // If a text field has focus, let it handle the key — don't record movement or fire any shortcut.
   if(typingInField(e)) return;
   if(_cineActive){ endCinematic(); return; }   // any key skips the intro flythrough
+  if(mapOpen){   // the tactical map owns the keyboard while open
+    if(e.code==='KeyM' || e.code==='Escape') closeBigMap();
+    else if(e.code==='KeyC') mapWaypoint=null;   // clear the waypoint
+    e.preventDefault(); return;
+  }
   // Universal escape hatch in multiplayer: Esc always opens a match menu, even while dead or on the result
   // screen, so you can never get trapped with no way out.
   if(e.code==='Escape' && NET.mode && NET.mode!=='off' && !editorOpen){
@@ -8229,7 +8234,7 @@ addEventListener('keydown', e=>{
     else if(e.code==='KeyE' || e.code==='Escape') closeShop();
     return;
   }
-  if(e.code==='KeyM'){ const m=toggleMute(); if(typeof flashToast==='function') flashToast(m?'Muted':'Sound on'); return; }
+  if(e.code==='KeyM' && !e.repeat){ if(gameOn && !editorOpen && !shopOpen && !chatOpen && !radialOpen && !choosingUpgrade){ openBigMap(); e.preventDefault(); return; } }
   if(e.code==='KeyN' && !e.repeat){ navOverlayToggle(); e.preventDefault(); return; }   // debug: toggle the bot nav grid overlay
   if(editorOpen) return;   // ignore gameplay keys while editing
   if(e.code==='KeyR') reload();
@@ -8274,7 +8279,7 @@ const MAX_LOOK_DELTA = 300;   // px per mousemove event; guards against spurious
 let editorDragLook = false, editorDragMoved = false, editorDragPan = false;   // editor mouse states
 renderer.domElement.addEventListener('click', ()=>{ if(!isTouch && gameOn && !locked && !shopOpen && !editorOpen && !paused) tryPointerLock(); });
 document.addEventListener('pointerlockchange', ()=>{ const was=locked; locked = document.pointerLockElement === renderer.domElement; if(locked && !was){ lookFresh = true; if(paused) resumeGame(); }
-  if(!locked && was && !isTouch && gameOn && !gameOver && !shopOpen && !editorOpen && !choosingUpgrade && !paused && !chatOpen) openPause(); });   // Esc releases the lock -> show the pause menu (but not when opening chat)
+  if(!locked && was && !isTouch && gameOn && !gameOver && !shopOpen && !editorOpen && !choosingUpgrade && !paused && !chatOpen && !mapOpen) openPause(); });   // Esc releases the lock -> show the pause menu (but not when opening chat)
 // Ctrl+W (crouch + forward) is the browser's close-tab shortcut and can't be cancelled from a keydown.
 // While actively playing (pointer locked), ask the browser to confirm before unloading so an accidental
 // Ctrl+W shows a "Leave site?" prompt the player can cancel instead of silently losing the session.
@@ -9245,8 +9250,8 @@ function updateFireZones(dt){
   for(const z of fireZones){
     const r=Math.max(1,+z.r||5), r2=r*r, dps=Math.max(0,+z.dps||0); if(dps<=0) continue;
     { const dx=player.pos.x-(+z.x||0), dz=player.pos.z-(+z.z||0); if(dx*dx+dz*dz<=r2 && inBand(player.pos.y-EYE,z)) playerDps=Math.max(playerDps,dps); }
-    if(typeof bots!=='undefined'){ for(const b of bots){ if(b.dead) continue; const dx=b.pos.x-(+z.x||0), dz=b.pos.z-(+z.z||0); if(dx*dx+dz*dz<=r2 && inBand(b.pos.y,z)){ b.hp-=dps*dt; if(b.hp<=0) botDie(b); } } }
-    if(typeof enemies!=='undefined'){ for(const en of enemies){ if(!en||en.hp<=0||!en.mesh) continue; const ep=en.mesh.position; const dx=ep.x-(+z.x||0), dz=ep.z-(+z.z||0); if(dx*dx+dz*dz<=r2 && inBand(ep.y,z)){ en.hp-=dps*dt; if(en.hp<=0) killEnemy(en); } } }
+    if(typeof bots!=='undefined'){ for(const b of bots){ if(b.dead) continue; const dx=b.pos.x-(+z.x||0), dz=b.pos.z-(+z.z||0); if(dx*dx+dz*dz<=r2 && inBand(b.pos.y,z)){ botHurt(b, dps*dt, (+z.x||0), (+z.z||0)); } } }
+    if(typeof enemies!=='undefined'){ for(const en of enemies){ if(!en||en.hp<=0||!en.mesh) continue; const ep=en.mesh.position; const dx=ep.x-(+z.x||0), dz=ep.z-(+z.z||0); if(dx*dx+dz*dz<=r2 && inBand(ep.y,z)){ enemyHurt(en, dps*dt, (+z.x||0), (+z.z||0)); } } }
   }
   if(playerDps>0) _applyFireToPlayer(playerDps, dt); else { _fireBurnAccum=0; _fireTickT=0; }
 }
@@ -9304,8 +9309,8 @@ function updateBurningProps(dt){
     // player burns on ALL peers (each client burns its own player)
     { const dx=player.pos.x-o.position.x, dz=player.pos.z-o.position.z, fy=player.pos.y-EYE; if(dx*dx+dz*dz<=pr2 && fy<=hi && fy>=by-1.2) playerDps=Math.max(playerDps,dps); }
     if(!isClient){
-      if(typeof bots!=='undefined'){ for(const b of bots){ if(b.dead) continue; const dx=b.pos.x-o.position.x, dz=b.pos.z-o.position.z; if(dx*dx+dz*dz<=pr2 && b.pos.y<=hi && b.pos.y>=by-1.2){ b.hp-=dps*dt; if(b.hp<=0) botDie(b); } } }
-      if(typeof enemies!=='undefined'){ for(const en of enemies){ if(!en||en.hp<=0||!en.mesh) continue; const ep=en.mesh.position; const dx=ep.x-o.position.x, dz=ep.z-o.position.z; if(dx*dx+dz*dz<=pr2 && ep.y<=hi && ep.y>=by-1.2){ en.hp-=dps*dt; if(en.hp<=0) killEnemy(en); } } }
+      if(typeof bots!=='undefined'){ for(const b of bots){ if(b.dead) continue; const dx=b.pos.x-o.position.x, dz=b.pos.z-o.position.z; if(dx*dx+dz*dz<=pr2 && b.pos.y<=hi && b.pos.y>=by-1.2){ botHurt(b, dps*dt, o.position.x, o.position.z); } } }
+      if(typeof enemies!=='undefined'){ for(const en of enemies){ if(!en||en.hp<=0||!en.mesh) continue; const ep=en.mesh.position; const dx=ep.x-o.position.x, dz=ep.z-o.position.z; if(dx*dx+dz*dz<=pr2 && ep.y<=hi && ep.y>=by-1.2){ enemyHurt(en, dps*dt, o.position.x, o.position.z); } } }
     }
   }
   if(playerDps>0) _applyPropFireToPlayer(playerDps, dt); else { _propFireAccum=0; _propFireTickT=0; }
@@ -9949,8 +9954,8 @@ function _applyCrushFromProp(obj, speed, dt){
   let hit = false;
   if(cd.player && gameOn && (player.hp==null || player.hp>0) && _propBoxHitsActor(box, player.pos.x, player.pos.y, player.pos.z, EYE, 0.4)){ applyEnemyDamageToSelf(dmg); hit = true; }
   if(cd.ai){
-    if(typeof bots!=='undefined'){ for(const b of bots){ if(b.dead) continue; if(_propBoxHitsActor(box, b.pos.x, b.pos.y, b.pos.z, 1.7, 0.4)){ b.hp-=dmg; if(b.hp<=0) botDie(b); hit = true; } } }
-    if(typeof enemies!=='undefined'){ for(const en of enemies){ if(!en || en.hp<=0 || !en.mesh) continue; const ep=en.mesh.position; if(_propBoxHitsActor(box, ep.x, ep.y, ep.z, 1.7, 0.4)){ en.hp-=dmg; if(en.hp<=0) killEnemy(en); hit = true; } } }
+    if(typeof bots!=='undefined'){ for(const b of bots){ if(b.dead) continue; if(_propBoxHitsActor(box, b.pos.x, b.pos.y, b.pos.z, 1.7, 0.4)){ botHurt(b, dmg, null, null); hit = true; } } }
+    if(typeof enemies!=='undefined'){ for(const en of enemies){ if(!en || en.hp<=0 || !en.mesh) continue; const ep=en.mesh.position; if(_propBoxHitsActor(box, ep.x, ep.y, ep.z, 1.7, 0.4)){ enemyHurt(en, dmg, null, null); hit = true; } } }
   }
   if(hit) obj.userData._crushT = 0.5;   // brief immunity so one crush = one hit
 }
@@ -10056,15 +10061,39 @@ function _botLOS(ex,ez,tx,tz,eyeY){
 function _botDamage(b, tgt, dmg){
   if(tgt.kind==='host') applyPvpDamage(dmg, b.id);
   else if(tgt.kind==='client') sendToPlayer(tgt.id, {t:'pvpHit', d:dmg, from:b.id});
-  else if(tgt.kind==='bot'){ const o=tgt.bot; if(o&&!o.dead){ o.hp-=dmg; if(o.hp<=0){ registerDuelKill(b.id, o.id); botDie(o); } } }
+  else if(tgt.kind==='bot'){ const o=tgt.bot; if(o&&!o.dead){ if(botHurt(o, dmg, b.pos.x, b.pos.z)) registerDuelKill(b.id, o.id); } }
 }
-function botDie(b){
-  b.dead=true; b.respawnT=2.5; b._dieT=0;
+// hit bearing (source - actor) -> Front/Back/Left/Right relative to facing. Mirrors the player's hurtDir so
+// bots/enemies flinch and fall the same way the player and remote players already do (builds 490 / 497).
+function _reactDir(dx, dz, yaw){
+  const fx=-Math.sin(yaw), fz=-Math.cos(yaw), rx=Math.cos(yaw), rz=-Math.sin(yaw);
+  const f=dx*fx+dz*fz, r=dx*rx+dz*rz;
+  if(Math.abs(f)>=Math.abs(r)) return f>=0?'Front':'Back';
+  return r>0?'Right':'Left';
+}
+function botDie(b, sx, sz){
+  b.dead=true; b.respawnT=2.5; b._dieT=0; b._evt=null;
+  // directional death from the killing hit's bearing (front hit -> fall backward); else a flat die.
+  let dieSlot='die';
+  if(sx!=null){ const d=_reactDir(sx-b.pos.x, sz-b.pos.z, b.yaw); dieSlot = (d==='Front')?'dieBack':(d==='Back')?'dieFront':'die'; }
   // play the death animation (if the model has a 'die' clip) and let the body linger; the dead-branch fades it.
   if(b.mesh && b.mesh.userData.visual && b.mesh.userData.visual.userData.stateActions && typeof setEnemyAnimState==='function'){
-    setEnemyAnimState(b.mesh, 'die'); b._dying=true;
+    setEnemyAnimState(b.mesh, dieSlot); b._dying=true;
   } else if(b.mesh){ b.mesh.visible=false; b._dying=false; }   // no death clip -> just hide (FX still plays)
   if(typeof netDeath==='function') netDeath(b.pos.x,b.pos.y||0,b.pos.z);
+}
+// central bot damage: apply, then play a directional flinch (survived) or a directional death (killed). Returns
+// true if this hit was the kill, so callers keep their own kill-credit / FX. A short flinch cooldown stops
+// rapid fire from stun-locking the body. Pass sx/sz = the attacker/blast position (null -> no flinch direction).
+function botHurt(b, dmg, sx, sz){
+  if(!b || b.dead) return false;
+  b.hp -= dmg;
+  if(b.hp<=0){ botDie(b, sx, sz); return true; }
+  const now=performance.now();
+  if(sx!=null && now>(b._evtCd||0) && b.mesh && b.mesh.userData.visual && b.mesh.userData.visual.userData.stateActions){
+    b._evt = { slot:'hit'+_reactDir(sx-b.pos.x, sz-b.pos.z, b.yaw), until:now+220 }; b._evtCd=now+300;
+  }
+  return false;
 }
 let matchWarmup = 0;
 let _repathBudget = 0;   // A* searches allowed per frame (reset each updateBots tick) so a frame never stalls on many repaths at once   // pre-match build/countdown window (host bot matches): bots are held inert until the nav grid is ready
@@ -10226,7 +10255,7 @@ function updateBots(dt){
       if(Math.abs(b.evx)<0.05) b.evx=0; if(Math.abs(b.evz)<0.05) b.evz=0;
     }
     { const groundY=(typeof groundHeightAt==='function')?groundHeightAt(b.pos.x,b.pos.z,b.pos.y,_gSurf):terrainHeightAt(b.pos.x,b.pos.z);   // land/stand with the SAME walkable-floor + ramp logic as the player (RAMP_RISE), so bots can stand & climb anywhere the player can — fixes bots dropping off a model's floor onto the terrain underneath and getting trapped
-      if(b.pos.y>groundY+0.04 || (b.vy||0)>0){ b.vy=(b.vy||0)-GRAV*dt; b.pos.y+=b.vy*dt; if(b.vy<=0 && b.pos.y<=groundY){ const _imp=-(b.vy||0); b.pos.y=groundY; b.vy=0; b.grounded=true; b._jumpCarry=false; if(gameCfg.fallDamage && gameCfg.fallDamage.on && gameCfg.fallDamage.ai && !b.dead){ const dmg=_fallDamageFor(_imp); if(dmg>0.5){ b.hp-=dmg; if(b.hp<=0) botDie(b); } } } else b.grounded=false; }
+      if(b.pos.y>groundY+0.04 || (b.vy||0)>0){ b.vy=(b.vy||0)-GRAV*dt; b.pos.y+=b.vy*dt; if(b.vy<=0 && b.pos.y<=groundY){ const _imp=-(b.vy||0); b.pos.y=groundY; b.vy=0; b.grounded=true; b._jumpCarry=false; if(gameCfg.fallDamage && gameCfg.fallDamage.on && gameCfg.fallDamage.ai && !b.dead){ const dmg=_fallDamageFor(_imp); if(dmg>0.5){ botHurt(b, dmg, null, null); } } } else b.grounded=false; }
       else { b.pos.y=groundY; b.vy=0; b.grounded=true; b._jumpCarry=false; }
     }
     b.yaw = (tgt && hasLOS) ? Math.atan2(-(tgt.pos.x-b.pos.x), -(tgt.pos.z-b.pos.z)) : Math.atan2(-mvx,-mvz);   // face the target only while it's visible; otherwise face where we're moving (no x-ray tracking)
@@ -10239,7 +10268,8 @@ function updateBots(dt){
       if(b.mesh.userData.hasModel && b.mesh.userData.visual && b.mesh.userData.visual.userData.stateActions){
         const mvx=b.pos.x-ox, mvz=b.pos.z-oz, md=Math.hypot(mvx,mvz);
         let st;
-        if(b._fireAnimT && performance.now()<b._fireAnimT) st='attack';
+        if(b._evt && performance.now()<b._evt.until) st=b._evt.slot;   // directional hit-react flinch (wins over fire/loco, below death)
+        else if(b._fireAnimT && performance.now()<b._fireAnimT) st='attack';
         else { const air=_airborneSlot(b._air||(b._air={}), b.grounded!==false, b.vy||0, dt);   // jumpStart/jump/fall/land while path-hopping or launched
           if(air) st=air;
           else { const tier = md>0.06?'run':(md>0.015?'walk':'idle'); st=(tier==='idle')?'idle':_locoSlot(mvx,mvz,b.yaw,tier); } }   // strafes/back-pedals show when orbiting a target it's facing
@@ -10751,7 +10781,9 @@ function buildAvatarVisual(g, cfg){
       g.userData.centerLocal = { x:(mc.xoff||0), y:(mc.yoff||0) + h*0.5, z:(mc.zoff||0) };   // visual centre in group space -> chase-cam pivot
       const hb=h*0.82; const px=new THREE.Mesh(new THREE.CylinderGeometry(fr,fr,hb,10), _ENEMY_PROXY_MAT); px.position.y=hb/2; g.add(px); g.userData.hitProxy=px; if(g.userData.noHit) px.raycast=()=>{};
       const rs=Math.min(Math.max(fr*0.7,0.26),0.45); const hpx=_mkHeadProxy(h-rs, rs); g.add(hpx); g.userData.headProxy=hpx; if(g.userData.noHit) hpx.raycast=()=>{};
-      if(mc===playerModelCfg){ playerModelClips = (gltf.animations||[]).map(a=>a.name||''); if(typeof refreshPlayerClipOptions==='function') refreshPlayerClipOptions(); }   // clip names feed the editor for the local model only
+      if(mc===playerModelCfg){ playerModelClips = (gltf.animations||[]).map(a=>a.name||'');
+        if(playerModelClips.length && playerModelCfg.clips){ for(const _st in playerModelCfg.clips){ const _v=playerModelCfg.clips[_st]; if(_v && playerModelClips.indexOf(_v)<0) playerModelCfg.clips[_st]=''; } }   // a different model arrived: drop per-state picks that named the PREVIOUS model's clips so the picker stops listing stale options (those states fall back to Auto-by-name)
+        if(typeof refreshPlayerClipOptions==='function') refreshPlayerClipOptions(); }   // clip names feed the editor for the local model only
       const mx=playEnemyStates(model, gltf, mc.clips); model.userData.animCfg = mc;   // idle/walk/run, crossfaded by the avatar's movement
       if(mx) g.userData.mixer=mx;
     },
@@ -11078,7 +11110,7 @@ function setRemoteState(id, msg){
   const rp=ensureRemotePlayer(id, msg.n);
   rp.posEye.set(msg.p[0], msg.p[1], msg.p[2]);
   rp.target.set(msg.p[0], Math.max(0, msg.p[1]-EYE), msg.p[2]);   // feet on floor
-  rp.yaw = msg.y; rp.pitch = msg.pi||0; if(msg.hp!=null) rp.hp=msg.hp; if(msg.w!=null) rp.wep=msg.w; if(msg.g) rp.grip=_unpackGrip(msg.g); rp.air = !!msg.j; rp.slide = !!msg.sl; rp.ads = !!msg.ad; rp.crouch = !!msg.cr;
+  rp.yaw = msg.y; rp.pitch = msg.pi||0; if(msg.hp!=null) rp.hp=msg.hp; if(msg.w!=null) rp.wep=msg.w; if(msg.g) rp.grip=_unpackGrip(msg.g); rp.air = !!msg.j; rp.slide = !!msg.sl; rp.ads = !!msg.ad; rp.crouch = !!msg.cr; rp.hd = msg.hd||0; rp.hs = msg.hs||0;
 }
 
 // ---- client-side display meshes for the host's enemies & coins ----
@@ -11103,9 +11135,9 @@ function upsertCoinMesh(c){
 function _packGrip(){ const g=tpGunGrip(typeof curWep!=='undefined'?curWep:'rifle'); return [ +(+g.x).toFixed(3), +(+g.y).toFixed(3), +(+g.z).toFixed(3), +(+g.yaw).toFixed(3), +(+g.pitch).toFixed(3), +(+g.roll).toFixed(3), +((g.scale==null?1:+g.scale)).toFixed(3) ]; }
 function _unpackGrip(a){ return (a && a.length>=7) ? { x:+a[0], y:+a[1], z:+a[2], yaw:+a[3], pitch:+a[4], roll:+a[5], scale:+a[6] } : null; }
 function serializeWorld(){
-  const P=[{ id:0, p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:owned.indexOf(curWep), g:_packGrip(), hp:Math.max(0,player.hp), j:player.onGround?0:1, sl:sliding?1:0, ad:(ads||padAds||touchAds)?1:0, cr:crouching?1:0, n:NET.name||'Host' }];
+  const P=[{ id:0, p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:owned.indexOf(curWep), g:_packGrip(), hp:Math.max(0,player.hp), j:player.onGround?0:1, sl:sliding?1:0, ad:(ads||padAds||touchAds)?1:0, cr:crouching?1:0, hd:_netHitDir, hs:_netHitSeq, n:NET.name||'Host' }];
   for(const id in NET.players){ const rp=NET.players[id];
-    P.push({ id:+id, p:[rp.posEye.x,rp.posEye.y,rp.posEye.z], y:rp.yaw, pi:rp.pitch||0, w:rp.wep, g:(rp.grip?[rp.grip.x,rp.grip.y,rp.grip.z,rp.grip.yaw,rp.grip.pitch,rp.grip.roll,rp.grip.scale]:null), hp:rp.hp, j:rp.air?1:0, sl:rp.slide?1:0, ad:rp.ads?1:0, cr:rp.crouch?1:0, n:rp.name }); }
+    P.push({ id:+id, p:[rp.posEye.x,rp.posEye.y,rp.posEye.z], y:rp.yaw, pi:rp.pitch||0, w:rp.wep, g:(rp.grip?[rp.grip.x,rp.grip.y,rp.grip.z,rp.grip.yaw,rp.grip.pitch,rp.grip.roll,rp.grip.scale]:null), hp:rp.hp, j:rp.air?1:0, sl:rp.slide?1:0, ad:rp.ads?1:0, cr:rp.crouch?1:0, hd:rp.hd||0, hs:rp.hs||0, n:rp.name }); }
   for(const b of bots){ if(b.dead) continue; P.push({ id:b.id, p:[b.pos.x,EYE,b.pos.z], y:b.yaw, pi:0, w:0, hp:b.hp, n:b.name }); }
   const E=enemies.map(e=>({ id:e.id, p:[e.mesh.position.x,e.mesh.position.y,e.mesh.position.z] }));
   const C=coins.map(c=>({ id:c.id, p:[c.mesh.position.x,c.mesh.position.z] }));
@@ -11223,7 +11255,7 @@ function applyWorld(msg){
   const seen=new Set();
   for(const pl of msg.P){ if(pl.id===NET.myId) continue; seen.add(pl.id);
     const rp=ensureRemotePlayer(pl.id, pl.n);
-    rp.posEye.set(pl.p[0],pl.p[1],pl.p[2]); rp.target.set(pl.p[0], Math.max(0,pl.p[1]-EYE), pl.p[2]); rp.yaw=pl.y; rp.pitch=pl.pi||0; rp.hp=pl.hp; rp.wep=pl.w; if(pl.g) rp.grip=_unpackGrip(pl.g); rp.air=!!pl.j; rp.slide=!!pl.sl; rp.ads=!!pl.ad; rp.crouch=!!pl.cr; }
+    rp.posEye.set(pl.p[0],pl.p[1],pl.p[2]); rp.target.set(pl.p[0], Math.max(0,pl.p[1]-EYE), pl.p[2]); rp.yaw=pl.y; rp.pitch=pl.pi||0; rp.hp=pl.hp; rp.wep=pl.w; if(pl.g) rp.grip=_unpackGrip(pl.g); rp.air=!!pl.j; rp.slide=!!pl.sl; rp.ads=!!pl.ad; rp.crouch=!!pl.cr; rp.hd=pl.hd||0; rp.hs=pl.hs||0; }
   for(const id in NET.players){ if(!seen.has(+id)) removeRemotePlayer(+id); }
   const es=new Set();
   for(const e of msg.E){ es.add(e.id); upsertEnemyMesh(e); }
@@ -11267,14 +11299,17 @@ function netInterpolate(dt){
     let dy=rp.yaw-rp.mesh.rotation.y; while(dy>Math.PI)dy-=2*Math.PI; while(dy<-Math.PI)dy+=2*Math.PI;
     rp.mesh.rotation.y += dy*k;
     if(rp.mesh.userData.hasModel && rp.mesh.userData.visual && rp.mesh.userData.visual.userData.stateActions){
-      const md=Math.hypot(rp.mesh.position.x-_px, rp.mesh.position.z-_pz);   // per-frame travel -> run / walk / idle
-      let _st = md>0.10 ? 'run' : (md>0.02 ? 'walk' : 'idle');
+      const _dx=rp.mesh.position.x-_px, _dz=rp.mesh.position.z-_pz, md=Math.hypot(_dx,_dz);   // per-frame travel + direction
+      const tier = md>0.10 ? 'run' : (md>0.02 ? 'walk' : 'idle');
+      if(rp.hs!=null && rp.hs!==rp._lastHs){ rp._lastHs=rp.hs; rp._hitT=performance.now()+260; rp._hitDir=(rp.hd|0); }   // a fresh networked hit -> directional flinch one-shot
+      let _st = rp.crouch ? (md>0.02 ? _locoSlot(_dx,_dz,rp.yaw,'crouch') : 'crouch')
+                          : (tier==='idle' ? 'idle' : _locoSlot(_dx,_dz,rp.yaw,tier));   // directional locomotion (fwd/back/strafe), matching the local body
+      if(rp.ads && md<0.05 && !rp.crouch) _st='aim';                  // aiming (right-click) pose, standing
+      if(rp.air) _st='jump';                                          // airborne flag travels in the state packet
       if(rp.slide) _st='slide';                                       // sliding flag travels in the state packet
-      else if(rp.air) _st='jump';                                     // airborne flag travels in the state packet
-      else if(rp.ads && md<0.05) _st='aim';                           // aiming (right-click) pose, standing
-      else if(rp.crouch) _st='crouch';                                // crouched pose
-      if(rp._fireT && performance.now() < rp._fireT) _st='attack';   // brief attack pose after a networked shot
-      if(rp.hp!=null && rp.hp<=0) _st='die';                          // dead peers hold the death pose (recovers when hp is restored)
+      if(rp._fireT && performance.now() < rp._fireT) _st='attack';    // brief attack pose after a networked shot
+      if(rp._hitT && performance.now() < rp._hitT) _st=['hitFront','hitBack','hitLeft','hitRight'][rp._hitDir||0];   // directional hit-react (wins over loco, below death)
+      if(rp.hp!=null && rp.hp<=0) _st = (rp._hitDir===0?'dieBack':rp._hitDir===1?'dieFront':'die');   // directional death (front hit -> fall backward), else flat die
       setEnemyAnimState(rp.mesh, _st);
     } }
   if(NET.mode==='client'){
@@ -11294,7 +11329,7 @@ function netTick(dt){
   if(NET.sendTimer<=0){
     NET.sendTimer=0.05;
     if(NET.mode==='client' && NET.conn && NET.conn.open){
-      try{ NET.conn.send({ t:'st', p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:owned.indexOf(curWep), g:_packGrip(), hp:Math.max(0,player.hp), j:player.onGround?0:1, sl:sliding?1:0, ad:(ads||padAds||touchAds)?1:0, cr:crouching?1:0, n:NET.name }); }catch(e){}
+      try{ NET.conn.send({ t:'st', p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:owned.indexOf(curWep), g:_packGrip(), hp:Math.max(0,player.hp), j:player.onGround?0:1, sl:sliding?1:0, ad:(ads||padAds||touchAds)?1:0, cr:crouching?1:0, hd:_netHitDir, hs:_netHitSeq, n:NET.name }); }catch(e){}
       if(heldProp && heldNidLocal!=null){ const tgt=_localHoldTarget(); try{ NET.conn.send({ t:'hold', nid:heldNidLocal, p:[tgt.x,tgt.y,tgt.z] }); }catch(e){} }
     } else if(NET.mode==='host'){
       broadcastWorld();
@@ -11308,12 +11343,12 @@ function netTick(dt){
 function handleClientMsg(conn, msg){
   const id=conn._pid;
   if(msg.t==='st'){ setRemoteState(id, msg); }
-  else if(msg.t==='hit'){ const en=enemies.find(e=>e.id===msg.e); if(en){ en.hp-=msg.d; spark(en.mesh.position, 0xff6b6b); if(en.hp<=0) killEnemy(en); } }
+  else if(msg.t==='hit'){ const en=enemies.find(e=>e.id===msg.e); if(en){ spark(en.mesh.position, 0xff6b6b); enemyHurt(en, msg.d, null, null); } }
   else if(msg.t==='name'){ const rp=ensureRemotePlayer(id, msg.n); rp.name=msg.n; rp.mesh.userData._name=msg.n; if(rp.mesh.userData.label){ rp.mesh.remove(rp.mesh.userData.label); const l=makeNameSprite(msg.n, teamMode()?NET.teams[id]:undefined); l.position.y=2.5; rp.mesh.add(l); rp.mesh.userData.label=l; } if(msg.char){ applyRemoteChar(id, msg.char); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'char', from:id, cfg:msg.char}); }catch(e){} } } } if(NET.phase==='lobby') refreshLobby(); }
   else if(msg.t==='pvpHit'){ applyPvpDamage(msg.d, msg.from); }       // a client shot the host
   else if(msg.t==='fire'){ remoteFire(id, msg.o, msg.d); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'fire', from:id, o:msg.o, d:msg.d}); }catch(e){} } } }   // show + relay the shot
   else if(msg.t==='died'){ registerDuelKill(msg.by, id); }            // a client died; credit the killer
-  else if(msg.t==='botHit'){ const b=botById(msg.id); if(b && !b.dead && !sameTeam(msg.from, msg.id)){ b.hp-=msg.d; if(b.hp<=0){ registerDuelKill(msg.from, msg.id); botDie(b); } } }   // a client shot a bot
+  else if(msg.t==='botHit'){ const b=botById(msg.id); if(b && !b.dead && !sameTeam(msg.from, msg.id)){ const _s=NET.players[msg.from]; const _sx=_s&&_s.posEye?_s.posEye.x:null, _sz=_s&&_s.posEye?_s.posEye.z:null; if(botHurt(b, msg.d, _sx, _sz)) registerDuelKill(msg.from, msg.id); } }   // a client shot a bot
   else if(msg.t==='char'){ applyRemoteChar(id, msg.cfg); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'char', from:id, cfg:msg.cfg}); }catch(e){} } } }   // a client changed character
   else if(msg.t==='rocket'){ const o=new THREE.Vector3(msg.o[0],msg.o[1],msg.o[2]), d=new THREE.Vector3(msg.d[0],msg.d[1],msg.d[2]); fireRocket(o,d,id,true,msg.r||7,WEAPONS.launcher.dmg); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'rocket', o:msg.o, d:msg.d, r:msg.r, by:id}); }catch(e){} } } }   // a client fired a rocket: host simulates it + relays the visual
   else if(msg.t==='push'){ const o=propByNid(msg.nid); if(o) pushDynamic(o, new THREE.Vector3(msg.dir[0],msg.dir[1],msg.dir[2]), msg.s||6, msg.pt?{x:msg.pt[0],y:msg.pt[1],z:msg.pt[2]}:null); }   // a client shot a dynamic prop (legacy knockback-only)
@@ -11746,10 +11781,9 @@ function explodeGrenade(g){
     const d = en.mesh.position.distanceTo(g.mesh.position);
     if(d < R){
       const f = 1 - d/R;
-      en.hp -= GRENADE.damage * f;
       alertEnemy(en, g.mesh.position.x, g.mesh.position.z);
       _blastLaunch(en, g.mesh.position.x, g.mesh.position.y, g.mesh.position.z, R, f);   // launch the enemy
-      if(en.hp<=0) killEnemy(en);
+      enemyHurt(en, GRENADE.damage * f, g.mesh.position.x, g.mesh.position.z);
     }
   }
   { const d=player.pos.distanceTo(pos); if(d<R){ const f=1-d/R, kx=player.pos.x-pos.x, kz=player.pos.z-pos.z, kh=Math.hypot(kx,kz)||1, LP=(worldCfg&&+worldCfg.launchPower)||1, kb=(8+R*1.2)*f*LP; player.extVel.x+=kx/kh*kb; player.extVel.z+=kz/kh*kb; player.vel.y=Math.max(player.vel.y,(5+R*0.6)*f*LP); player.onGround=false; } }   // grenade-jump: your own grenade flings you (no self-damage)
@@ -11774,9 +11808,9 @@ function explodeAt(pos, R, dmg, byId){
   for(let i=0;i<(usedSheet?6:14);i++) spark(pos, 0xffaa44);
   if(NET.mode==='client') return;   // host/solo author the damage
   if(!pvpMode()){
-    for(const en of enemies.slice()){ const d=en.mesh.position.distanceTo(pos); if(d<R){ const f=1-d/R; en.hp-=dmg*f; alertEnemy(en, pos.x, pos.z); _blastLaunch(en, pos.x,pos.y,pos.z, R, f); if(en.hp<=0) killEnemy(en); } }
+    for(const en of enemies.slice()){ const d=en.mesh.position.distanceTo(pos); if(d<R){ const f=1-d/R; alertEnemy(en, pos.x, pos.z); _blastLaunch(en, pos.x,pos.y,pos.z, R, f); enemyHurt(en, dmg*f, pos.x, pos.z); } }
   } else {
-    for(const bt of bots.slice()){ if(bt.dead||sameTeam(byId,bt.id)) continue; const d=Math.hypot(bt.pos.x-pos.x, 1.0-pos.y, bt.pos.z-pos.z); if(d<R){ const f=1-d/R; bt.hp-=dmg*f; const _kx=bt.pos.x-pos.x, _kz=bt.pos.z-pos.z, _kh=Math.hypot(_kx,_kz)||1, _LP=(worldCfg&&+worldCfg.launchPower)||1, _kb=(8+R*1.2)*f*_LP; bt.evx=(bt.evx||0)+(_kx/_kh)*_kb; bt.evz=(bt.evz||0)+(_kz/_kh)*_kb; bt.vy=Math.max(bt.vy||0,(5+R*0.6)*f*_LP); bt.grounded=false; if(bt.hp<=0){ registerDuelKill(byId,bt.id); botDie(bt); } } }   // blast knockback: shove away from center + pop up (uses the bot launch channel)
+    for(const bt of bots.slice()){ if(bt.dead||sameTeam(byId,bt.id)) continue; const d=Math.hypot(bt.pos.x-pos.x, 1.0-pos.y, bt.pos.z-pos.z); if(d<R){ const f=1-d/R; const _kx=bt.pos.x-pos.x, _kz=bt.pos.z-pos.z, _kh=Math.hypot(_kx,_kz)||1, _LP=(worldCfg&&+worldCfg.launchPower)||1, _kb=(8+R*1.2)*f*_LP; bt.evx=(bt.evx||0)+(_kx/_kh)*_kb; bt.evz=(bt.evz||0)+(_kz/_kh)*_kb; bt.vy=Math.max(bt.vy||0,(5+R*0.6)*f*_LP); bt.grounded=false; if(botHurt(bt, dmg*f, pos.x, pos.z)) registerDuelKill(byId,bt.id); } }   // blast knockback: shove away from center + pop up (uses the bot launch channel)
     for(const id in NET.players){ const rp=NET.players[id]; if(!rp||!rp.posEye) continue; if(sameTeam(byId,+id)) continue; if(rp.hp!=null&&rp.hp<=0) continue; const d=rp.posEye.distanceTo(pos); if(d<R) sendToPlayer(+id, {t:'pvpHit', d:dmg*(1-d/R), from:byId}); }
   }
   // the local (host) player — environmental hazard hits you too
@@ -12404,7 +12438,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 496 · 2026-06-17';
+const BUILD_VERSION = 'build 500 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -12508,7 +12542,7 @@ const SCOPE_SENS = 0.00045;                   // much slower under the scope's h
 addEventListener('wheel', e=>{ if(heldProp){ heldDist=Math.max(HOLD_MIN, Math.min(HOLD_MAX, heldDist - e.deltaY*0.003)); } }, {passive:true});
 addEventListener('mousedown', e=>{
   if(radialOpen){ if(e.button===0) closeRadial(true); return; }
-  if(shopOpen || editorOpen || paused) return;
+  if(shopOpen || editorOpen || paused || mapOpen) return;
   if(e.button===0){ if(heldProp){ throwHeld(); return; } firing=true; }
   else if(e.button===1){ e.preventDefault(); grabAction(); }   // middle-click (scroll-wheel push): grab / drop
   else if(e.button===2) ads = true;   // right-click: aim down sights
@@ -13371,9 +13405,9 @@ function updateThrownDamage(dt){
     const dmg=Math.min(THROW_DMG_MAX, speed*THROW_DMG_K*(ud.mass||1));
     let hit=false;
     if(!pvpMode()){
-      for(const en of enemies){ if(!en.mesh) continue; const c=en.mesh.position; const dx=c.x-t.x, dy=(c.y+0.9)-t.y, dz=c.z-t.z; if(dx*dx+dy*dy+dz*dz < pr*pr){ en.hp-=dmg; spark(c,0xffd166); if(en.hp<=0) killEnemy(en); hit=true; break; } }
+      for(const en of enemies){ if(!en.mesh) continue; const c=en.mesh.position; const dx=c.x-t.x, dy=(c.y+0.9)-t.y, dz=c.z-t.z; if(dx*dx+dy*dy+dz*dz < pr*pr){ spark(c,0xffd166); enemyHurt(en, dmg, t.x, t.z); hit=true; break; } }
     } else {
-      for(const bt of bots){ if(bt.dead||sameTeam(by,bt.id)) continue; const dx=bt.pos.x-t.x, dy=1.0-t.y, dz=bt.pos.z-t.z; if(dx*dx+dy*dy+dz*dz < pr*pr){ bt.hp-=dmg; if(bt.hp<=0){ registerDuelKill(by,bt.id); botDie(bt); } hit=true; break; } }
+      for(const bt of bots){ if(bt.dead||sameTeam(by,bt.id)) continue; const dx=bt.pos.x-t.x, dy=1.0-t.y, dz=bt.pos.z-t.z; if(dx*dx+dy*dy+dz*dz < pr*pr){ if(botHurt(bt, dmg, t.x, t.z)) registerDuelKill(by,bt.id); hit=true; break; } }
       if(!hit && by!==NET.myId && !duelDead && !sameTeam(by,NET.myId)){ const dx=player.pos.x-t.x, dy=(player.pos.y-EYE+1.0)-t.y, dz=player.pos.z-t.z; if(dx*dx+dy*dy+dz*dz < (pr+(player.radius||0.4)-0.8)*(pr+(player.radius||0.4)-0.8)){ applyPvpDamage(dmg,by); hit=true; } }
       if(!hit){ for(const id in NET.players){ const rp=NET.players[id]; if(!rp||!rp.posEye) continue; if(+id===by||sameTeam(by,+id)) continue; if(rp.hp!=null&&rp.hp<=0) continue; const dx=rp.posEye.x-t.x, dy=rp.posEye.y-t.y, dz=rp.posEye.z-t.z; if(dx*dx+dy*dy+dz*dz < pr*pr){ sendToPlayer(+id,{t:'pvpHit',d:dmg,from:by}); hit=true; break; } } }
     }
@@ -13533,13 +13567,13 @@ function meleeAttack(wep){
     for(const bt of bots){ if(bt.dead||sameTeam(NET.myId,bt.id)) continue; const dd=cone(bt.pos.x,1.0,bt.pos.z); if(dd>=0&&dd<bestD){ bestD=dd; best=bt; kind='bot'; } }
     for(const id in NET.players){ const rp=NET.players[id]; if(!rp||!rp.posEye) continue; if(sameTeam(NET.myId,+id)) continue; if(rp.hp!=null&&rp.hp<=0) continue; const dd=cone(rp.posEye.x,rp.posEye.y,rp.posEye.z); if(dd>=0&&dd<bestD){ bestD=dd; best=rp; kind='player'; bestId=+id; } }
     if(best){ hit=true;
-      if(kind==='bot'){ best.hp-=DMG; best.evx=(best.evx||0)+fwd.x/fh*KB; best.evz=(best.evz||0)+fwd.z/fh*KB; best.vy=Math.max(best.vy||0,UP); best.grounded=false; const _k=best.hp<=0; if(best.mesh){ spark(best.mesh.position,0xffd166); spawnDamageNumber(best.mesh.position, DMG, _k, false); } showHitmarker(_k); if(_k){ registerDuelKill(NET.myId,best.id); botDie(best); } }
+      if(kind==='bot'){ best.evx=(best.evx||0)+fwd.x/fh*KB; best.evz=(best.evz||0)+fwd.z/fh*KB; best.vy=Math.max(best.vy||0,UP); best.grounded=false; const _k=botHurt(best, DMG, player.pos.x, player.pos.z); if(best.mesh){ spark(best.mesh.position,0xffd166); spawnDamageNumber(best.mesh.position, DMG, _k, false); } showHitmarker(_k); if(_k) registerDuelKill(NET.myId,best.id); }
       else { sendToPlayer(bestId,{t:'pvpHit', d:DMG, from:NET.myId}); if(best.posEye){ spark(best.posEye,0xffd166); spawnDamageNumber(best.posEye, DMG, false, false); } showHitmarker(false); }
     }
   } else {
     let best=null, bestD=1e9;
     for(const en of enemies){ if(!en.mesh) continue; const dd=cone(en.mesh.position.x,en.mesh.position.y,en.mesh.position.z); if(dd>=0&&dd<bestD){ bestD=dd; best=en; } }
-    if(best){ hit=true; const _d=DMG*(buffs.damage?2:1)*run.dmgMul; best.hp-=_d; best.evx=(best.evx||0)+fwd.x/fh*KB; best.evz=(best.evz||0)+fwd.z/fh*KB; best.vy=Math.max(best.vy||0,UP); best.grounded=false; const _k=best.hp<=0; spark(best.mesh.position,0xffd166); spawnDamageNumber(best.mesh.position, _d, _k, false); flashEnemy(best); showHitmarker(_k); if(_k) killEnemy(best); }
+    if(best){ hit=true; const _d=DMG*(buffs.damage?2:1)*run.dmgMul; best.evx=(best.evx||0)+fwd.x/fh*KB; best.evz=(best.evz||0)+fwd.z/fh*KB; best.vy=Math.max(best.vy||0,UP); best.grounded=false; const _k=enemyHurt(best, _d, player.pos.x, player.pos.z); spark(best.mesh.position,0xffd166); spawnDamageNumber(best.mesh.position, _d, _k, false); flashEnemy(best); showHitmarker(_k); }
   }
   if(NET.mode!=='client' && dynamicProps.length){   // punch a prop in front: break / detonate + shove
     raycaster.setFromCamera({x:0,y:0}, camera);
@@ -13636,7 +13670,7 @@ function shoot(){
         const tid = pid!=null?pid:botId; const dmg=w.dmg*dmgMul*hsMul;
         if(tid!=null && sameTeam(NET.myId, tid)){ spark(hit.point, 0x7fdcc4); }   // teammate — no friendly fire
         else if(tid!=null){
-          if(botId!=null && NET.mode==='host'){ const b=botById(botId); if(b&&!b.dead){ b.hp-=dmg; if(b.hp<=0){ registerDuelKill(NET.myId, botId); botDie(b); } } }
+          if(botId!=null && NET.mode==='host'){ const b=botById(botId); if(b&&!b.dead){ if(botHurt(b, dmg, player.pos.x, player.pos.z)) registerDuelKill(NET.myId, botId); } }
           else if(pid!=null && pid>=BOT_ID_BASE && clientMode){ if(NET.conn) try{ NET.conn.send({t:'botHit', id:pid, d:dmg, from:NET.myId}); }catch(e){} }
           else sendToPlayer(pid, {t:'pvpHit', d:dmg, from:NET.myId});
           spark(hit.point, isHead?0xffd166:0xff6b6b); if(p===0){ showHitmarker(isHead); SFX.hit(); if(isHead) SFX.hit(); }
@@ -13655,13 +13689,12 @@ function shoot(){
         while(node && !en){ en = enemies.find(e=>e.mesh===node); node = node.parent; }
         if(en){
           const dealt = w.dmg*dmgMul*hsMul;
-          en.hp -= dealt;
           alertEnemy(en, player.pos.x, player.pos.z);   // getting shot turns the enemy's attention toward the shooter
           spark(hit.point, isHead?0xffd166:0xff6b6b);
-          spawnDamageNumber(hit.point, dealt, en.hp<=0, isHead);
+          const _ek = enemyHurt(en, dealt, player.pos.x, player.pos.z);
+          spawnDamageNumber(hit.point, dealt, _ek, isHead);
           flashEnemy(en);
-          if(p===0){ showHitmarker(en.hp<=0); SFX.hit(); }
-          if(en.hp<=0) killEnemy(en);
+          if(p===0){ showHitmarker(_ek); SFX.hit(); }
         } else {
           spark(hit.point, fxCfg.color);
         }
@@ -13671,6 +13704,19 @@ function shoot(){
   }
 }
 
+// central enemy damage: apply, then a directional flinch (survived) or a kill (killEnemy removes the body
+// instantly, so no death pose). Returns true if this hit killed it. Pass sx/sz = attacker/blast position.
+function enemyHurt(en, dmg, sx, sz){
+  if(!en || en.hp<=0) return false;
+  en.hp -= dmg;
+  if(en.hp<=0){ killEnemy(en); return true; }
+  const now=performance.now();
+  if(sx!=null && now>(en._evtCd||0) && en.mesh && en.mesh.userData.visual && en.mesh.userData.visual.userData.stateActions){
+    const eyaw = en.mesh.rotation.y - (en.mesh.userData.faceOff||0);   // logical facing (strip the model's facing offset)
+    en._evt = { slot:'hit'+_reactDir(sx-en.mesh.position.x, sz-en.mesh.position.z, eyaw), until:now+220 }; en._evtCd=now+300;
+  }
+  return false;
+}
 function killEnemy(en){
   runKills++;
   spark(en.mesh.position, 0xff2d55); SFX.kill();
@@ -13792,7 +13838,118 @@ function drawMinimap(){
   ctx.lineTo(MINI_R-4, MINI_R+5);
   ctx.lineTo(MINI_R+4, MINI_R+5);
   ctx.closePath(); ctx.fill();
+  // player-placed waypoint: a gold diamond when it's on the dial, an edge chevron + distance when it's beyond range
+  if(mapWaypoint){
+    const dxx=mapWaypoint.x-player.pos.x, dzz=mapWaypoint.z-player.pos.z;
+    const wrx=dxx*cosY - dzz*sinY, wrz=dxx*sinY + dzz*cosY, wd=Math.hypot(wrx,wrz);
+    if(wd*scale <= MINI_R-7){ const px=MINI_R+wrx*scale, py=MINI_R+wrz*scale; ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.moveTo(px,py-4); ctx.lineTo(px+4,py); ctx.lineTo(px,py+4); ctx.lineTo(px-4,py); ctx.closePath(); ctx.fill(); }
+    else { const ux=wrx/(wd||1), uy=wrz/(wd||1), ex=MINI_R+ux*(MINI_R-8), ey=MINI_R+uy*(MINI_R-8); ctx.save(); ctx.translate(ex,ey); ctx.rotate(Math.atan2(uy,ux)); ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.moveTo(5,0); ctx.lineTo(-3,4); ctx.lineTo(-3,-4); ctx.closePath(); ctx.fill(); ctx.restore(); }
+    ctx.fillStyle='#ffd166'; ctx.font='10px system-ui,sans-serif'; ctx.textAlign='center'; ctx.fillText('\u25c7 '+Math.round(Math.hypot(dxx,dzz))+'m', MINI_R, 176); ctx.textAlign='left';
+  }
 }
+
+// ============ Full-screen tactical map (press M): pan, zoom, every blip across the whole level, click-to-waypoint ============
+// A north-up 2D overlay (not the rotating minimap). The world keeps simulating in multiplayer; in solo it
+// freezes like the pause screen. Click sets a waypoint that also shows on the minimap with a live distance.
+let mapOpen=false;
+let mapPanX=0, mapPanZ=0;          // world-space center of the view
+let mapZoom=ARENA*1.05;            // half-extent (world units) of the smaller screen dimension (smaller = zoomed in)
+let mapWaypoint=null;              // {x,z} player-placed marker
+let _mapGeo=[];                    // cached collider footprints [x0,z0,x1,z1], rebuilt when the map opens
+const MAP_ZMIN=8, MAP_ZMAX=ARENA*1.6;
+let _mapDown=null;                 // active drag {sx,sy,panX,panZ,moved}
+
+const bigmapEl=document.createElement('div');
+bigmapEl.id='bigmap';
+bigmapEl.style.cssText='display:none;position:fixed;inset:0;z-index:60;background:rgba(5,9,12,0.9);cursor:crosshair;';
+const bigmapCv=document.createElement('canvas');
+bigmapCv.style.cssText='position:absolute;inset:0;width:100%;height:100%;touch-action:none;';
+bigmapEl.appendChild(bigmapCv);
+const _mapBar=document.createElement('div');
+_mapBar.style.cssText='position:absolute;left:50%;top:14px;transform:translateX(-50%);font:600 13px/1.4 system-ui,sans-serif;color:#cfe;letter-spacing:.03em;text-align:center;text-shadow:0 1px 3px #000;pointer-events:none;white-space:nowrap;';
+_mapBar.innerHTML='TACTICAL MAP &nbsp;\u00b7&nbsp; drag to pan &nbsp;\u00b7&nbsp; scroll to zoom &nbsp;\u00b7&nbsp; click to set a waypoint &nbsp;\u00b7&nbsp; right-click clears &nbsp;\u00b7&nbsp; <b>M</b>/<b>Esc</b> to close';
+bigmapEl.appendChild(_mapBar);
+document.body.appendChild(bigmapEl);
+const bigmapCtx=bigmapCv.getContext('2d');
+
+function _mapResize(){ bigmapCv.width=Math.max(2,Math.round(innerWidth)); bigmapCv.height=Math.max(2,Math.round(innerHeight)); }
+addEventListener('resize', ()=>{ if(mapOpen) _mapResize(); });
+
+function _rebuildMapGeo(){
+  _mapGeo=[];
+  try{ for(const c of colliders){ const b=(c&&c.userData)?c.userData.box:null; if(b && isFinite(b.min.x) && !b.isEmpty()) _mapGeo.push([b.min.x,b.min.z,b.max.x,b.max.z]); } }catch(e){}
+}
+function toggleBigMap(){ mapOpen ? closeBigMap() : openBigMap(); }
+function openBigMap(){
+  if(mapOpen || !gameOn || editorOpen) return;
+  mapOpen=true;
+  mapPanX=player.pos.x; mapPanZ=player.pos.z;                 // center on the player
+  if(!isFinite(mapZoom)||mapZoom<=0) mapZoom=ARENA*1.05;
+  _rebuildMapGeo();
+  if(typeof clearMovementInput==='function') clearMovementInput();
+  firing=false; ads=false;
+  bigmapEl.style.display='block'; _mapResize();
+  if(typeof safeExitPointerLock==='function') safeExitPointerLock();
+}
+function closeBigMap(){
+  if(!mapOpen) return;
+  mapOpen=false; bigmapEl.style.display='none'; _mapDown=null;
+  if(!isTouch && gameOn && !gameOver && !shopOpen && !editorOpen && !paused && !chatOpen && typeof tryPointerLock==='function') tryPointerLock();
+}
+
+function _mapV(){ const W=bigmapCv.width,H=bigmapCv.height; const scale=(Math.min(W,H)/2)/mapZoom; return {W,H,scale,cx:W/2,cy:H/2}; }
+function _w2s(wx,wz,v){ return [ v.cx+(wx-mapPanX)*v.scale, v.cy+(wz-mapPanZ)*v.scale ]; }   // north-up: +Z screen-down, so forward (\u2212Z) is up
+function _s2w(sx,sy,v){ return [ mapPanX+(sx-v.cx)/v.scale, mapPanZ+(sy-v.cy)/v.scale ]; }
+function _mapEventWorld(e){ const r=bigmapCv.getBoundingClientRect(), v=_mapV(); const sx=(e.clientX-r.left)*(bigmapCv.width/r.width), sy=(e.clientY-r.top)*(bigmapCv.height/r.height); return { w:_s2w(sx,sy,v), v }; }
+
+function drawBigMap(){
+  if(!mapOpen) return;
+  const v=_mapV(), ctx=bigmapCtx, W=v.W, H=v.H;
+  ctx.clearRect(0,0,W,H);
+  // world grid every 10u
+  if(10*v.scale>6){ ctx.lineWidth=1; ctx.strokeStyle='rgba('+UI_ACCENT_RGB+',0.07)';
+    const wl=mapPanX-(W/2)/v.scale, wr=mapPanX+(W/2)/v.scale, wt=mapPanZ-(H/2)/v.scale, wb=mapPanZ+(H/2)/v.scale;
+    for(let gx=Math.ceil(wl/10)*10; gx<=wr; gx+=10){ const x=_w2s(gx,0,v)[0]; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+    for(let gz=Math.ceil(wt/10)*10; gz<=wb; gz+=10){ const y=_w2s(0,gz,v)[1]; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); } }
+  // arena bound
+  { const a=_w2s(-ARENA,-ARENA,v), b=_w2s(ARENA,ARENA,v); ctx.strokeStyle='rgba('+UI_ACCENT_RGB+',0.35)'; ctx.lineWidth=2; ctx.strokeRect(a[0],a[1],b[0]-a[0],b[1]-a[1]); }
+  // collider footprints (walls / solid props) = the level's bones
+  ctx.fillStyle='rgba(150,180,200,0.15)'; ctx.strokeStyle='rgba(150,180,200,0.3)'; ctx.lineWidth=1;
+  for(const g of _mapGeo){ const a=_w2s(g[0],g[1],v), b=_w2s(g[2],g[3],v); const x=Math.min(a[0],b[0]),y=Math.min(a[1],b[1]),w=Math.abs(b[0]-a[0]),h=Math.abs(b[1]-a[1]); if(w<1.5&&h<1.5) continue; ctx.fillRect(x,y,w,h); ctx.strokeRect(x,y,w,h); }
+  const dot=(wx,wz,color,r)=>{ const s=_w2s(wx,wz,v); ctx.fillStyle=color; ctx.beginPath(); ctx.arc(s[0],s[1],r,0,Math.PI*2); ctx.fill(); };
+  // objective markers
+  const _oa=(typeof objectiveActive==='function')?objectiveActive():null;
+  if((_oa==='extraction'||_oa==='defend'||_oa==='escort') && extractZone && extractZone.visible) dot(extractPos.x,extractPos.z,UI_ACCENT,6);
+  if(_oa==='escort' && escortMarker && escortMarker.visible) dot(escortPos.x,escortPos.z,'#2fd0e0',6);
+  if(_oa==='destroy'){ for(const m of _destroyMarkers){ const o=m.userData.prop; if(o&&!o.userData._shattered&&o.parent) dot(o.position.x,o.position.z,'#ff5b6b',5); } }
+  // stations + pickups
+  if(typeof station!=='undefined' && station) dot(station.pos.x,station.pos.z,'#38c8f5',5);
+  for(const ch of chests) dot(ch.pos.x,ch.pos.z,'#ffd166',4);
+  for(const c of coins) dot(c.mesh.position.x,c.mesh.position.z,'rgba(255,209,102,0.55)',2);
+  // foes
+  for(const en of enemies) dot(en.mesh.position.x,en.mesh.position.z,'#ff4d5e',4);
+  if(typeof NET!=='undefined' && NET.mode){
+    const isTeam=(typeof teamMode==='function')&&teamMode();
+    const myTeam=(NET.teams&&NET.myId!=null)?NET.teams[NET.myId]:undefined;
+    const colorFor=(tm)=> isTeam?(tm===myTeam?'#46e0a4':'#ff4d5e'):'#ff4d5e';
+    if(NET.players) for(const id in NET.players){ const rp=NET.players[id]; if(!rp||!rp.mesh||(rp.hp!=null&&rp.hp<=0)) continue; const tm=(NET.teams&&NET.teams[id]!=null)?NET.teams[id]:undefined; dot(rp.mesh.position.x,rp.mesh.position.z,colorFor(tm),5); }
+    if(typeof bots!=='undefined'&&bots) for(const b of bots){ if(!b||b.dead) continue; dot(b.pos.x,b.pos.z,colorFor(b.team),4); }
+  }
+  // waypoint
+  if(mapWaypoint){ const s=_w2s(mapWaypoint.x,mapWaypoint.z,v); ctx.lineWidth=2; ctx.strokeStyle='#ffd166'; ctx.fillStyle='rgba(255,209,102,0.22)';
+    ctx.beginPath(); ctx.moveTo(s[0],s[1]-10); ctx.lineTo(s[0]+10,s[1]); ctx.lineTo(s[0],s[1]+10); ctx.lineTo(s[0]-10,s[1]); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle='#ffd166'; ctx.beginPath(); ctx.arc(s[0],s[1],2.6,0,Math.PI*2); ctx.fill(); }
+  // player (arrow showing facing)
+  { const s=_w2s(player.pos.x,player.pos.z,v); const fx=-Math.sin(player.yaw), fz=-Math.cos(player.yaw);
+    ctx.save(); ctx.translate(s[0],s[1]); ctx.rotate(Math.atan2(fz,fx)); ctx.fillStyle='#eafff7'; ctx.strokeStyle='#0a1014'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(11,0); ctx.lineTo(-7,7); ctx.lineTo(-7,-7); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore(); }
+}
+
+bigmapEl.addEventListener('pointerdown', e=>{ if(!mapOpen || e.button!==0) return; _mapDown={ sx:e.clientX, sy:e.clientY, panX:mapPanX, panZ:mapPanZ, moved:false }; try{ bigmapEl.setPointerCapture(e.pointerId); }catch(_){} });
+bigmapEl.addEventListener('pointermove', e=>{ if(!_mapDown) return; const v=_mapV(); const dx=e.clientX-_mapDown.sx, dy=e.clientY-_mapDown.sy; if(Math.abs(dx)+Math.abs(dy)>4) _mapDown.moved=true; mapPanX=_mapDown.panX - dx/v.scale; mapPanZ=_mapDown.panZ - dy/v.scale; });
+bigmapEl.addEventListener('pointerup', e=>{ if(!_mapDown) return; const moved=_mapDown.moved; _mapDown=null; if(!moved){ const w=_mapEventWorld(e).w; mapWaypoint={ x:w[0], z:w[1] }; } });
+bigmapEl.addEventListener('contextmenu', e=>{ if(mapOpen){ e.preventDefault(); mapWaypoint=null; } });
+bigmapEl.addEventListener('wheel', e=>{ if(!mapOpen) return; e.preventDefault(); const before=_mapEventWorld(e).w; mapZoom=Math.max(MAP_ZMIN, Math.min(MAP_ZMAX, mapZoom*(1+Math.sign(e.deltaY)*0.12))); const after=_mapEventWorld(e).w; mapPanX+=before[0]-after[0]; mapPanZ+=before[1]-after[1]; }, {passive:false});
 
 let score = 0, wave = 1, toSpawn = 0;
 let surviveLeft = 0;   // seconds left in a Survival-objective run (also the Defend hold countdown)
@@ -13972,6 +14129,7 @@ function updateLowHp(dt){
   } else { el.style.opacity='0'; _hbT=0; }
 }
 let _hurtDirT=0, _hurtFrom=null; const _HURT_FWD=new THREE.Vector3();
+let _netHitDir=0, _netHitSeq=0;   // build 497: last hit direction (0=front,1=back,2=left,3=right) + a bump-per-hit sequence, broadcast so peers render the directional flinch/death on this body
 function hurtDir(sx,sz){ if(sx==null||sz==null) return; _hurtFrom={x:sx,z:sz}; _hurtDirT=0.7;
   // drive a directional hit-react + pick a directional death on the third-person body, relative to body facing
   const dx=sx-player.pos.x, dz=sz-player.pos.z;
@@ -13980,6 +14138,7 @@ function hurtDir(sx,sz){ if(sx==null||sz==null) return; _hurtFrom={x:sx,z:sz}; _
   let dir; if(Math.abs(f)>=Math.abs(r)) dir = f>=0?'Front':'Back'; else dir = r>0?'Right':'Left';
   if(typeof playOwnAnim==='function') playOwnAnim('hit'+dir, 240);
   _lastDieVariant = (dir==='Front') ? 'dieBack' : (dir==='Back' ? 'dieFront' : 'die');   // shot from the front -> fall backward
+  _netHitDir = (dir==='Front')?0:(dir==='Back')?1:(dir==='Left')?2:3; _netHitSeq=(_netHitSeq+1)&255;   // tell peers which way this body was hit
 }
 function updateHurtDir(dt){
   const el=$('hurtDir'); if(!el) return;
@@ -14643,7 +14802,7 @@ function loop(){
   if(_cineActive){ updateCinematic(rawDt); if(mixers.length){ for(const m of mixers) m.update(rawDt); } if(typeof updateXAnim==='function') updateXAnim(rawDt); renderScene(scene,camera); return; }   // keep GLB clips AND mechanism/waypoint motion (doors, platforms, elevators) alive on camera   // keep prop/GLB animations alive on camera (raw time — no hitstop during a cutscene)   // intro/preview flythrough owns the camera; freeze the sim
   if(_interActive){ pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }   // campaign transition card owns the screen; hold the won level frozen behind it
   if(!gameOn) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }
-  if((shopOpen || choosingUpgrade || (paused && NET.mode==='off')) && !(duelDead && pvpMode())) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }  // freeze world while shopping / picking an upgrade / paused (solo) — but never while waiting to respawn
+  if((shopOpen || choosingUpgrade || (paused && NET.mode==='off') || (mapOpen && NET.mode==='off')) && !(duelDead && pvpMode())) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); if(mapOpen) drawBigMap(); return; }  // freeze world while shopping / picking an upgrade / paused (solo) — but never while waiting to respawn
 
   pollGamepad(dt);   // controller input feeds the same flags as keyboard/mouse
   if(isTouch && !shopOpen && !choosingUpgrade){   // touch look (also drives the editor fly camera): applied here since there's no pointer lock on mobile
@@ -15082,7 +15241,7 @@ function loop(){
       }
       // trap launch: horizontal momentum + a vertical pop that arcs under gravity and settles back to the hover height
       if(en.evx||en.evz){ en.mesh.position.x+=en.evx*dt; en.mesh.position.z+=en.evz*dt; const kd=Math.max(0,1-((en.grounded?6:0.6))*dt); en.evx*=kd; en.evz*=kd; if(Math.abs(en.evx)<0.05)en.evx=0; if(Math.abs(en.evz)<0.05)en.evz=0; }
-      if((en.launchY||0)>0 || (en.vy||0)>0){ en.vy=(en.vy||0)-GRAV*dt; en.launchY=(en.launchY||0)+en.vy*dt; if(en.launchY<=0){ const _imp=-(en.vy||0); en.launchY=0; en.vy=0; en.grounded=true; if(gameCfg.fallDamage && gameCfg.fallDamage.on && gameCfg.fallDamage.ai && en.hp>0){ const dmg=_fallDamageFor(_imp); if(dmg>0.5){ en.hp-=dmg; if(en.hp<=0) killEnemy(en); } } } else en.grounded=false; }
+      if((en.launchY||0)>0 || (en.vy||0)>0){ en.vy=(en.vy||0)-GRAV*dt; en.launchY=(en.launchY||0)+en.vy*dt; if(en.launchY<=0){ const _imp=-(en.vy||0); en.launchY=0; en.vy=0; en.grounded=true; if(gameCfg.fallDamage && gameCfg.fallDamage.on && gameCfg.fallDamage.ai && en.hp>0){ const dmg=_fallDamageFor(_imp); if(dmg>0.5){ enemyHurt(en, dmg, null, null); } } } else en.grounded=false; }
       else { en.launchY=0; en.vy=0; en.grounded=true; }
       // keep inside arena
       const elim = ARENA - 2;
@@ -15131,7 +15290,8 @@ function loop(){
         const moved = Math.hypot(en.mesh.position.x - (en._apx!=null?en._apx:en.mesh.position.x), en.mesh.position.z - (en._apz!=null?en._apz:en.mesh.position.z));
         en._apx = en.mesh.position.x; en._apz = en.mesh.position.z;
         let st;
-        if(en._attackT && nowMs < en._attackT) st = 'attack';
+        if(en._evt && nowMs < en._evt.until) st = en._evt.slot;   // directional hit-react flinch (wins over attack/loco)
+        else if(en._attackT && nowMs < en._attackT) st = 'attack';
         else if(moved > 0.012) st = en._chase ? 'run' : 'walk';
         else st = 'idle';
         setEnemyAnimState(en.mesh, st);
@@ -15150,6 +15310,7 @@ function loop(){
 
   if(_musicOn) setMusicIntensity(musicTargetFor({ enemies: enemies.length, toSpawn, wave }));
   { const _a=perfOn?_pnow():0; drawMinimap(); if(perfOn)_prof.mini+=_pnow()-_a; }
+  if(mapOpen) drawBigMap();
   if(editorOpen && typeof updateSelectionHighlight==='function') updateSelectionHighlight();
   renderScene(scene, activeCam());
   renderViewmodel();
