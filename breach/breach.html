@@ -8555,19 +8555,20 @@ const enemyGeo = new THREE.CapsuleGeometry(0.7, 1.4, 4, 10);
 // AI / collision / networking code is unchanged — only the visual child swaps.
 // Per-enemy-type model config: each type (grunt/runner/brute/gunner) gets its own GLB + framing.
 // Back-compat: an old single-model level (savedLevel.enemy) is applied to every type.
-const ENEMY_MODEL0 = { url:'', scale:1, face:0, cr:0, ch:0, yoff:0, xoff:0, zoff:0, clip:'', clips:{ idle:'', walk:'', run:'', attack:'' } };   // clip='' legacy single; clips = per-state overrides ('' = auto by name)
+const ENEMY_MODEL0 = { url:'', scale:1, face:0, cr:0, ch:0, yoff:0, xoff:0, zoff:0, clip:'', clips:{ idle:'', walk:'', run:'', attack:'' }, clipSpeed:{}, clipHold:{}, clipInPlace:{} };   // clip='' legacy single; clips = per-state overrides ('' = auto by name)
 const enemyModels = {};
 const enemyModelClips = {};   // typeKey -> animation clip names discovered when its model loads
 function enemyModelCfg(typeKey){
   const k = (typeKey && ENEMY_TYPES[typeKey]) ? typeKey : 'grunt';
   if(!enemyModels[k]) enemyModels[k] = Object.assign({}, ENEMY_MODEL0, { clips:{ idle:'', walk:'', run:'', attack:'' } });
   if(!enemyModels[k].clips) enemyModels[k].clips = { idle:'', walk:'', run:'', attack:'' };   // back-fill older configs
+  for(const _f of ['clipSpeed','clipHold','clipInPlace']) if(!enemyModels[k][_f]) enemyModels[k][_f]={};   // build 501: per-clip speed / hold / in-place maps
   return enemyModels[k];
 }
 function applyEnemyModelData(perType, legacy){   // perType = new map, legacy = old single config
   for(const k of ENEMY_TYPE_KEYS){
     const src = (perType && perType[k]) || legacy || {};
-    enemyModels[k] = { url: src.url||'', scale: src.scale||1, face: src.face||0, cr: src.cr||0, ch: src.ch||0, yoff: src.yoff||0, xoff: src.xoff||0, zoff: src.zoff||0, clip: src.clip||'', clips: Object.assign({ idle:'', walk:'', run:'', attack:'' }, src.clips||{}) };
+    enemyModels[k] = { url: src.url||'', scale: src.scale||1, face: src.face||0, cr: src.cr||0, ch: src.ch||0, yoff: src.yoff||0, xoff: src.xoff||0, zoff: src.zoff||0, clip: src.clip||'', clips: Object.assign({ idle:'', walk:'', run:'', attack:'' }, src.clips||{}), clipSpeed: Object.assign({}, src.clipSpeed||{}), clipHold: Object.assign({}, src.clipHold||{}), clipInPlace: Object.assign({}, src.clipInPlace||{}) };
   }
 }
 applyEnemyModelData(savedLevel && savedLevel.enemies, savedLevel && savedLevel.enemy);
@@ -8621,6 +8622,7 @@ function buildEnemyVisual(body){
     (gltf)=>{
       if(enemyModelCfg(body.userData.enemyType).url !== mc.url) return;   // the type's URL changed before this load resolved — drop the stale model
       enemyModelClips[body.userData.enemyType] = (gltf.animations||[]).map(a=>a.name||'');   // expose clip names to the editor
+      if(enemyModelClips[body.userData.enemyType].length && mc.clips){ for(const _st in mc.clips){ const _v=mc.clips[_st]; if(_v && enemyModelClips[body.userData.enemyType].indexOf(_v)<0) mc.clips[_st]=''; } }   // build 501: a different model arrived -> drop per-state picks that named the previous model's clips
       if(body.userData.visual){ body.remove(body.userData.visual); body.userData.visual=null; }
       const model = THREE.cloneSkinned(gltf.scene);
       const ty = ENEMY_TYPES[body.userData.enemyType] || ENEMY_TYPES.grunt;
@@ -10088,10 +10090,13 @@ function botDie(b, sx, sz){
 function botHurt(b, dmg, sx, sz){
   if(!b || b.dead) return false;
   b.hp -= dmg;
-  if(b.hp<=0){ botDie(b, sx, sz); return true; }
   const now=performance.now();
-  if(sx!=null && now>(b._evtCd||0) && b.mesh && b.mesh.userData.visual && b.mesh.userData.visual.userData.stateActions){
-    b._evt = { slot:'hit'+_reactDir(sx-b.pos.x, sz-b.pos.z, b.yaw), until:now+220 }; b._evtCd=now+300;
+  const _dn = (sx!=null) ? _reactDir(sx-b.pos.x, sz-b.pos.z, b.yaw) : null;
+  const _code = _dn ? (_dn==='Front'?0:_dn==='Back'?1:_dn==='Left'?2:3) : 0;
+  if(b.hp<=0){ if(_dn){ b._netHitDir=_code; b._netHitSeq=((b._netHitSeq||0)+1)&255; } botDie(b, sx, sz); return true; }   // killing blow: always record the death bearing so clients fall the right way (build 502)
+  if(_dn && now>(b._evtCd||0) && b.mesh && b.mesh.userData.visual && b.mesh.userData.visual.userData.stateActions){
+    b._evt = { slot:'hit'+_dn, until:now+220 }; b._evtCd=now+300;
+    b._netHitDir=_code; b._netHitSeq=((b._netHitSeq||0)+1)&255;   // bump in lockstep with the local flinch (cooldown-gated) so a client's flinch cadence matches the host's
   }
   return false;
 }
@@ -10267,6 +10272,10 @@ function updateBots(dt){
       else { b._spin=0; b.mesh.rotation.set(0, (b._dispYaw=turnToward(b._dispYaw==null?b.yaw:b._dispYaw, b.yaw, dt, TURN_RATE)), 0); }
       if(b.mesh.userData.hasModel && b.mesh.userData.visual && b.mesh.userData.visual.userData.stateActions){
         const mvx=b.pos.x-ox, mvz=b.pos.z-oz, md=Math.hypot(mvx,mvz);
+        { const _cy=(b._dispYaw==null?b.yaw:b._dispYaw); if(b._turnPrevYaw==null) b._turnPrevYaw=_cy; let _dyaw=_cy-b._turnPrevYaw; _dyaw=Math.atan2(Math.sin(_dyaw),Math.cos(_dyaw)); b._turnPrevYaw=_cy;   // build 504: turn-in-place from the smoothed display yaw (network-safe; no raw snapshot jumps)
+          const _evtBusy=b._evt && performance.now()<b._evt.until;
+          if(md<0.02 && !_evtBusy && !(b._fireAnimT&&performance.now()<b._fireAnimT)){ const _ts=_turnInPlaceSlot(b._turnSt||(b._turnSt={}), _dyaw, dt); if(_ts) b._evt={ slot:_ts, until:performance.now()+(_ts==='turn180'?420:340) }; }
+          else if(b._turnSt){ b._turnSt.turning=false; b._turnSt.accum=0; b._turnSt.last=''; } }   // left idle-stand -> disarm the burst so it re-arms cleanly
         let st;
         if(b._evt && performance.now()<b._evt.until) st=b._evt.slot;   // directional hit-react flinch (wins over fire/loco, below death)
         else if(b._fireAnimT && performance.now()<b._fireAnimT) st='attack';
@@ -11138,7 +11147,7 @@ function serializeWorld(){
   const P=[{ id:0, p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:owned.indexOf(curWep), g:_packGrip(), hp:Math.max(0,player.hp), j:player.onGround?0:1, sl:sliding?1:0, ad:(ads||padAds||touchAds)?1:0, cr:crouching?1:0, hd:_netHitDir, hs:_netHitSeq, n:NET.name||'Host' }];
   for(const id in NET.players){ const rp=NET.players[id];
     P.push({ id:+id, p:[rp.posEye.x,rp.posEye.y,rp.posEye.z], y:rp.yaw, pi:rp.pitch||0, w:rp.wep, g:(rp.grip?[rp.grip.x,rp.grip.y,rp.grip.z,rp.grip.yaw,rp.grip.pitch,rp.grip.roll,rp.grip.scale]:null), hp:rp.hp, j:rp.air?1:0, sl:rp.slide?1:0, ad:rp.ads?1:0, cr:rp.crouch?1:0, hd:rp.hd||0, hs:rp.hs||0, n:rp.name }); }
-  for(const b of bots){ if(b.dead) continue; P.push({ id:b.id, p:[b.pos.x,EYE,b.pos.z], y:b.yaw, pi:0, w:0, hp:b.hp, n:b.name }); }
+  for(const b of bots){ if(b.dead && !b._dying) continue; P.push({ id:b.id, p:[b.pos.x,EYE,b.pos.z], y:b.yaw, pi:0, w:0, hp:(b.dead?0:b.hp), hd:b._netHitDir||0, hs:b._netHitSeq||0, n:b.name }); }   // build 502: keep dead-but-dying bots in the snapshot (+ hd/hs) so clients play the directional death, then they prune on respawn
   const E=enemies.map(e=>({ id:e.id, p:[e.mesh.position.x,e.mesh.position.y,e.mesh.position.z] }));
   const C=coins.map(c=>({ id:c.id, p:[c.mesh.position.x,c.mesh.position.z] }));
   // dynamic physics props (position + orientation) so clients see them roll
@@ -11310,6 +11319,10 @@ function netInterpolate(dt){
       if(rp._fireT && performance.now() < rp._fireT) _st='attack';    // brief attack pose after a networked shot
       if(rp._hitT && performance.now() < rp._hitT) _st=['hitFront','hitBack','hitLeft','hitRight'][rp._hitDir||0];   // directional hit-react (wins over loco, below death)
       if(rp.hp!=null && rp.hp<=0) _st = (rp._hitDir===0?'dieBack':rp._hitDir===1?'dieFront':'die');   // directional death (front hit -> fall backward), else flat die
+      { const _cy=rp.mesh.rotation.y; if(rp._turnPrevYaw==null) rp._turnPrevYaw=_cy; let _dyaw=_cy-rp._turnPrevYaw; _dyaw=Math.atan2(Math.sin(_dyaw),Math.cos(_dyaw)); rp._turnPrevYaw=_cy;   // build 504: turn-in-place from the smoothed mesh yaw (network-safe)
+        if(_st==='idle'){ const _ts=_turnInPlaceSlot(rp._turnSt||(rp._turnSt={}), _dyaw, dt||0.016); if(_ts){ rp._turnT=performance.now()+(_ts==='turn180'?420:340); rp._turnSlot=_ts; } }
+        else if(rp._turnSt){ rp._turnSt.turning=false; rp._turnSt.accum=0; rp._turnSt.last=''; }
+        if(_st==='idle' && rp._turnT && performance.now()<rp._turnT) _st=rp._turnSlot; }   // play the turn-step one-shot while standing
       setEnemyAnimState(rp.mesh, _st);
     } }
   if(NET.mode==='client'){
@@ -12438,7 +12451,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 500 · 2026-06-17';
+const BUILD_VERSION = 'build 504 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13867,7 +13880,7 @@ bigmapCv.style.cssText='position:absolute;inset:0;width:100%;height:100%;touch-a
 bigmapEl.appendChild(bigmapCv);
 const _mapBar=document.createElement('div');
 _mapBar.style.cssText='position:absolute;left:50%;top:14px;transform:translateX(-50%);font:600 13px/1.4 system-ui,sans-serif;color:#cfe;letter-spacing:.03em;text-align:center;text-shadow:0 1px 3px #000;pointer-events:none;white-space:nowrap;';
-_mapBar.innerHTML='TACTICAL MAP &nbsp;\u00b7&nbsp; drag to pan &nbsp;\u00b7&nbsp; scroll to zoom &nbsp;\u00b7&nbsp; click to set a waypoint &nbsp;\u00b7&nbsp; right-click clears &nbsp;\u00b7&nbsp; <b>M</b>/<b>Esc</b> to close';
+_mapBar.innerHTML='TACTICAL MAP &nbsp;\u00b7&nbsp; drag to pan &nbsp;\u00b7&nbsp; scroll or \u00b1 to zoom &nbsp;\u00b7&nbsp; tap to set a waypoint';
 bigmapEl.appendChild(_mapBar);
 document.body.appendChild(bigmapEl);
 const bigmapCtx=bigmapCv.getContext('2d');
@@ -13950,6 +13963,20 @@ bigmapEl.addEventListener('pointermove', e=>{ if(!_mapDown) return; const v=_map
 bigmapEl.addEventListener('pointerup', e=>{ if(!_mapDown) return; const moved=_mapDown.moved; _mapDown=null; if(!moved){ const w=_mapEventWorld(e).w; mapWaypoint={ x:w[0], z:w[1] }; } });
 bigmapEl.addEventListener('contextmenu', e=>{ if(mapOpen){ e.preventDefault(); mapWaypoint=null; } });
 bigmapEl.addEventListener('wheel', e=>{ if(!mapOpen) return; e.preventDefault(); const before=_mapEventWorld(e).w; mapZoom=Math.max(MAP_ZMIN, Math.min(MAP_ZMAX, mapZoom*(1+Math.sign(e.deltaY)*0.12))); const after=_mapEventWorld(e).w; mapPanX+=before[0]-after[0]; mapPanZ+=before[1]-after[1]; }, {passive:false});
+
+// touch-friendly controls (no wheel / Esc / right-click on mobile): close, zoom in/out, clear waypoint.
+// pointerdown is stopped on each so tapping a button never starts a pan or drops a waypoint underneath it.
+function _mapBtn(txt, title){ const b=document.createElement('button'); b.textContent=txt; if(title) b.title=title; b.style.cssText='pointer-events:auto;min-width:46px;height:46px;padding:0 14px;background:rgba(12,26,24,0.92);color:#cfe;border:1px solid rgba('+UI_ACCENT_RGB+',0.5);border-radius:9px;font:600 19px/1 system-ui,sans-serif;cursor:pointer;touch-action:manipulation;'; b.addEventListener('pointerdown', e=>e.stopPropagation()); return b; }
+const _mapClose=_mapBtn('\u2715','Close map'); _mapClose.style.position='absolute'; _mapClose.style.top='12px'; _mapClose.style.right='14px'; _mapClose.onclick=closeBigMap; bigmapEl.appendChild(_mapClose);
+const _mapCtl=document.createElement('div'); _mapCtl.style.cssText='position:absolute;left:50%;bottom:18px;transform:translateX(-50%);display:flex;gap:10px;pointer-events:none;';
+const _zOut=_mapBtn('\u2212','Zoom out'); _zOut.onclick=()=>{ mapZoom=Math.min(MAP_ZMAX, mapZoom*1.25); };
+const _zIn=_mapBtn('+','Zoom in'); _zIn.onclick=()=>{ mapZoom=Math.max(MAP_ZMIN, mapZoom*0.8); };
+const _wpClear=_mapBtn('\u232b','Clear waypoint'); _wpClear.onclick=()=>{ mapWaypoint=null; };
+_mapCtl.appendChild(_zOut); _mapCtl.appendChild(_zIn); _mapCtl.appendChild(_wpClear); bigmapEl.appendChild(_mapCtl);
+
+// tapping (or clicking) the minimap expands it into the full map — the mobile entry point, and a handy desktop shortcut
+miniCanvas.style.cursor='pointer';
+miniCanvas.addEventListener('click', ()=>{ if(!touchEditMode && gameOn && !editorOpen && !shopOpen && !chatOpen && !mapOpen && !paused) openBigMap(); });
 
 let score = 0, wave = 1, toSpawn = 0;
 let surviveLeft = 0;   // seconds left in a Survival-objective run (also the Defend hold countdown)
@@ -15930,7 +15957,7 @@ function serializeLevel(){
     world:   Object.assign({}, worldCfg),
     chest:   { url: chestModelUrl, scale: chestModelScale, randomOff: !randomLootOn },
     coin:    { url: coinCfg.url, scale: coinCfg.scale, on: coinCfg.on !== false },
-    enemies: ENEMY_TYPE_KEYS.reduce((a,k)=>{ const m=enemyModelCfg(k); a[k]={ url:m.url, scale:m.scale, face:m.face, cr:m.cr, ch:m.ch, yoff:m.yoff, xoff:m.xoff, zoff:m.zoff, clip:m.clip, clips:Object.assign({}, m.clips) }; return a; }, {}),
+    enemies: ENEMY_TYPE_KEYS.reduce((a,k)=>{ const m=enemyModelCfg(k); a[k]={ url:m.url, scale:m.scale, face:m.face, cr:m.cr, ch:m.ch, yoff:m.yoff, xoff:m.xoff, zoff:m.zoff, clip:m.clip, clips:Object.assign({}, m.clips), clipSpeed:Object.assign({}, m.clipSpeed||{}), clipHold:Object.assign({}, m.clipHold||{}), clipInPlace:Object.assign({}, m.clipInPlace||{}) }; return a; }, {}),
     props:   propModels.filter(o=>o && !o.userData.runtime).map(propEntry),
     lights:  lightModels.map(g=>{ const L=g.userData.light; return { color: lightHex(g), intensity:L.intensity, distance:L.distance, t:[g.position.x,g.position.y,g.position.z] }; }),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
@@ -17152,10 +17179,25 @@ function renderEditorFields(){
     _animSlotFolds(eHost, 'eAnim', { 'Idle & standing':true, 'Locomotion (ground)':true }, (foldBody, _slot)=>{
       const stKey=_slot.k, stLabel=_slot.l;
       const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0;';
-      const sp=document.createElement('span'); sp.textContent=stLabel; sp.style.minWidth='86px';
+      const sp=document.createElement('span'); sp.textContent=stLabel; sp.style.cssText='min-width:86px;cursor:pointer;text-decoration:underline dotted;text-decoration-color:#3a5a52;text-underline-offset:2px;'; sp.title='Click to preview this clip';
+      sp.onclick=(e)=>{ e.preventDefault(); e.stopPropagation(); if(typeof previewEnemy!=='undefined' && previewEnemy) setEnemyAnimState(previewEnemy, stKey); };   // click the name to preview (mirrors the player tab)
       const sel=document.createElement('select'); sel.id='edEnemyClip_'+stKey; sel.dataset.state=stKey; sel.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
       sel.onchange=()=>{ mc.clips[stKey]=sel.value; refreshEnemyVisuals(); };
-      row.appendChild(sp); row.appendChild(sel); foldBody.appendChild(row);
+      const spd=document.createElement('input'); spd.type='number'; spd.min='0.1'; spd.max='4'; spd.step='0.05'; spd.title='Playback speed (1 = normal)';
+      spd.value=String((mc.clipSpeed && mc.clipSpeed[stKey]!=null) ? mc.clipSpeed[stKey] : 1);
+      spd.style.cssText='flex:0 0 52px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 4px;font-size:11px;';
+      spd.onchange=()=>{ if(!mc.clipSpeed) mc.clipSpeed={}; const v=Math.max(0.1,Math.min(4,parseFloat(spd.value)||1)); mc.clipSpeed[stKey]=v; spd.value=String(v); refreshEnemyVisuals(); };
+      const holdWrap=document.createElement('label'); holdWrap.title='Hold the last frame instead of looping (good for Aim / Death)'; holdWrap.style.cssText='flex:0 0 auto;display:flex;align-items:center;gap:3px;font-size:10px;color:#7fb8a6;cursor:pointer;';
+      const hold=document.createElement('input'); hold.type='checkbox'; hold.style.cssText='width:13px;height:13px;accent-color:var(--accent);';
+      hold.checked = (mc.clipHold && mc.clipHold[stKey]!=null) ? !!mc.clipHold[stKey] : (stKey==='die');
+      hold.onchange=()=>{ if(!mc.clipHold) mc.clipHold={}; mc.clipHold[stKey]=hold.checked; refreshEnemyVisuals(); };
+      const hl=document.createElement('span'); hl.textContent='hold'; holdWrap.appendChild(hold); holdWrap.appendChild(hl);
+      const ipWrap=document.createElement('label'); ipWrap.title='Lock this clip in place \u2014 cancels root-motion forward travel (tick it for Walk / Run / strafe clips that drift)'; ipWrap.style.cssText='flex:0 0 auto;display:flex;align-items:center;gap:3px;font-size:10px;color:#7fb8a6;cursor:pointer;';
+      const ip=document.createElement('input'); ip.type='checkbox'; ip.style.cssText='width:13px;height:13px;accent-color:var(--accent);';
+      ip.checked = !!(mc.clipInPlace && mc.clipInPlace[stKey]);
+      ip.onchange=()=>{ if(!mc.clipInPlace) mc.clipInPlace={}; mc.clipInPlace[stKey]=ip.checked; refreshEnemyVisuals(); };
+      const ipl=document.createElement('span'); ipl.textContent='in place'; ipWrap.appendChild(ip); ipWrap.appendChild(ipl);
+      row.appendChild(sp); row.appendChild(sel); row.appendChild(spd); row.appendChild(holdWrap); row.appendChild(ipWrap); foldBody.appendChild(row);
     });
     refreshEnemyClipOptions();
     // collider radius — the WIDTH of the damage hit-cylinder shots test against (0 = auto-fit to the model). Movement spacing is separate + automatic.
