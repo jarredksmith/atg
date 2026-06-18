@@ -12451,7 +12451,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 504 · 2026-06-17';
+const BUILD_VERSION = 'build 505 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13919,13 +13919,8 @@ function drawBigMap(){
   if(!mapOpen) return;
   const v=_mapV(), ctx=bigmapCtx, W=v.W, H=v.H;
   ctx.clearRect(0,0,W,H);
-  // world grid every 10u
-  if(10*v.scale>6){ ctx.lineWidth=1; ctx.strokeStyle='rgba('+UI_ACCENT_RGB+',0.07)';
-    const wl=mapPanX-(W/2)/v.scale, wr=mapPanX+(W/2)/v.scale, wt=mapPanZ-(H/2)/v.scale, wb=mapPanZ+(H/2)/v.scale;
-    for(let gx=Math.ceil(wl/10)*10; gx<=wr; gx+=10){ const x=_w2s(gx,0,v)[0]; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
-    for(let gz=Math.ceil(wt/10)*10; gz<=wb; gz+=10){ const y=_w2s(0,gz,v)[1]; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); } }
-  // arena bound
-  { const a=_w2s(-ARENA,-ARENA,v), b=_w2s(ARENA,ARENA,v); ctx.strokeStyle='rgba('+UI_ACCENT_RGB+',0.35)'; ctx.lineWidth=2; ctx.strokeRect(a[0],a[1],b[0]-a[0],b[1]-a[1]); }
+  // arena: a solid fill (no grid) with its boundary on top; colliders + blips draw over it
+  { const a=_w2s(-ARENA,-ARENA,v), b=_w2s(ARENA,ARENA,v); ctx.fillStyle='#0d171d'; ctx.fillRect(a[0],a[1],b[0]-a[0],b[1]-a[1]); ctx.strokeStyle='rgba('+UI_ACCENT_RGB+',0.35)'; ctx.lineWidth=2; ctx.strokeRect(a[0],a[1],b[0]-a[0],b[1]-a[1]); }
   // collider footprints (walls / solid props) = the level's bones
   ctx.fillStyle='rgba(150,180,200,0.15)'; ctx.strokeStyle='rgba(150,180,200,0.3)'; ctx.lineWidth=1;
   for(const g of _mapGeo){ const a=_w2s(g[0],g[1],v), b=_w2s(g[2],g[3],v); const x=Math.min(a[0],b[0]),y=Math.min(a[1],b[1]),w=Math.abs(b[0]-a[0]),h=Math.abs(b[1]-a[1]); if(w<1.5&&h<1.5) continue; ctx.fillRect(x,y,w,h); ctx.strokeRect(x,y,w,h); }
