@@ -12818,7 +12818,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 540 · 2026-06-17';
+const BUILD_VERSION = 'build 541 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15593,6 +15593,7 @@ function loop(){
     // outside melee so they crowd the player instead of bulldozing through.
     for(const en of enemies){
       en.mesh.visible = !hideEn;
+      en._wantMove = false;   // build 541: set true only when the enemy actually tries to translate (chase/close); stuck recovery keys off THIS, not _chase, so an enemy attacking at the player or holding standoff is never treated as "stuck"
       let near=players[0], nd=1e9;
       for(const pl of players){ const d=Math.hypot(pl.pos.x-en.mesh.position.x, pl.pos.z-en.mesh.position.z); if(d<nd){ nd=d; near=pl; } }
       en._near = near; en._dist = nd;
@@ -15614,10 +15615,11 @@ function loop(){
       if(en.ranged && td.chase){
         // hold a standoff range: close in if too far, back off if the player crowds it, else hold + shoot
         const toPx = near.pos.x - en.mesh.position.x, toPz = near.pos.z - en.mesh.position.z, pd = Math.hypot(toPx,toPz)||1;
-        if(pd > en.standoff + 1){ en.mesh.position.x += toPx/pd*en.speed*dt; en.mesh.position.z += toPz/pd*en.speed*dt; }
-        else if(pd < en.standoff*0.6){ en.mesh.position.x -= toPx/pd*en.speed*dt; en.mesh.position.z -= toPz/pd*en.speed*dt; }
+        if(pd > en.standoff + 1){ en._wantMove=true; en.mesh.position.x += toPx/pd*en.speed*dt; en.mesh.position.z += toPz/pd*en.speed*dt; }
+        else if(pd < en.standoff*0.6){ en._wantMove=true; en.mesh.position.x -= toPx/pd*en.speed*dt; en.mesh.position.z -= toPz/pd*en.speed*dt; }
       } else if(d > stopAt){
         // beeline straight at the target — the pre-531 behavior that always produces motion in the open.
+        en._wantMove = true;
         let _mvx=dx/d, _mvz=dz/d;
         // build 534: route around walls via the nav grid ONLY when the straight line is actually blocked
         // (no line of sight). Using a cell-center path on every chase could stall an open-field pursuit, and
@@ -15731,13 +15733,13 @@ function loop(){
         en.cooldown = 0.8; en._attackT = nowMs + 550;   // brief attack-animation window
         near.hurt(en.dmg || 9, en.mesh.position.x, en.mesh.position.z);   // routes to the local player or, in co-op, the remote one
       }
-      // build 540: stuck recovery — a chasing enemy that stops making progress is wedged on a rock/wall. The
-      // Phase-1 nudge wall-follows around it; if it stays jammed for a few seconds, hop to a fresh clear spawn
-      // so it can't sit pinned in a tiny pocket forever (same safety the MP bots have).
-      if(en._chase){
+      // build 540/541: stuck recovery — only while the enemy is actively trying to CLOSE distance and not
+      // making progress (wedged on a rock). _wantMove excludes an enemy attacking at the player or a ranged
+      // enemy holding standoff, which are legitimately still. The Phase-1 nudge wall-follows around the snag.
+      // No teleport: yanking a co-op enemy to a random spawn made them vanish in front of the player.
+      if(en._chase && en._wantMove){
         const _mv = Math.hypot(en.mesh.position.x - (en._spx!=null?en._spx:en.mesh.position.x), en.mesh.position.z - (en._spz!=null?en._spz:en.mesh.position.z));
         if(_mv < (en.speed||3)*dt*0.3){ en._stuckT=(en._stuckT||0)+dt; } else { en._stuckT=0; en._stuckSide=0; }
-        if(en._stuckT>3.5 && typeof randomSpawn==='function'){ const sp=randomSpawn(); en.mesh.position.set(sp.x,(sp.y||0)+1.4,sp.z); en.vy=0; en.evx=0; en.evz=0; en.grounded=true; en._stuckT=0; en._stuckSide=0; }
       } else { en._stuckT=0; en._stuckSide=0; }
       en._spx = en.mesh.position.x; en._spz = en.mesh.position.z;
       // drive the animation state machine: attack window > running (chasing) > walking (patrol) > idle
