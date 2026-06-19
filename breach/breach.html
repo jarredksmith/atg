@@ -286,7 +286,12 @@
   #overlay {
     position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column;
     align-items: center; justify-content: center; text-align: center;
-    background: radial-gradient(circle at 50% 40%, rgba(10,30,28,.6), rgba(3,5,8,.96));
+    background: radial-gradient(circle at 50% 40%, rgba(10,30,28,.42), rgba(3,5,8,.9));
+    /* build 550: heavily blur the live scene behind the menu so it reads as abstract shapes + colors, not a
+       legible level. The gradient sits on top of the blur as a vignette that keeps the title/buttons crisp.
+       Only runs while the overlay is visible (menu / death / win); gameplay hides it via .hidden, so no cost. */
+    -webkit-backdrop-filter: blur(32px) saturate(1.15);
+    backdrop-filter: blur(32px) saturate(1.15);
     pointer-events: auto;
   }
   #overlay h1 {
@@ -12902,7 +12907,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 549 · 2026-06-19';
+const BUILD_VERSION = 'build 550 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
