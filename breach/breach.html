@@ -12818,7 +12818,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 541 · 2026-06-17';
+const BUILD_VERSION = 'build 542 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15625,13 +15625,19 @@ function loop(){
         // (no line of sight). Using a cell-center path on every chase could stall an open-field pursuit, and
         // a waypoint landing on the enemy's own cell made _pl fall back to 1, zeroing the step and pinning
         // it at spawn. When we can see the target, just walk at it; only path when it's behind cover.
-        if(td.chase && !td.see && typeof _botFollowPath==='function'){
+        if(td.chase && typeof _botFollowPath==='function'){   // build 542: route around walls whether or not the target is visible — a clear sightLINE is not a clear WALKING path on a built level. The _pl>0.5 guard still keeps a self-cell waypoint from zeroing the step.
           const _wp=_botFollowPath(en._nav||(en._nav={ pos:en.mesh.position }), td.tx, td.tz, dt);
           if(_wp){ const _pdx=_wp.x-en.mesh.position.x, _pdz=_wp.z-en.mesh.position.z, _pl=Math.hypot(_pdx,_pdz);
-            if(_pl > 0.5){ _mvx=_pdx/_pl; _mvz=_pdz/_pl; } }   // ignore a waypoint we're basically already on -> keep the beeline so we never freeze
+            if(_pl > 0.5){ _mvx=_pdx/_pl; _mvz=_pdz/_pl; } }
         }
-        if(en._stuckT>0.6 && td.chase){ if(!en._stuckSide) en._stuckSide=((en.id%2)?1:-1); const _px=-_mvz*en._stuckSide, _pz=_mvx*en._stuckSide; _mvx=_mvx*0.5+_px*1.2; _mvz=_mvz*0.5+_pz*1.2; const _l=Math.hypot(_mvx,_mvz)||1; _mvx/=_l; _mvz/=_l; }   // build 540: wedged on a rock/wall -> wall-follow to one consistent side until it slides clear
-        en.mesh.position.x += _mvx*spd*dt; en.mesh.position.z += _mvz*spd*dt;
+        if(en._stuckT>0.6 && td.chase){ if(!en._stuckSide) en._stuckSide=((en.id%2)?1:-1); const _px=-_mvz*en._stuckSide, _pz=_mvx*en._stuckSide; _mvx=_mvx*0.5+_px*1.2; _mvz=_mvz*0.5+_pz*1.2; const _l=Math.hypot(_mvx,_mvz)||1; _mvx/=_l; _mvz/=_l; }   // build 540: wedged -> wall-follow to one side until it slides clear
+        // build 542: wall-aware step (same as the MP bots) — try the full move, else slide along whichever axis
+        // is open, instead of walking head-on into a wall and being shoved straight back to the same spot by
+        // the obstacle resolver (which has no slide). This was the "blocked by collision / never leaves spawn".
+        const _estep=spd*dt, _efy=en.mesh.position.y-1.4, _ecx=en.mesh.position.x+_mvx*_estep, _ecz=en.mesh.position.z+_mvz*_estep;
+        if(typeof clearAt!=='function' || clearAt(_ecx,_ecz,_efy)){ en.mesh.position.x=_ecx; en.mesh.position.z=_ecz; }
+        else if(clearAt(_ecx,en.mesh.position.z,_efy)){ en.mesh.position.x=_ecx; }
+        else if(clearAt(en.mesh.position.x,_ecz,_efy)){ en.mesh.position.z=_ecz; }
       }
       }
     }
