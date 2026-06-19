@@ -10334,6 +10334,7 @@ let _repathBudget = 0;   // A* searches allowed per frame (reset each updateBots
 // round-robins fairly. Scaling is graceful: more actors just means slightly staler perception, not lower FPS.
 let _losBudget = 0;      // LOS (segmentBlocked / _botLOS) raycasts allowed per frame across all AI
 let _groundBudget = 0;   // ground (groundHeightAt) raycasts allowed per frame; airborne actors bypass it (landing must stay frame-accurate)
+let _pathBudget = 0;     // build 553: "is the straight walking path blocked?" raycasts allowed per frame (enemy beeline-vs-pathfind decision)
 function _setCountdown(html){
   let bg=document.getElementById('matchCountdownBg'), el=document.getElementById('matchCountdown');
   if(html==null){ if(bg) bg.style.display='none'; if(el) el.style.display='none'; return; }
@@ -12933,7 +12934,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 552 · 2026-06-19';
+const BUILD_VERSION = 'build 553 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15703,7 +15704,7 @@ function loop(){
     // enemies beeline until it's ready). Bots are PvP-only, so nothing else competes for this budget here.
     if(!NAV.built){ if(!NAV.building && typeof navBuildBegin==='function') navBuildBegin(); if(typeof navBuildStep==='function') navBuildStep(5); }
     _repathBudget = 3;   // cap A* searches per tick so a frame never stalls on many enemy repaths at once
-    _losBudget = 5; _groundBudget = 5;   // build 547: per-frame LOS + ground raycast caps. A wave spawns many enemies whose LOS/ground caches all come due on the same frame; these stop that frame from firing dozens of raycasts at once (the wave-framerate spike). Over-budget enemies reuse the cached value one more frame; the jittered intervals stagger them after ~1s.
+    _losBudget = 5; _groundBudget = 5; _pathBudget = 5;   // build 547/553: per-frame LOS + ground + direct-path raycast caps. A wave spawns many enemies whose caches all come due on the same frame; these stop that frame from firing dozens of raycasts at once (the wave-framerate spike). Over-budget enemies reuse the cached value one more frame; the jittered intervals stagger them after ~1s.
     // Phase 1 — behavior: hunt chases anywhere; patrol/hold use detection + leash and otherwise patrol
     // their area or guard their post. Movement aims at the state's target point; chasing stops just
     // outside melee so they crowd the player instead of bulldozing through.
@@ -15737,11 +15738,19 @@ function loop(){
         // beeline straight at the target — the pre-531 behavior that always produces motion in the open.
         en._wantMove = true;
         let _mvx=dx/d, _mvz=dz/d;
-        // build 534: route around walls via the nav grid ONLY when the straight line is actually blocked
-        // (no line of sight). Using a cell-center path on every chase could stall an open-field pursuit, and
-        // a waypoint landing on the enemy's own cell made _pl fall back to 1, zeroing the step and pinning
-        // it at spawn. When we can see the target, just walk at it; only path when it's behind cover.
-        if(td.chase && typeof _botFollowPath==='function'){   // build 542: route around walls whether or not the target is visible — a clear sightLINE is not a clear WALKING path on a built level. The _pl>0.5 guard still keeps a self-cell waypoint from zeroing the step.
+        // build 553: only route through the nav grid when the straight WALKING path is actually blocked. On an
+        // open arena the direct line is clear, so beeline straight at the target from whatever angle the enemy
+        // started in. Build 542 made enemies ALWAYS path, which traced the nav-grid edges in toward the player
+        // instead of charging — the behavior you saw on the open grid. The gate is a LOW sightline (knee height
+        // above the enemy's ground) so a wall you can see OVER but can't walk THROUGH still forces a route. The
+        // ray is cached, throttled (~6x/sec, jittered), and per-frame budgeted like the other AI raycasts.
+        if((en._pbT==null || nowMs-en._pbT > (en._pbIv||150)) && (typeof _pathBudget==='undefined' || _pathBudget>0)){
+          if(typeof _pathBudget!=='undefined') _pathBudget--;
+          en._pbT=nowMs; en._pbIv=130+Math.random()*60;
+          const _kneeY=(en._groundY!=null?en._groundY:0)+0.4;
+          en._pathBlk = (typeof segmentBlocked==='function') ? segmentBlocked(en.mesh.position.x, en.mesh.position.z, td.tx, td.tz, _kneeY) : false;
+        }
+        if(td.chase && en._pathBlk && typeof _botFollowPath==='function'){   // path only around real walls; open ground stays a straight charge
           const _wp=_botFollowPath(en._nav||(en._nav={ pos:en.mesh.position }), td.tx, td.tz, dt);
           if(_wp){ const _pdx=_wp.x-en.mesh.position.x, _pdz=_wp.z-en.mesh.position.z, _pl=Math.hypot(_pdx,_pdz);
             if(_pl > 0.5){ _mvx=_pdx/_pl; _mvz=_pdz/_pl; } }
