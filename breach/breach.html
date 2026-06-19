@@ -8982,8 +8982,9 @@ function enemyDesiredTarget(en, px, pz, dist, now){
   // build 546: segmentBlocked scans every collider — refresh LOS ~9x/sec per enemy and cache it (the bots do
   // the same), instead of raycasting every frame. Unthrottled, a wave of enemies was O(enemies x colliders)
   // per frame and a big part of the single-digit wave framerate.
-  if(en._losT==null || now - en._losT > 110){
-    en._losT = now;
+  if((en._losT==null || now - en._losT > (en._losIv||110)) && (typeof _losBudget==='undefined' || _losBudget>0)){
+    if(typeof _losBudget!=='undefined') _losBudget--;   // build 547: also capped per frame so a freshly-spawned wave can't raycast every enemy's sightline on the same frame
+    en._losT = now; en._losIv = 100 + Math.random()*40;   // jitter the interval so the wave de-clusters after the budget first staggers it, instead of all coming due together again
     en._seesC = (Math.abs(pEyeY - eY) < 3.0) &&
                 (typeof segmentBlocked!=='function' || !segmentBlocked(en.mesh.position.x, en.mesh.position.z, px, pz, (eY + pEyeY) * 0.5));   // build 533: sightline at the real surface eye-level
   }
@@ -10301,6 +10302,16 @@ function botHurt(b, dmg, sx, sz){
 }
 let matchWarmup = 0;
 let _repathBudget = 0;   // A* searches allowed per frame (reset each updateBots tick) so a frame never stalls on many repaths at once   // pre-match build/countdown window (host bot matches): bots are held inert until the nav grid is ready
+// build 547: per-frame raycast budgets shared by the bot tick AND the enemy tick (they never run together —
+// bots are PvP-only, enemies are PvE-only — so each subsystem gets the full budget). The per-entity time
+// throttles added in 546 cap how OFTEN one actor raycasts; these cap how many actors raycast in the SAME
+// frame. That matters because a wave spawns N enemies whose LOS/ground caches are all "due" on the same
+// frame (every _losT/_grT starts null), so without a per-frame cap the throttle still let a single frame
+// fire dozens of raycasts at once — the wave-framerate spike. Over-budget actors reuse their cached value
+// one more frame; the jittered per-entity intervals stagger their due-times after the first second, so this
+// round-robins fairly. Scaling is graceful: more actors just means slightly staler perception, not lower FPS.
+let _losBudget = 0;      // LOS (segmentBlocked / _botLOS) raycasts allowed per frame across all AI
+let _groundBudget = 0;   // ground (groundHeightAt) raycasts allowed per frame; airborne actors bypass it (landing must stay frame-accurate)
 function _setCountdown(html){
   let bg=document.getElementById('matchCountdownBg'), el=document.getElementById('matchCountdown');
   if(html==null){ if(bg) bg.style.display='none'; if(el) el.style.display='none'; return; }
@@ -10330,6 +10341,7 @@ function updateBots(dt){
   if(NET.mode!=='host' || !pvpMode() || !gameOn || !bots.length) return;
   if(dt>0.05) dt=0.05;   // clamp the timestep: a frame hitch must never let a bot teleport across the map
   _repathBudget = 3;   // at most 3 path searches this frame; the rest keep their current route until a slot frees
+  _losBudget = 5; _groundBudget = 5;   // build 547: per-frame raycast caps (see decls). Bots are few, but their LOS can align on a frame and their ground raycast now uses a cache below; this keeps both flat.
   if(!NAV.built){ if(!NAV.building && typeof navBuildBegin==='function') navBuildBegin(); if(typeof navBuildStep==='function') navBuildStep(5); }   // build the nav grid incrementally (no match-start freeze); bots beeline until ready
   const D=botDiff(), koth = NET.gameMode==='cp', lim=ARENA-2, spd=SPEED*D.spd;
   for(const b of bots){
@@ -10349,7 +10361,7 @@ function updateBots(dt){
     b.aiT-=dt; if(b._jumpCd>0) b._jumpCd-=dt;
     // ---- perception: can this bot currently SEE its target? track last-known position (lkp) ----
     b._losT=(b._losT||0)-dt;
-    if(b._losT<=0){ b._los = !!(tgt && _botLOS(b.pos.x,b.pos.z, tgt.pos.x,tgt.pos.z, b.pos.y)); b._losT=0.1+Math.random()*0.05; }   // LOS is a raycast: refresh ~10x/s, not every frame
+    if(b._losT<=0 && _losBudget>0){ _losBudget--; b._los = !!(tgt && _botLOS(b.pos.x,b.pos.z, tgt.pos.x,tgt.pos.z, b.pos.y)); b._losT=0.1+Math.random()*0.05; }   // LOS is a raycast: refresh ~10x/s, not every frame, AND no more than _losBudget bots in a single frame (build 547). When over budget we keep b._los and leave b._losT<=0 so it retries the moment a slot frees.
     const hasLOS = b._los && !!tgt;
     const tgtDist = tgt ? Math.hypot(tgt.pos.x-b.pos.x, tgt.pos.z-b.pos.z) : Infinity;
     if(hasLOS && tgt){ b.lkp = b.lkp||{x:0,z:0}; b.lkp.x=tgt.pos.x; b.lkp.z=tgt.pos.z; b.lkpFresh=2.5; b.sawTgt=true; }   // refresh while visible
@@ -10458,7 +10470,20 @@ function updateBots(dt){
       const kd=Math.max(0, 1-((b.grounded?6:0.6))*dt); b.evx*=kd; b.evz*=kd;
       if(Math.abs(b.evx)<0.05) b.evx=0; if(Math.abs(b.evz)<0.05) b.evz=0;
     }
-    { const groundY=(typeof groundHeightAt==='function')?groundHeightAt(b.pos.x,b.pos.z,b.pos.y,_gSurf):terrainHeightAt(b.pos.x,b.pos.z);   // land/stand with the SAME walkable-floor + ramp logic as the player (RAMP_RISE), so bots can stand & climb anywhere the player can — fixes bots dropping off a model's floor onto the terrain underneath and getting trapped
+    { let groundY;
+      // build 547: the ground raycast used to fire every frame for every bot — the steady-state cost that
+      // dipped 7-bot matches into the teens. Cache it like the enemies do (546): a grounded bot standing or
+      // strafing on the same cell reuses the value. Always refresh while airborne so the landing snap stays
+      // frame-accurate, and on a cell-move so a bot crossing terrain tracks it; only the idle periodic
+      // refresh draws from the per-frame ground budget. Interval is jittered so bots don't re-cluster.
+      const _bAir = (b.grounded===false) || Math.abs(b.vy||0) > 0.01;
+      const _bGMoved = Math.abs(b.pos.x-(b._grX==null?1e9:b._grX)) > 0.6 || Math.abs(b.pos.z-(b._grZ==null?1e9:b._grZ)) > 0.6;
+      if(_bAir || _bGMoved || b._grT==null || ((performance.now()-b._grT) > (b._grIv||110) && _groundBudget>0)){
+        if(!_bAir && !_bGMoved && b._grT!=null) _groundBudget--;   // airborne / cell-move / first-touch are mandatory (free); the periodic standing refresh is what we cap
+        b._grT=performance.now(); b._grIv=100+Math.random()*40; b._grX=b.pos.x; b._grZ=b.pos.z;
+        b._groundY=(typeof groundHeightAt==='function')?groundHeightAt(b.pos.x,b.pos.z,b.pos.y,_gSurf):terrainHeightAt(b.pos.x,b.pos.z);   // land/stand with the SAME walkable-floor + ramp logic as the player (RAMP_RISE), so bots can stand & climb anywhere the player can — fixes bots dropping off a model's floor onto the terrain underneath and getting trapped
+      }
+      groundY = (b._groundY!=null) ? b._groundY : (b.pos.y);
       if(b.pos.y>groundY+0.04 || (b.vy||0)>0){ b.vy=(b.vy||0)-GRAV*dt; b.pos.y+=b.vy*dt; if(b.vy<=0 && b.pos.y<=groundY){ const _imp=-(b.vy||0); b.pos.y=groundY; b.vy=0; b.grounded=true; b._jumpCarry=false; if(gameCfg.fallDamage && gameCfg.fallDamage.on && gameCfg.fallDamage.ai && !b.dead){ const dmg=_fallDamageFor(_imp); if(dmg>0.5){ botHurt(b, dmg, null, null); } } } else b.grounded=false; }
       else { b.pos.y=groundY; b.vy=0; b.grounded=true; b._jumpCarry=false; }
     }
@@ -11354,7 +11379,7 @@ function makeRemotePlayer(name, cfg){
 }
 function ensureRemotePlayer(id, name){
   let rp=NET.players[id];
-  if(!rp){ const cfg=(NET.charById&&NET.charById[id])||null; rp={ mesh:makeRemotePlayer(name||('P'+id), cfg), posEye:new THREE.Vector3(), target:new THREE.Vector3(), yaw:0, pitch:0, hp:100, wep:0, name:name||('P'+id), modelCfg:cfg }; NET.players[id]=rp; if(teamMode() && NET.teams[id]!=null) tintAvatar(rp.mesh, NET.teams[id]); }
+  if(!rp){ const cfg=(NET.charById&&NET.charById[id])||null; rp={ mesh:makeRemotePlayer(name||('P'+id), cfg), posEye:new THREE.Vector3(), target:new THREE.Vector3(), yaw:0, pitch:0, hp:100, wep:0, name:name||('P'+id), modelCfg:cfg, mt:-1 }; NET.players[id]=rp; if(teamMode() && NET.teams[id]!=null) tintAvatar(rp.mesh, NET.teams[id]); }
   return rp;
 }
 function removeRemotePlayer(id){ const rp=NET.players[id]; if(rp){ scene.remove(rp.mesh); delete NET.players[id]; } }
@@ -11362,7 +11387,7 @@ function setRemoteState(id, msg){
   const rp=ensureRemotePlayer(id, msg.n);
   rp.posEye.set(msg.p[0], msg.p[1], msg.p[2]);
   rp.target.set(msg.p[0], Math.max(0, msg.p[1]-EYE), msg.p[2]);   // feet on floor
-  rp.yaw = msg.y; rp.pitch = msg.pi||0; if(msg.hp!=null) rp.hp=msg.hp; if(msg.w!=null) rp.wep=msg.w; if(msg.g) rp.grip=_unpackGrip(msg.g); rp.air = !!msg.j; rp.slide = !!msg.sl; rp.ads = !!msg.ad; rp.crouch = !!msg.cr; rp.hd = msg.hd||0; rp.hs = msg.hs||0;
+  rp.yaw = msg.y; rp.pitch = msg.pi||0; if(msg.hp!=null) rp.hp=msg.hp; if(msg.w!=null) rp.wep=msg.w; if(msg.g) rp.grip=_unpackGrip(msg.g); rp.air = !!msg.j; rp.slide = !!msg.sl; rp.ads = !!msg.ad; rp.crouch = !!msg.cr; rp.hd = msg.hd||0; rp.hs = msg.hs||0; rp.mt = (msg.mt!=null?msg.mt:-1);   // build 548: which turret this player is manning (-1 = none)
 }
 
 // ---- client-side display meshes for the host's enemies & coins ----
@@ -11388,9 +11413,9 @@ function upsertCoinMesh(c){
 function _packGrip(){ const wk=(typeof curWep!=='undefined'?curWep:'rifle'); const g=activeCharGrip(wk)||tpGunGrip(wk); return [ +(+g.x).toFixed(3), +(+g.y).toFixed(3), +(+g.z).toFixed(3), +(+g.yaw).toFixed(3), +(+g.pitch).toFixed(3), +(+g.roll).toFixed(3), +((g.scale==null?1:+g.scale)).toFixed(3) ]; }
 function _unpackGrip(a){ return (a && a.length>=7) ? { x:+a[0], y:+a[1], z:+a[2], yaw:+a[3], pitch:+a[4], roll:+a[5], scale:+a[6] } : null; }
 function serializeWorld(){
-  const P=[{ id:0, p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:curWep, g:_packGrip(), hp:Math.max(0,player.hp), j:player.onGround?0:1, sl:sliding?1:0, ad:(ads||padAds||touchAds)?1:0, cr:crouching?1:0, hd:_netHitDir, hs:_netHitSeq, n:NET.name||'Host' }];
+  const P=[{ id:0, p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:curWep, g:_packGrip(), hp:Math.max(0,player.hp), j:player.onGround?0:1, sl:sliding?1:0, ad:(ads||padAds||touchAds)?1:0, cr:crouching?1:0, hd:_netHitDir, hs:_netHitSeq, n:NET.name||'Host', mt:(mountedTurret?_turretIndexOf(mountedTurret):-1) }];
   for(const id in NET.players){ const rp=NET.players[id];
-    P.push({ id:+id, p:[rp.posEye.x,rp.posEye.y,rp.posEye.z], y:rp.yaw, pi:rp.pitch||0, w:rp.wep, g:(rp.grip?[rp.grip.x,rp.grip.y,rp.grip.z,rp.grip.yaw,rp.grip.pitch,rp.grip.roll,rp.grip.scale]:null), hp:rp.hp, j:rp.air?1:0, sl:rp.slide?1:0, ad:rp.ads?1:0, cr:rp.crouch?1:0, hd:rp.hd||0, hs:rp.hs||0, n:rp.name }); }
+    P.push({ id:+id, p:[rp.posEye.x,rp.posEye.y,rp.posEye.z], y:rp.yaw, pi:rp.pitch||0, w:rp.wep, g:(rp.grip?[rp.grip.x,rp.grip.y,rp.grip.z,rp.grip.yaw,rp.grip.pitch,rp.grip.roll,rp.grip.scale]:null), hp:rp.hp, j:rp.air?1:0, sl:rp.slide?1:0, ad:rp.ads?1:0, cr:rp.crouch?1:0, hd:rp.hd||0, hs:rp.hs||0, n:rp.name, mt:(rp.mt!=null?rp.mt:-1) }); }
   for(const b of bots){ if(b.dead && !b._dying) continue; P.push({ id:b.id, p:[b.pos.x,EYE,b.pos.z], y:b.yaw, pi:0, w:'rifle', hp:(b.dead?0:b.hp), hd:b._netHitDir||0, hs:b._netHitSeq||0, n:b.name }); }   // build 502: keep dead-but-dying bots in the snapshot (+ hd/hs) so clients play the directional death, then they prune on respawn
   const E=enemies.map(e=>({ id:e.id, p:[e.mesh.position.x,e.mesh.position.y,e.mesh.position.z], hd:e._netHitDir||0, hs:e._netHitSeq||0 }));
   const C=coins.map(c=>({ id:c.id, p:[c.mesh.position.x,c.mesh.position.z] }));
@@ -11508,7 +11533,7 @@ function applyWorld(msg){
   const seen=new Set();
   for(const pl of msg.P){ if(pl.id===NET.myId) continue; seen.add(pl.id);
     const rp=ensureRemotePlayer(pl.id, pl.n);
-    rp.posEye.set(pl.p[0],pl.p[1],pl.p[2]); rp.target.set(pl.p[0], Math.max(0,pl.p[1]-EYE), pl.p[2]); rp.yaw=pl.y; rp.pitch=pl.pi||0; rp.hp=pl.hp; rp.wep=pl.w; if(pl.g) rp.grip=_unpackGrip(pl.g); rp.air=!!pl.j; rp.slide=!!pl.sl; rp.ads=!!pl.ad; rp.crouch=!!pl.cr; rp.hd=pl.hd||0; rp.hs=pl.hs||0; }
+    rp.posEye.set(pl.p[0],pl.p[1],pl.p[2]); rp.target.set(pl.p[0], Math.max(0,pl.p[1]-EYE), pl.p[2]); rp.yaw=pl.y; rp.pitch=pl.pi||0; rp.hp=pl.hp; rp.wep=pl.w; if(pl.g) rp.grip=_unpackGrip(pl.g); rp.air=!!pl.j; rp.slide=!!pl.sl; rp.ads=!!pl.ad; rp.crouch=!!pl.cr; rp.hd=pl.hd||0; rp.hs=pl.hs||0; rp.mt=(pl.mt!=null?pl.mt:-1); }   // build 548: mounted-turret index travels in the snapshot
   for(const id in NET.players){ if(!seen.has(+id)) removeRemotePlayer(+id); }
   const es=new Set();
   for(const e of msg.E){ es.add(e.id); upsertEnemyMesh(e); }
@@ -11570,6 +11595,7 @@ function netInterpolate(dt){
         if(_st==='idle' && rp._turnT && performance.now()<rp._turnT) _st=rp._turnSlot; }   // play the turn-step one-shot while standing
       setEnemyAnimState(rp.mesh, _st);
     } }
+  _syncRemoteTurrets();   // build 548: aim every turret a remote player is manning to their synced look; rest the unmanned ones
   if(NET.mode==='client'){
     for(const id in NET.powerupMeshes){ const m=NET.powerupMeshes[id]; if(m.visible) _animatePickup(m, dt); }
     for(const id in NET.enemyMeshes){ const em=NET.enemyMeshes[id];
@@ -11600,7 +11626,7 @@ function netTick(dt){
   if(NET.sendTimer<=0){
     NET.sendTimer=0.05;
     if(NET.mode==='client' && NET.conn && NET.conn.open){
-      try{ NET.conn.send({ t:'st', p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:curWep, g:_packGrip(), hp:Math.max(0,player.hp), j:player.onGround?0:1, sl:sliding?1:0, ad:(ads||padAds||touchAds)?1:0, cr:crouching?1:0, hd:_netHitDir, hs:_netHitSeq, n:NET.name }); }catch(e){}
+      try{ NET.conn.send({ t:'st', p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:curWep, g:_packGrip(), hp:Math.max(0,player.hp), j:player.onGround?0:1, sl:sliding?1:0, ad:(ads||padAds||touchAds)?1:0, cr:crouching?1:0, hd:_netHitDir, hs:_netHitSeq, n:NET.name, mt:(mountedTurret?_turretIndexOf(mountedTurret):-1) }); }catch(e){}
       if(heldProp && heldNidLocal!=null){ const tgt=_localHoldTarget(); try{ NET.conn.send({ t:'hold', nid:heldNidLocal, p:[tgt.x,tgt.y,tgt.z] }); }catch(e){} }
     } else if(NET.mode==='host'){
       broadcastWorld();
@@ -12465,6 +12491,35 @@ function turretUpdate(dt){
   if(_turretOverheated && _turretHeat<=TURRET_GUN.recoverAt) _turretOverheated=false;
   const hb=document.getElementById('turretHeatFill'); if(hb){ hb.style.width=(Math.min(1,_turretHeat)*100).toFixed(0)+'%'; hb.style.background=_turretOverheated?'#f5505e':(_turretHeat>0.7?'#ffae42':'#38f5b5'); }
 }
+// ---- build 548: co-op turret sync (Phase 2) ----
+// The local operator already has turretUpdate driving their mount's barrel; their position + aim already
+// travel in the state packet (player.pos is pinned to the mount, so their avatar shows up standing at it).
+// The only missing piece for other players was WHICH turret they're on, so the barrel could track their aim
+// on every peer. We sync one field — the turret index — and reconstruct the barrel pose from the aim that
+// already syncs. Index is a stable network id because every peer builds turretModels from the same ordered
+// level.turrets list.
+function _turretIndexOf(g){ return (typeof turretModels!=='undefined' && g) ? turretModels.indexOf(g) : -1; }
+function _poseTurretAim(g, yaw, pitch){   // pose a turret's cosmetic barrel from an arbitrary operator aim — a pure mirror of turretUpdate's local math (no player mutation), so the barrel a bystander sees matches what the operator sees
+  if(!g || !g.userData || !g.userData.turret || !g.userData.visual) return;
+  const t=g.userData.turret, half=(t.yawArc||120)*RAD*0.5;
+  let dy=yaw-g.rotation.y; dy=Math.atan2(Math.sin(dy),Math.cos(dy)); dy=Math.max(-half,Math.min(half,dy));   // clamp to the traverse arc, same as _turretAimClamp
+  const pMin=(t.pitchMin!=null?t.pitchMin:-15)*RAD, pMax=(t.pitchMax!=null?t.pitchMax:35)*RAD; const pit=Math.max(pMin,Math.min(pMax,pitch||0));
+  const _myaw=g.userData._prim?0:(turretModelYaw||0)*RAD;
+  g.userData.visual.rotation.y=_myaw+dy; g.userData.visual.rotation.x=-pit;
+}
+function _turretRestPose(g){   // barrel back to its at-rest base (model-yaw base, level) when nobody is manning it
+  if(!g || !g.userData || !g.userData.visual) return;
+  g.userData.visual.rotation.y=(g.userData._prim?0:(turretModelYaw||0)*RAD); g.userData.visual.rotation.x=0;
+}
+function _syncRemoteTurrets(){   // each frame on every peer: aim any turret a REMOTE player is manning, rest the rest. The local mount stays owned by turretUpdate.
+  if(typeof turretModels==='undefined' || !turretModels.length) return;
+  for(let i=0;i<turretModels.length;i++){
+    const g=turretModels[i]; if(!g || g===mountedTurret) continue;   // skip the one I'm manning — turretUpdate drives it from my live aim
+    let op=null;
+    for(const id in NET.players){ const rp=NET.players[id]; if(rp && rp.mt===i && (rp.hp==null||rp.hp>0)){ op=rp; break; } }   // first live operator wins (co-op doesn't arbitrate two players fighting over one turret)
+    if(op) _poseTurretAim(g, op.yaw, op.pitch||0); else _turretRestPose(g);
+  }
+}
 function turretFire(){
   if(!mountedTurret) return;
   const now=performance.now();
@@ -12836,7 +12891,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 546 · 2026-06-17';
+const BUILD_VERSION = 'build 548 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15606,6 +15661,7 @@ function loop(){
     // enemies beeline until it's ready). Bots are PvP-only, so nothing else competes for this budget here.
     if(!NAV.built){ if(!NAV.building && typeof navBuildBegin==='function') navBuildBegin(); if(typeof navBuildStep==='function') navBuildStep(5); }
     _repathBudget = 3;   // cap A* searches per tick so a frame never stalls on many enemy repaths at once
+    _losBudget = 5; _groundBudget = 5;   // build 547: per-frame LOS + ground raycast caps. A wave spawns many enemies whose LOS/ground caches all come due on the same frame; these stop that frame from firing dozens of raycasts at once (the wave-framerate spike). Over-budget enemies reuse the cached value one more frame; the jittered intervals stagger them after ~1s.
     // Phase 1 — behavior: hunt chases anywhere; patrol/hold use detection + leash and otherwise patrol
     // their area or guard their post. Movement aims at the state's target point; chasing stops just
     // outside melee so they crowd the player instead of bulldozing through.
@@ -15721,8 +15777,10 @@ function loop(){
       // build 546: groundHeightAt does a downward raycast. Refresh it ~10x/sec per enemy (or when it moves to
       // a new cell), caching between, instead of raycasting every frame for every enemy — another big slice of
       // the wave framerate. The launch arc (launchY) still rides on top live.
-      if(en._grT==null || nowMs-en._grT>100 || Math.abs(en.mesh.position.x-(en._grX||0))>0.8 || Math.abs(en.mesh.position.z-(en._grZ||0))>0.8){
-        en._grT=nowMs; en._grX=en.mesh.position.x; en._grZ=en.mesh.position.z;
+      const _enGMoved = Math.abs(en.mesh.position.x-(en._grX||0))>0.8 || Math.abs(en.mesh.position.z-(en._grZ||0))>0.8;
+      if(en._grT==null || _enGMoved || (nowMs-en._grT>(en._grIv||100) && (typeof _groundBudget==='undefined' || _groundBudget>0))){
+        if(!_enGMoved && en._grT!=null && typeof _groundBudget!=='undefined') _groundBudget--;   // build 547: the periodic standing refresh draws from the per-frame budget; a cell-move or first-touch is mandatory (free). Stops a whole wave from re-grounding on one frame.
+        en._grT=nowMs; en._grIv=90+Math.random()*30; en._grX=en.mesh.position.x; en._grZ=en.mesh.position.z;
         en._groundY = (typeof groundHeightAt==='function') ? groundHeightAt(en.mesh.position.x, en.mesh.position.z, en.mesh.position.y - 1.4) : terrainHeightAt(en.mesh.position.x, en.mesh.position.z);
       }
       en.mesh.position.y = (en._groundY!=null?en._groundY:0) + 1.4 + (en.launchY||0);
