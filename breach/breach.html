@@ -12799,7 +12799,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 533 · 2026-06-17';
+const BUILD_VERSION = 'build 534 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15598,11 +15598,16 @@ function loop(){
         if(pd > en.standoff + 1){ en.mesh.position.x += toPx/pd*en.speed*dt; en.mesh.position.z += toPz/pd*en.speed*dt; }
         else if(pd < en.standoff*0.6){ en.mesh.position.x -= toPx/pd*en.speed*dt; en.mesh.position.z -= toPz/pd*en.speed*dt; }
       } else if(d > stopAt){
-        // chase: route around walls/props via the nav grid (bot-style); beeline if there's no path or the grid isn't built yet
+        // beeline straight at the target — the pre-531 behavior that always produces motion in the open.
         let _mvx=dx/d, _mvz=dz/d;
-        if(td.chase && typeof _botFollowPath==='function'){
+        // build 534: route around walls via the nav grid ONLY when the straight line is actually blocked
+        // (no line of sight). Using a cell-center path on every chase could stall an open-field pursuit, and
+        // a waypoint landing on the enemy's own cell made _pl fall back to 1, zeroing the step and pinning
+        // it at spawn. When we can see the target, just walk at it; only path when it's behind cover.
+        if(td.chase && !td.see && typeof _botFollowPath==='function'){
           const _wp=_botFollowPath(en._nav||(en._nav={ pos:en.mesh.position }), td.tx, td.tz, dt);
-          if(_wp){ const _pdx=_wp.x-en.mesh.position.x, _pdz=_wp.z-en.mesh.position.z, _pl=Math.hypot(_pdx,_pdz)||1; _mvx=_pdx/_pl; _mvz=_pdz/_pl; }
+          if(_wp){ const _pdx=_wp.x-en.mesh.position.x, _pdz=_wp.z-en.mesh.position.z, _pl=Math.hypot(_pdx,_pdz);
+            if(_pl > 0.5){ _mvx=_pdx/_pl; _mvz=_pdz/_pl; } }   // ignore a waypoint we're basically already on -> keep the beeline so we never freeze
         }
         en.mesh.position.x += _mvx*spd*dt; en.mesh.position.z += _mvz*spd*dt;
       }
