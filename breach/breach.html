@@ -220,6 +220,15 @@
   #upgrade .upIcon { width:46px; height:46px; color:var(--accent); display:grid; place-items:center; }
   #upgrade .upIcon svg { width:100%; height:100%; }
   .eico { width:1.05em; height:1.05em; vertical-align:-0.16em; margin-right:0.45em; display:inline-block; flex:none; }
+  #turretHud { position:fixed; inset:0; z-index:30; pointer-events:none; }
+  #turretHud .thVig { position:absolute; inset:0; background:radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.45) 100%); box-shadow:inset 0 0 200px 50px rgba(0,0,0,0.55); }
+  #turretHud .thFrame { position:absolute; inset:6vh 7vw; border:2px solid rgba(255,209,102,0.30); border-radius:10px; }
+  #turretHud .thReticle { position:absolute; left:50%; top:50%; width:34px; height:34px; margin:-17px 0 0 -17px; border:2px solid rgba(255,209,102,0.85); border-radius:50%; }
+  #turretHud .thReticle::after { content:''; position:absolute; left:50%; top:50%; width:4px; height:4px; margin:-2px 0 0 -2px; background:#ffd166; border-radius:50%; }
+  #turretHud .thBar { position:absolute; left:50%; bottom:10vh; transform:translateX(-50%); display:flex; align-items:center; gap:8px; font:600 12px/1 system-ui,sans-serif; color:#cfeee2; letter-spacing:1px; }
+  #turretHud .thBarTrack { width:160px; height:8px; background:rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.2); border-radius:5px; overflow:hidden; }
+  #turretHud #turretHeatFill { height:100%; width:0%; background:#38f5b5; transition:width 0.08s linear; }
+  #turretHud .thExit { position:absolute; left:50%; bottom:6.2vh; transform:translateX(-50%); font:600 12px/1 system-ui,sans-serif; color:#9fdcc9; letter-spacing:1px; }
   #tFire { right:28px; bottom:42px; width:94px; height:94px; font-size:14px; }
   #tAim { right:138px; bottom:74px; width:66px; height:66px; }
   #tJump { right:46px; bottom:150px; width:64px; height:64px; }
@@ -589,6 +598,13 @@
 
   <div id="buffs"></div>
   <div id="prompt"></div>
+  <div id="turretHud" style="display:none">
+    <div class="thVig"></div>
+    <div class="thFrame"></div>
+    <div class="thReticle"></div>
+    <div class="thBar"><span>HEAT</span><div class="thBarTrack"><div id="turretHeatFill"></div></div></div>
+    <div class="thExit">[E] or [ESC] — Exit turret</div>
+  </div>
   <div id="weaponWheel"></div>
 
   <div id="shop" class="hidden">
@@ -8302,6 +8318,7 @@ addEventListener('keydown', e=>{
   }
   // Universal escape hatch in multiplayer: Esc always opens a match menu, even while dead or on the result
   // screen, so you can never get trapped with no way out.
+  if(e.code==='Escape' && mountedTurret){ e.preventDefault(); dismountTurret(); return; }
   if(e.code==='Escape' && NET.mode && NET.mode!=='off' && !editorOpen){
     e.preventDefault();
     if(typeof toggleMatchMenu==='function') toggleMatchMenu();
@@ -11097,6 +11114,7 @@ function ensureOwnAvatar(){
   return _ownAvatar;
 }
 function updateOwnAvatar(dt){
+  if(mountedTurret){ if(_ownAvatar) _ownAvatar.visible=false; return; }
   if(!(tpMode && gameOn && !editorOpen)){ if(_ownAvatar) _ownAvatar.visible=false; return; }
   const a=ensureOwnAvatar(); a.visible=true;
   attachAvatarGun(a, curWep);   // hold the model for the active weapon (swaps when you change guns)
@@ -12299,6 +12317,92 @@ const editorBrightLight = new THREE.AmbientLight(0xffffff, 0);
 scene.add(editorBrightLight);
 function activeCam(){ return (editorOpen && editorTopView) ? topCam : camera; }
 let shopMode = null;      // 'station' or a chest object
+// ---------- Manning a turret: take control, aim within the arc, fire the MG, exit ----------
+let mountedTurret = null, _turretReturn = null, _turretHeat = 0, _turretOverheated = false, _turretLastShot = 0;
+const TURRET_GUN = { fireRate:70, dmg:16, spread:0.02, range:150, heatPerShot:0.05, coolRate:0.55, recoverAt:0.35 };   // fireRate = ms between shots; heat is 0..1 with an overheat lockout until it cools below recoverAt
+const _tv0 = new THREE.Vector3(), _tv1 = new THREE.Vector3();
+function turretEyeWorld(g, out){   // mount-camera world position from the turret's local eye offset
+  const e=g.userData.turret.eye||TURRET_DEFAULT.eye; const s=(g.userData._prim?1:(turretModelScale||1))*(g.userData.turret.scale||1);
+  out.set(e[0]*s, e[1]*s, e[2]*s); g.updateMatrixWorld(true); return out.applyMatrix4(g.matrixWorld);
+}
+function turretBarrelWorld(g, out){   // muzzle origin: the eye nudged forward along the current aim (cosmetic tracer start)
+  turretEyeWorld(g, out);
+  const cy=Math.cos(player.yaw), sy=Math.sin(player.yaw), cp=Math.cos(player.pitch), sp=Math.sin(player.pitch);
+  out.x += (-sy*cp)*1.1; out.y += sp*1.1; out.z += (-cy*cp)*1.1; return out;
+}
+function mountTurret(g){
+  if(mountedTurret || !g) return;
+  mountedTurret = g;
+  _turretReturn = { x:player.pos.x, y:player.pos.y, z:player.pos.z, yaw:player.yaw, pitch:player.pitch };
+  player.yaw = g.rotation.y; player.pitch = 0;   // start aimed straight down the turret's facing
+  player.vel.set(0,0,0); sliding=false; firing=false; ads=false;
+  _turretHeat=0; _turretOverheated=false;
+  const hud=document.getElementById('turretHud'); if(hud) hud.style.display='block';
+  if(SFX.swap) SFX.swap();
+}
+function dismountTurret(){
+  if(!mountedTurret) return;
+  const g=mountedTurret; mountedTurret=null;
+  const side=new THREE.Vector3(Math.cos(g.rotation.y),0,-Math.sin(g.rotation.y));   // step out to the turret's right
+  player.pos.set(g.position.x+side.x*1.6, (g.position.y||0)+EYE, g.position.z+side.z*1.6);
+  player.vel.set(0,0,0); player.onGround=true;
+  if(_turretReturn){ player.yaw=_turretReturn.yaw; player.pitch=_turretReturn.pitch; }
+  if(g.userData.visual){ g.userData.visual.rotation.y=0; g.userData.visual.rotation.x=0; }   // re-center the cosmetic aim
+  const hud=document.getElementById('turretHud'); if(hud) hud.style.display='none';
+  if(SFX.swap) SFX.swap();
+}
+function _turretAimClamp(g){   // clamp the look to the traverse arc (yaw) + pitch limits; returns the signed yaw delta from base
+  const t=g.userData.turret, half=(t.yawArc||120)*RAD*0.5;
+  let dy=player.yaw - g.rotation.y; dy=Math.atan2(Math.sin(dy),Math.cos(dy));
+  dy=Math.max(-half, Math.min(half, dy)); player.yaw = g.rotation.y + dy;
+  const pMin=(t.pitchMin!=null?t.pitchMin:-15)*RAD, pMax=(t.pitchMax!=null?t.pitchMax:35)*RAD;
+  player.pitch = Math.max(pMin, Math.min(pMax, player.pitch));
+  return dy;
+}
+function turretUpdate(dt){
+  const g=mountedTurret; if(!g) return;
+  if(!gameOn || gameOver || (player.hp!=null && player.hp<=0)){ dismountTurret(); return; }   // died / match ended -> release control
+  player.pos.set(g.position.x, (g.position.y||0)+EYE, g.position.z); player.vel.set(0,0,0); player.onGround=true;   // pin the operator to the mount
+  const dy=_turretAimClamp(g);
+  if(g.userData.visual){ g.userData.visual.rotation.y=dy; g.userData.visual.rotation.x=-player.pitch; }   // traverse + elevate the model (shots use the camera, so this is purely visual)
+  _turretHeat=Math.max(0, _turretHeat - TURRET_GUN.coolRate*dt);
+  if(_turretOverheated && _turretHeat<=TURRET_GUN.recoverAt) _turretOverheated=false;
+  const hb=document.getElementById('turretHeatFill'); if(hb){ hb.style.width=(Math.min(1,_turretHeat)*100).toFixed(0)+'%'; hb.style.background=_turretOverheated?'#f5505e':(_turretHeat>0.7?'#ffae42':'#38f5b5'); }
+}
+function turretFire(){
+  if(!mountedTurret) return;
+  const now=performance.now();
+  if(_turretOverheated || now-_turretLastShot < TURRET_GUN.fireRate) return;
+  _turretLastShot=now;
+  _turretHeat=Math.min(1,_turretHeat+TURRET_GUN.heatPerShot);
+  if(_turretHeat>=1){ _turretOverheated=true; if(SFX.empty) SFX.empty(); }
+  SFX.shoot(); addShake(0.05);
+  const origin=turretBarrelWorld(mountedTurret, _tv0.clone());
+  if(NET.mode!=='off'){ const _fd=new THREE.Vector3(); camera.getWorldDirection(_fd); netFire(origin, _fd); }   // others see/hear the tracer (full mount sync is Phase 2)
+  const sx=(Math.random()-0.5)*TURRET_GUN.spread, sy=(Math.random()-0.5)*TURRET_GUN.spread;
+  raycaster.setFromCamera(new THREE.Vector2(sx,sy), camera);
+  const clientMode=NET.mode==='client';
+  const enemyMeshes = clientMode ? Object.values(NET.enemyMeshes).map(o=>o.mesh) : enemies.map(e=>e.mesh);
+  const rayTargets=[...enemyMeshes, ...bots.map(b=>b.mesh), ...colliders, ...dynamicProps, floor].filter(o=>o&&o.isObject3D);
+  const hits=raycaster.intersectObjects(rayTargets, true);
+  let endPoint=raycaster.ray.at(TURRET_GUN.range, new THREE.Vector3());
+  if(hits.length){
+    const hit=hits[0]; endPoint=hit.point.clone();
+    const isHead=!!(hit.object.userData&&hit.object.userData.isHead);
+    const dmg=TURRET_GUN.dmg*(isHead?HEADSHOT_MUL:1);
+    let dn=hit.object, dprop=null; while(dn&&!dprop){ if(dn.userData&&dn.userData.phys) dprop=dn; dn=dn.parent; }
+    if(dprop){ const dir=raycaster.ray.direction.clone().normalize();
+      if(!clientMode){ if(!damageProp(dprop,dmg,hit.point,dir,7,NET.myId)) pushDynamic(dprop,dir,7,hit.point); }
+      else if(NET.conn){ try{ NET.conn.send({t:'propHit', nid:dprop.userData.nid, d:dmg, dir:[dir.x,dir.y,dir.z], s:7, pt:[hit.point.x,hit.point.y,hit.point.z]}); }catch(e){} }
+      spark(hit.point,0xffd166); showHitmarker(); }
+    else if(clientMode){ let node=hit.object,id=null; while(node&&id==null){ if(node.userData&&node.userData.enemyId!=null) id=node.userData.enemyId; node=node.parent; }
+      if(id!=null){ if(NET.conn) try{ NET.conn.send({t:'hit', e:id, d:dmg}); }catch(e){} spark(hit.point,isHead?0xffd166:0xff6b6b); showHitmarker(isHead); } else spark(hit.point,fxCfg.color); }
+    else { let node=hit.object,en=null; while(node&&!en){ en=enemies.find(e=>e.mesh===node); node=node.parent; }
+      if(en){ alertEnemy(en,mountedTurret.position.x,mountedTurret.position.z); const k=enemyHurt(en,dmg,mountedTurret.position.x,mountedTurret.position.z); spark(hit.point,isHead?0xffd166:0xff6b6b); spawnDamageNumber(hit.point,dmg,k,isHead); flashEnemy(en); showHitmarker(k); SFX.hit(); }
+      else { let bn=hit.object,bot=null; while(bn&&!bot){ bot=bots.find(b=>b.mesh===bn); bn=bn.parent; } if(bot&&!bot.dead){ botHurt(bot,dmg,mountedTurret.position.x,mountedTurret.position.z); spark(hit.point,0xff6b6b); showHitmarker(); SFX.hit(); } else spark(hit.point,fxCfg.color); } }
+  }
+  tracer(origin,endPoint); muzzleFlashAt(origin);
+}
 let nearTarget = null;    // what the player is standing next to
 
 function checkProximity(){
@@ -12344,6 +12448,11 @@ function checkProximity(){
       if(d<bd){ bd=d; best=o; } }
     if(best) nearTarget = { type:'xanim', obj:best };
   }
+  if(!nearTarget && !mountedTurret){
+    let best=null, bd=2.8;
+    for(const g of turretModels){ const d=Math.hypot(player.pos.x-g.position.x, player.pos.z-g.position.z); if(d<bd){ bd=d; best=g; } }
+    if(best) nearTarget = { type:'turret', turret:best };
+  }
   const prompt = $('prompt');
   if(nearTarget){
     if(nearTarget.type==='station'){
@@ -12353,6 +12462,8 @@ function checkProximity(){
       const lo=nearTarget.obj, lk=lo&&lo.userData.lockId;
       if(lk && !lo.userData.unlocked) prompt.innerHTML = playerKeys[lk] ? `<b>E</b> Unlock \u2014 ${keyDisplayName(lk)}` : `LOCKED \u2014 needs ${keyDisplayName(lk)}`;
       else prompt.innerHTML = `<b>E</b> Activate`;
+    } else if(nearTarget.type==='turret'){
+      prompt.innerHTML = `<b>E</b> Man the turret`;
     } else {
       prompt.innerHTML = `SUPPLY CACHE — <b>E</b> Open`;
     }
@@ -12363,6 +12474,7 @@ function checkProximity(){
 }
 
 function interact(){
+  if(mountedTurret){ dismountTurret(); return; }
   if(heldProp){ releaseHeld(); return; }   // carrying a prop -> drop it
   if(shopOpen){ closeShop(); return; }
   if(!nearTarget){ tryGrabProp(); return; }   // nothing to use -> try to pick up a prop
@@ -12386,6 +12498,8 @@ function interact(){
     xaToggle(o);
     const i = propModels.indexOf(o); if(i>=0) broadcastXAnim(i);   // open/close it for everyone
     fireSignals(o, 'interacted');
+  } else if(nearTarget.type==='turret'){
+    mountTurret(nearTarget.turret);
   } else {
     openShop(nearTarget.chest);
   }
@@ -12625,7 +12739,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 521 · 2026-06-17';
+const BUILD_VERSION = 'build 522 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15091,6 +15205,7 @@ function loop(){
   if(pvpMode() && duelDead){ wish.set(0,0,0); moveScale=0; }   // frozen until respawn
   if(_levelLoaderActive){ wish.set(0,0,0); moveScale=0; }   // frozen while the level is still loading
   if(matchWarmup>0){ wish.set(0,0,0); moveScale=0; }   // frozen during the pre-match GENERATING/countdown (no pre-positioning advantage)
+  if(mountedTurret){ wish.set(0,0,0); moveScale=0; }   // frozen while manning a turret
   wish.normalize();
   let _wantCrouch = (keys['ControlLeft']||keys['ControlRight']||padCrouch);   // Ctrl = crouch (C is slide, kept separate)
   if(!_wantCrouch && crouchT > 0.4){   // releasing crouch: only stand if there's headroom for the full body
@@ -15126,7 +15241,7 @@ function loop(){
   if(player.jumpCd>0) player.jumpCd-=dt;
   const _jHeld = !!(keys['Space']||padJump);
   const _jPressed = (_jHeld && !_jumpHeldPrev) || touchJump;   // rising edge for held inputs; the touch button is already a one-frame pulse
-  if(_jPressed && player.onGround && (player.jumpCd||0)<=0 && !_levelLoaderActive && matchWarmup<=0){ player.vel.y = JUMP; player.onGround=false; sliding=false; player.jumpCd=JUMP_CD; SFX.jump(); }
+  if(_jPressed && player.onGround && (player.jumpCd||0)<=0 && !_levelLoaderActive && matchWarmup<=0 && !mountedTurret){ player.vel.y = JUMP; player.onGround=false; sliding=false; player.jumpCd=JUMP_CD; SFX.jump(); }
   _jumpHeldPrev = _jHeld;
   touchJump = false;   // tap is consumed for one frame
   player.vel.y -= GRAV*dt;
@@ -15176,7 +15291,15 @@ function loop(){
     } else { _stepT = 0; }
   } else if(!player.onGround){ _stepT = 0.12; }
   if(!(editorOpen && editorActive==='player')) _charPrevInit=false;   // re-seed the third-person preview each time the Player tab opens
-  if(editorOpen && editorTopView){
+  if(mountedTurret) turretUpdate(dt);
+  if(mountedTurret){
+    if(scene.fog !== SCENE_FOG) scene.fog = SCENE_FOG;
+    if(editorBrightLight.intensity !== 0) editorBrightLight.intensity = 0;
+    gun.visible=false;
+    turretEyeWorld(mountedTurret, camera.position);
+    camera.rotation.order='YXZ'; camera.rotation.y=player.yaw; camera.rotation.x=player.pitch; camera.rotation.z=0;
+    if(shake>0.001){ const sk=shake*shake; camera.rotation.x+=(Math.random()-0.5)*0.06*sk; camera.rotation.y+=(Math.random()-0.5)*0.06*sk; shake=Math.max(0,shake-dt*2.2); } else shake=0;
+  } else if(editorOpen && editorTopView){
     // locked orthographic straight-down view; pan with drag, zoom with wheel
     scene.fog = null;   // fog would wash out the whole overhead view
     const asp = innerWidth/innerHeight;
@@ -15283,7 +15406,7 @@ function loop(){
   recoil *= 0.85;
   muzzle.intensity *= 0.6; flashMat.opacity *= 0.5;
 
-  if((firing || padFiring || touchFiring) && !heldProp && !editorOpen && !_levelLoaderActive) shoot();
+  if((firing || padFiring || touchFiring) && !heldProp && !editorOpen && !_levelLoaderActive){ if(mountedTurret) turretFire(); else shoot(); }
 
   // tracers
   for(let i=tracers.length-1;i>=0;i--){
@@ -19650,6 +19773,7 @@ function _prewarmMatchModels(){
   urls.forEach(u=>{ try{ loadGLTFCached(u, ()=>{}, ()=>{}); }catch(e){} });
 }
 function startGame(){
+  if(mountedTurret){ mountedTurret=null; const _th=document.getElementById('turretHud'); if(_th) _th.style.display='none'; }   // never start a round still manning a turret
   if(typeof closeModal==='function'){ closeModal('charPicker'); closeModal('lobby'); closeModal('mpModal'); }   // never start a match with a menu modal still open over the game
   if(typeof _prewarmMatchModels==='function') _prewarmMatchModels();   // kick off known players' character GLBs BEFORE the gate so the loader waits for them
   if(_levelAssetsPending()){ showLevelLoader(); waitAssetsThenReveal(); }   // hold a loading screen so assets (models, sky, textures) don't pop in mid-game
