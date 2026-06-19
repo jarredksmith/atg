@@ -345,6 +345,8 @@
   .lobbyRow{ display:flex; align-items:center; gap:10px; padding:8px 11px; border-radius:9px; background:rgba(255,255,255,.07); font-size:14px; color:#eafff7; font-weight:500; }
   .lobbyDot{ width:14px; height:14px; border-radius:50%; flex:none; box-shadow:inset 0 0 4px rgba(0,0,0,.5); }
   .lobbyHostTag{ margin-left:auto; font-size:10px; opacity:1; color:#7fe0c6; font-weight:600; letter-spacing:.12em; }
+  .lobbyReadyTag{ margin-left:auto; font-size:10px; color:#06120e; background:#38f5b5; padding:2px 8px; border-radius:6px; font-weight:700; letter-spacing:.1em; }
+  .lobbyWaitTag{ margin-left:auto; font-size:10px; color:#ffae42; border:1px solid rgba(255,174,66,.55); padding:1px 7px; border-radius:6px; font-weight:600; letter-spacing:.08em; }
   #mpGames{ display:flex; flex-direction:column; gap:5px; max-height:170px; overflow:auto; }
   .gameRow{ display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:8px; background:rgba(255,255,255,.05); font-size:13px; }
   .gameRow .gmode{ font-size:10px; letter-spacing:.09em; opacity:.6; }
@@ -353,6 +355,8 @@
   #mpKills { width:54px; text-align:center; }
   .mpBtn { background:rgba(var(--accent-rgb),0.12); color:var(--accent); border:1px solid rgba(var(--accent-rgb),0.5); border-radius:6px; padding:8px 16px; font:600 13px ui-monospace,monospace; letter-spacing:2px; cursor:pointer; }
   .mpBtn:hover { background:rgba(var(--accent-rgb),0.22); }
+  .mpBtn:disabled { opacity:.45; cursor:not-allowed; }
+  .mpBtn.readied { background:var(--accent); color:#05241c; border-color:var(--accent); }
   #mpStatus { color:#ffd166; font-size:12px; letter-spacing:1px; min-height:16px; }
   #roomBadge { display:none; position:fixed; top:8px; left:50%; transform:translateX(-50%); z-index:40; background:rgba(5,10,12,0.7); color:var(--accent); border:1px solid rgba(var(--accent-rgb),0.4); border-radius:6px; padding:4px 12px; font:600 13px ui-monospace,monospace; letter-spacing:3px; pointer-events:none; }
   #scoreboard { display:none; position:fixed; top:206px; left:18px; z-index:41; background:rgba(5,10,12,0.72); border:1px solid rgba(var(--accent-rgb),0.28); border-radius:8px; padding:6px 8px; min-width:150px; max-width:220px; pointer-events:none; font:600 12px ui-monospace,monospace; }
@@ -727,6 +731,7 @@
     <h2>CHOOSE A CHARACTER</h2>
     <div class="mpDesc">Pick your character and color — other players see them in co-op and PvP.</div>
     <div id="charGrid"></div>
+    <button id="charConfirm" class="mpBtn coop" style="margin-top:14px;width:100%">✓ Confirm character</button>
   </div>
 </div>
 <div id="lobby" class="modalBack hidden">
@@ -740,6 +745,7 @@
     <div class="mpRow" style="margin-top:10px"><button id="lobbyCharBtn" class="mpBtn" style="width:100%;text-align:left">CHARACTER ▸</button></div>
     <div class="mpActions" style="margin-top:14px;justify-content:center;gap:10px">
       <button id="lobbyStart" class="mpBtn coop hidden">START MATCH</button>
+      <button id="lobbyReady" class="mpBtn coop hidden">READY UP</button>
       <button id="lobbyLeave" class="mpBtn">Leave</button>
     </div>
   </div>
@@ -11382,8 +11388,8 @@ function renderCharGrid(){ const g=document.getElementById('charGrid'); if(!g) r
     const lab2=document.createElement('div'); lab2.textContent='COLOR'; lab2.style.cssText='grid-column:1/-1;color:#7fe6cf;font-size:10px;letter-spacing:2px;margin:6px 0 1px;'; g.appendChild(lab2);
   }
   CHARACTERS.forEach((c,i)=>{ const card=document.createElement('div'); card.className='charCard'+(i===myCharIdx?' sel':''); const sw=document.createElement('div'); sw.className='charSwatch'; sw.style.background=_charHex(i); const nm=document.createElement('div'); nm.className='charName'; nm.textContent=c.name; card.appendChild(sw); card.appendChild(nm); card.onclick=()=>selectChar(i); g.appendChild(card); }); }
-function selectRosterChar(i){ myRosterIdx=(i>=0 && charRoster[i])?i:-1; if(myRosterIdx>=0 && charRoster[myRosterIdx] && charRoster[myRosterIdx].view) _applyView(charRoster[myRosterIdx].view); else _loadPersonalView(); renderCharGrid(); updateCharBtnLabel(); if(typeof previewAvatar!=='undefined' && previewAvatar) buildAvatarVisual(previewAvatar, myCharCfg()); if(NET.mode!=='off') broadcastMyChar(); }
-function selectChar(i){ if(i<0||i>=CHARACTERS.length) return; myCharIdx=i; try{ localStorage.setItem('breach_char', String(i)); }catch(e){} updateCharBtnLabel(); renderCharGrid(); if(typeof previewAvatar!=='undefined' && previewAvatar) buildAvatarVisual(previewAvatar, myCharCfg()); if(NET.mode!=='off') broadcastMyChar(); }
+function selectRosterChar(i){ myRosterIdx=(i>=0 && charRoster[i])?i:-1; if(myRosterIdx>=0 && charRoster[myRosterIdx] && charRoster[myRosterIdx].view) _applyView(charRoster[myRosterIdx].view); else _loadPersonalView(); renderCharGrid(); updateCharBtnLabel(); if(typeof previewAvatar!=='undefined' && previewAvatar) buildAvatarVisual(previewAvatar, myCharCfg()); if(NET.mode!=='off') broadcastMyChar(); _charChosen=true; if(typeof _updateReadyBtn==='function') _updateReadyBtn(); }
+function selectChar(i){ if(i<0||i>=CHARACTERS.length) return; myCharIdx=i; try{ localStorage.setItem('breach_char', String(i)); }catch(e){} updateCharBtnLabel(); renderCharGrid(); if(typeof previewAvatar!=='undefined' && previewAvatar) buildAvatarVisual(previewAvatar, myCharCfg()); if(NET.mode!=='off') broadcastMyChar(); _charChosen=true; if(typeof _updateReadyBtn==='function') _updateReadyBtn(); }
 function openCharPicker(){ renderCharGrid(); const m=document.getElementById('charPicker'); if(m) m.classList.remove('hidden'); }
 function makeRemotePlayer(name, cfg){
   const g=new THREE.Group();
@@ -11395,7 +11401,7 @@ function makeRemotePlayer(name, cfg){
 }
 function ensureRemotePlayer(id, name){
   let rp=NET.players[id];
-  if(!rp){ const cfg=(NET.charById&&NET.charById[id])||null; rp={ mesh:makeRemotePlayer(name||('P'+id), cfg), posEye:new THREE.Vector3(), target:new THREE.Vector3(), yaw:0, pitch:0, hp:100, wep:0, name:name||('P'+id), modelCfg:cfg, mt:-1 }; NET.players[id]=rp; if(teamMode() && NET.teams[id]!=null) tintAvatar(rp.mesh, NET.teams[id]); }
+  if(!rp){ const cfg=(NET.charById&&NET.charById[id])||null; rp={ mesh:makeRemotePlayer(name||('P'+id), cfg), posEye:new THREE.Vector3(), target:new THREE.Vector3(), yaw:0, pitch:0, hp:100, wep:0, name:name||('P'+id), modelCfg:cfg, mt:-1, ready:false }; NET.players[id]=rp; if(teamMode() && NET.teams[id]!=null) tintAvatar(rp.mesh, NET.teams[id]); }
   return rp;
 }
 function removeRemotePlayer(id){ const rp=NET.players[id]; if(rp){ scene.remove(rp.mesh); delete NET.players[id]; } }
@@ -11657,6 +11663,7 @@ function handleClientMsg(conn, msg){
   const id=conn._pid;
   if(msg.t==='st'){ setRemoteState(id, msg); }
   else if(msg.t==='hit'){ const en=enemies.find(e=>e.id===msg.e); if(en){ spark(en.mesh.position, 0xff6b6b); const _s=NET.players[id]; enemyHurt(en, msg.d, (_s&&_s.posEye)?_s.posEye.x:null, (_s&&_s.posEye)?_s.posEye.z:null); } }
+  else if(msg.t==='ready'){ const rp=NET.players[id]; if(rp) rp.ready=!!msg.r; if(NET.phase==='lobby') refreshLobby(); }   // build 552: a client toggled ready in the lobby -> reflect it for everyone
   else if(msg.t==='name'){ const rp=ensureRemotePlayer(id, msg.n); rp.name=msg.n; rp.mesh.userData._name=msg.n; if(rp.mesh.userData.label){ rp.mesh.remove(rp.mesh.userData.label); const l=makeNameSprite(msg.n, teamMode()?NET.teams[id]:undefined); l.position.y=2.5; rp.mesh.add(l); rp.mesh.userData.label=l; } if(msg.char){ applyRemoteChar(id, msg.char); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'char', from:id, cfg:msg.char}); }catch(e){} } } } if(NET.phase==='lobby') refreshLobby(); }
   else if(msg.t==='pvpHit'){ applyPvpDamage(msg.d, msg.from); }       // a client shot the host
   else if(msg.t==='fire'){ remoteFire(id, msg.o, msg.d); for(const cid in NET.conns){ if(+cid!==id){ try{ NET.conns[cid].send({t:'fire', from:id, o:msg.o, d:msg.d}); }catch(e){} } } }   // show + relay the shot
@@ -11792,8 +11799,8 @@ function showRoomBadge(code){ const b=document.getElementById('roomBadge'); if(b
 // ---------- Pre-game lobby: everyone gathers, then the host starts the match so all players begin together ----------
 function lobbyRoster(){
   const selfTint = (CHARACTERS[myCharIdx]?CHARACTERS[myCharIdx].color:null);
-  const list=[{ id:NET.myId, name:(NET.name||'Host'), team:(teamMode()?(NET.teams[NET.myId]||0):null), tint:selfTint, host:true }];
-  for(const id in NET.players){ const rp=NET.players[id]; const ch=NET.charById[id]; list.push({ id:+id, name:(rp&&rp.name)||('P'+id), team:(teamMode()?(NET.teams[id]||0):null), tint:(ch&&ch.tint!=null?ch.tint:null), host:false }); }
+  const list=[{ id:NET.myId, name:(NET.name||'Host'), team:(teamMode()?(NET.teams[NET.myId]||0):null), tint:selfTint, host:true, ready:true }];   // build 552: the host is always "ready" (they press START)
+  for(const id in NET.players){ const rp=NET.players[id]; const ch=NET.charById[id]; list.push({ id:+id, name:(rp&&rp.name)||('P'+id), team:(teamMode()?(NET.teams[id]||0):null), tint:(ch&&ch.tint!=null?ch.tint:null), host:false, ready:!!(rp&&rp.ready) }); }
   return list;
 }
 function renderLobby(roster){
@@ -11806,9 +11813,10 @@ function renderLobby(roster){
     const nm=document.createElement('span'); nm.textContent=(pl.name||'Player')+(pl.id===NET.myId?' (you)':'');
     row.appendChild(dot); row.appendChild(nm);
     if(pl.host){ const t=document.createElement('span'); t.className='lobbyHostTag'; t.textContent='HOST'; row.appendChild(t); }
+    else { const rt=document.createElement('span'); rt.className=pl.ready?'lobbyReadyTag':'lobbyWaitTag'; rt.textContent=pl.ready?'READY':'PICKING…'; row.appendChild(rt); }   // build 552: ready indicator the host (and everyone) can see
     wrap.appendChild(row);
   });
-  const cnt=document.getElementById('lobbyCount'); if(cnt) cnt.textContent=((roster?roster.length:0))+' in lobby';
+  const cnt=document.getElementById('lobbyCount'); if(cnt){ const n=(roster?roster.length:0), r=(roster||[]).filter(p=>p.ready).length; cnt.textContent=n+' in lobby · '+r+'/'+n+' ready'; }
 }
 function _lobbyTitle(){ return (pvpMode()?pvpLabel():'CO-OP')+' LOBBY'; }
 function enterLobby(){   // host
@@ -11817,6 +11825,7 @@ function enterLobby(){   // host
   const cd=document.getElementById('lobbyCode'); if(cd) cd.textContent=NET.roomCode||'';
   const hint=document.getElementById('lobbyHint'); if(hint) hint.textContent='Share the room code. Start when everyone is in.';
   const sb=document.getElementById('lobbyStart'); if(sb) sb.classList.remove('hidden');
+  const rdy=document.getElementById('lobbyReady'); if(rdy) rdy.classList.add('hidden');   // build 552: the host starts the match, so no Ready button for them
   const bw=document.getElementById('lobbyBots'), bn=document.getElementById('lobbyBotN');
   if(bw && bn){ if(pvpMode() && NET.gameMode==='duel'){ bw.classList.add('hidden'); } else { bw.classList.remove('hidden'); bn.value=NET.botCount||0; } }
   updateCharBtnLabel(); openModal('lobby'); refreshLobby(); announceRoom();
@@ -11827,13 +11836,30 @@ function showClientLobby(){
   NET.phase='lobby'; closeModal('mpModal');
   const t=document.getElementById('lobbyTitle'); if(t) t.textContent=_lobbyTitle();
   const cd=document.getElementById('lobbyCode'); if(cd) cd.textContent=NET.roomCode||'';
-  const hint=document.getElementById('lobbyHint'); if(hint) hint.textContent='Waiting for the host to start\u2026';
+  const hint=document.getElementById('lobbyHint'); if(hint) hint.textContent='Choose your character, then press READY.';
   const sb=document.getElementById('lobbyStart'); if(sb) sb.classList.add('hidden');
   const bw=document.getElementById('lobbyBots'); if(bw) bw.classList.add('hidden');
   if(NET.pendingLevel && Array.isArray(NET.pendingLevel.roster)) charRoster = NET.pendingLevel.roster.map(_sanitizeCharCfg);   // make the host's character models pickable while waiting in the lobby
   updateCharBtnLabel();
   openModal('lobby');
   if(NET.lobbyRoster) renderLobby(NET.lobbyRoster);
+  _imReady=false; _updateReadyBtn();
+  // build 552: make it obvious a joiner must pick a character. Auto-open the picker; READY stays locked until
+  // they confirm a choice (so a first-timer with no saved character can't skip past it without noticing).
+  openCharPicker();
+}
+let _charChosen=false, _imReady=false;   // build 552: client lobby gating — must choose a character before READY
+function _updateReadyBtn(){
+  const rb=document.getElementById('lobbyReady'); if(!rb) return;
+  if(NET.mode!=='client'){ rb.classList.add('hidden'); return; }
+  rb.classList.remove('hidden');
+  if(!_charChosen){ rb.disabled=true; rb.classList.remove('readied'); rb.textContent='PICK A CHARACTER ▸'; }
+  else { rb.disabled=false; rb.textContent=_imReady?'✓ READY':'READY UP'; rb.classList.toggle('readied', _imReady); }
+}
+function setReady(v){   // client toggles ready and tells the host (who reflects it to everyone)
+  if(NET.mode!=='client' || !_charChosen) return;
+  _imReady=!!v; _updateReadyBtn();
+  if(NET.conn){ try{ NET.conn.send({ t:'ready', r:_imReady?1:0 }); }catch(e){} }
 }
 function startMatch(){   // host presses START
   if(NET.mode!=='host') return;
@@ -12907,7 +12933,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 551 · 2026-06-19';
+const BUILD_VERSION = 'build 552 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -20405,7 +20431,8 @@ function populateSoundEditor(host){
 
 function bindMenu(){
   { const cb=document.getElementById('charBtn'); if(cb) cb.onclick=openCharPicker; const lcb=document.getElementById('lobbyCharBtn'); if(lcb) lcb.onclick=openCharPicker; updateCharBtnLabel(); }
-  { const sb=document.getElementById('lobbyStart'); if(sb) sb.onclick=startMatch; const lv=document.getElementById('lobbyLeave'); if(lv) lv.onclick=()=>{ unannounceRoom(); location.reload(); }; }
+  { const ccf=document.getElementById('charConfirm'); if(ccf) ccf.onclick=()=>{ _charChosen=true; closeModal('charPicker'); if(NET.mode!=='off') broadcastMyChar(); _updateReadyBtn(); }; }   // build 552: confirming the picker counts as choosing (covers a returning player keeping their current character)
+  { const sb=document.getElementById('lobbyStart'); if(sb) sb.onclick=startMatch; const lv=document.getElementById('lobbyLeave'); if(lv) lv.onclick=()=>{ unannounceRoom(); location.reload(); }; const rb=document.getElementById('lobbyReady'); if(rb) rb.onclick=()=>setReady(!_imReady); }
   { const rf=document.getElementById('mpRefresh'); if(rf) rf.onclick=refreshGamesList; refreshGamesList(); setInterval(()=>{ const m=document.getElementById('mpModal'); if(m && !m.classList.contains('hidden') && lobbyEnabled()) refreshGamesList(); }, 4000); window.addEventListener('beforeunload', ()=>{ try{ unannounceRoom(); }catch(e){} }); }
   if(MENU_HTML===null){ const ov0=document.getElementById('overlay'); if(ov0) MENU_HTML = ov0.innerHTML; }   // capture the full start menu once, before any death/win screen overwrites it
   const sb=document.getElementById('startBtn'); if(sb) sb.onclick=()=>{ campaignActive=false; _campaignComplete=false; startGame(); };
