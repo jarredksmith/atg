@@ -12934,7 +12934,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 554 · 2026-06-19';
+const BUILD_VERSION = 'build 555 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -20018,7 +20018,7 @@ function waitAssetsThenReveal(){
   // The physics world was built at deploy, possibly before async model geometry finished loading, so its
   // static colliders can be incomplete (player passes through). Rebuild it now that all assets are in,
   // so the character controller collides against the fully-loaded scene.
-  const reveal=()=>{ try{ if(physWorld) buildPhysWorld(); }catch(e){} if(_cineIntroPending){ _cineIntroPending=false; try{ maybeStartIntroCine(); }catch(e){} } hideLevelLoader(); };   // build 554: start (and paint) the cinematic BEFORE the loader fades, so the loader reveals the cinematic — not a stale gameplay frame
+  const reveal=()=>{ try{ if(physWorld) buildPhysWorld(); }catch(e){} if(_cineIntroPending){ _cineIntroPending=false; try{ maybeStartIntroCine(); }catch(e){} } hideLevelLoader(); try{ startMusic(); }catch(e){} };   // build 554/555: start (and paint) the cinematic BEFORE the loader fades; start the world music only now that loading is done (it used to begin behind the loader)
   const tick=()=>{
     if(!_levelLoaderActive) return;
     const now=performance.now();
@@ -20066,7 +20066,9 @@ function startGame(){
   editorOpen=false; _editorOpenFlag=false; if(typeof applyAudioSettings==='function') applyAudioSettings();   // leaving the editor: clear the flag + unmute the music bus BEFORE music starts
   if(typeof applyCrosshair==='function') applyCrosshair((NET.mode==='client' && NET.crosshair) ? NET.crosshair : gameCfg.crosshair);   // host's authored crosshair carries to joiners
   initAudio();
-  startMusic();
+  // build 555: do NOT start the world music here — startGame runs while the loading screen is still up, so the
+  // track used to begin the instant loading started, playing behind the loader. It now starts when the loader
+  // finishes (reveal()), or immediately at the end of startGame when there's no loader/cover at all.
   player.hp=100; player.maxHp=100; run = { ...RUN0 }; if(typeof closeUpgradePicker==='function') closeUpgradePicker(); player.pos.set(playerSpawn.x, terrainHeightAt(playerSpawn.x, playerSpawn.z)+(playerSpawn.y||0)+EYE, playerSpawn.z); player.vel.set(0,0,0);
   player.yaw=playerSpawn.yaw; player.pitch=0; player.onGround=(playerSpawn.y||0)<=0;
   // reset weapons
@@ -20147,6 +20149,7 @@ function startGame(){
     if(_levelLoaderActive) _cineIntroPending = true;   // defer: starting now would play the cutscene AUDIO behind the loading screen (the loop freezes the shot but the track is already running) and frame a half-loaded scene
     else _startIntroWhenSettled();   // no intro cutscene to cover for — just let late async loads settle (maybeStartIntroCine no-ops if disabled)
   }
+  if(!_levelLoaderActive){ try{ startMusic(); }catch(e){} }   // build 555: no loading screen/cover is up, so loading is effectively already done — start the world music now (the loader path starts it in reveal() instead)
   tryPointerLock();
 }
 // ---- Persistent best + end-of-run summary (localStorage; survives refresh/sessions) ----
