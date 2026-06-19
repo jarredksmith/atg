@@ -9183,7 +9183,7 @@ function _migrateJumpPad(z){ return { x:+z.x||0, z:+z.z||0, r:(z.r!=null?+z.r:6)
 let jumpPads = (savedLevel && Array.isArray(savedLevel.jumpPads)) ? savedLevel.jumpPads.map(z=>_migrateJumpPad(z)) : [];
 let selJumpPad = -1;
 // ---- Fire zones: an area that's on fire — deals damage-over-time to any actor inside it (player, bots, enemies) ----
-function _migrateFireZone(z){ return { x:+z.x||0, z:+z.z||0, r:(z.r!=null?+z.r:5), y:(z.y!=null?+z.y:0), h:(z.h!=null?+z.h:3), dps:(z.dps!=null?+z.dps:15), den:(z.den!=null?+z.den:1), psz:(z.psz!=null?+z.psz:1), hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(z.wind!=null?+z.wind:0), spk:(z.spk!==false), sat:(z.sat!=null?+z.sat:1), smoke:(z.smoke===true) }; }
+function _migrateFireZone(z){ return { x:+z.x||0, z:+z.z||0, r:(z.r!=null?+z.r:5), y:(z.y!=null?+z.y:0), h:(z.h!=null?+z.h:3), dps:(z.dps!=null?+z.dps:15), den:(z.den!=null?+z.den:1), psz:(z.psz!=null?+z.psz:1), hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(z.wind!=null?+z.wind:0), spk:(z.spk!==false), sat:(z.sat!=null?+z.sat:1), smoke:(z.smoke===true), rx:(+z.rx||0), ry:(+z.ry||0), rz:(+z.rz||0), sx:(z.sx!=null?+z.sx:1), sy:(z.sy!=null?+z.sy:1), sz:(z.sz!=null?+z.sz:1) }; }   // build 556: rx/ry/rz rotation (deg) + sx/sy/sz scale so fire & smoke can be moved/rotated/scaled like a prop
 let fireZones = (savedLevel && Array.isArray(savedLevel.fireZones)) ? savedLevel.fireZones.map(z=>_migrateFireZone(z)) : [];
 let selFireZone = -1;
 let audioZoneMarkers = []; const _zoneRT = [];   // editor ring markers + per-zone runtime playback state
@@ -9359,6 +9359,8 @@ function buildFireZoneGroup(z, sel){
   grp.userData={ parts:fp.parts, geo:fp.geo, posArr:fp.posArr, colArr:fp.colArr, sizeArr:fp.sizeArr, alphaArr:fp.alphaArr, sizeW:fp.sizeW, light, li:2.4, baseR:r*0.92, baseY, riseH0:rise, emberT:0,
     hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(+z.wind||0), spk:(z.spk!==false), sat:(z.sat!=null?+z.sat:1), smoke:(z.smoke===true), ground:[ring,fill], emberCol:lcol.getHex() };
   grp.position.set(+z.x||0, _maxTerrainOver(+z.x||0,+z.z||0,0), +z.z||0);
+  grp.rotation.set((+z.rx||0)*RAD, (+z.ry||0)*RAD, (+z.rz||0)*RAD);   // build 556: orient the whole plume (tilt fire/smoke sideways, angle a jet, etc.)
+  grp.scale.set(z.sx!=null?+z.sx:1, z.sy!=null?+z.sy:1, z.sz!=null?+z.sz:1);   // build 556: scale the whole effect
   return grp;
 }
 function refreshFireZones(){
@@ -9434,6 +9436,21 @@ function renderFireZonesPanel(){
     mkN('Radius','r',1,60,0.5,(n)=>Math.max(1,n));
     mkN('Flame height','h',0.5,40,0.5,(n)=>Math.max(0.5,n));
     mkN('Base Y','y',-20,40,0.5,null);
+    // ---- Transform: move with the gizmo (or Base Y); rotate + scale here or with the rotate/scale gizmo ----
+    const xfHdr=document.createElement('div'); xfHdr.style.cssText='margin:8px 0 2px;color:#ff8a4a;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.85;'; xfHdr.textContent='Transform'; box.appendChild(xfHdr);
+    mkN('Yaw \u00b0','ry',-180,180,1,null);
+    mkN('Pitch \u00b0','rx',-180,180,1,null);
+    mkN('Roll \u00b0','rz',-180,180,1,null);
+    { const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:8px;color:#ffb38a;font-size:11px;margin:3px 0;';   // uniform scale (sets sx/sy/sz together; the scale gizmo can still do per-axis)
+      const sp=document.createElement('span'); sp.textContent='Scale'; sp.style.minWidth='72px';
+      const cur=()=>{ const a=(z.sx!=null?+z.sx:1), b=(z.sy!=null?+z.sy:1), c=(z.sz!=null?+z.sz:1); return +(((a+b+c)/3).toFixed(3)); };
+      const rng=document.createElement('input'); rng.type='range'; rng.min=0.1; rng.max=6; rng.step=0.05; rng.value=cur(); rng.style.cssText='flex:1;accent-color:#ff5a1a;';
+      const num=document.createElement('input'); num.type='number'; num.step=0.05; num.value=cur(); num.style.cssText='width:58px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:11px;';
+      const ap=(v)=>{ let n=parseFloat(v); if(!isFinite(n)||n<=0) n=1; z.sx=z.sy=z.sz=n; rng.value=Math.max(0.1,Math.min(6,n)); num.value=n; refreshFireZones(); };
+      rng.addEventListener('mousedown',()=>pushUndoSnapshot()); num.addEventListener('focus',()=>pushUndoSnapshot());
+      rng.oninput=()=>ap(rng.value); num.onchange=()=>ap(num.value);
+      row.appendChild(sp); row.appendChild(rng); row.appendChild(num); box.appendChild(row); }
+    const xfHint=document.createElement('div'); xfHint.className='hint'; xfHint.style.cssText='font-size:10px;opacity:0.7;margin:1px 0 3px;'; xfHint.textContent='Or select the zone and use the move / rotate / scale gizmo. Pitch & Roll tilt the plume so fire or smoke can pour from a wall or vent. (Rotation/scale are visual; the damage volume stays upright at Radius.)'; box.appendChild(xfHint);
     // ---- Particle look (matches the WebGL fire-particle controls) ----
     const psHdr=document.createElement('div'); psHdr.style.cssText='margin:8px 0 2px;color:#ff8a4a;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;opacity:0.85;'; psHdr.textContent='Particle look'; box.appendChild(psHdr);
     mkN('Density','den',0.3,2.5,0.05,(n)=>Math.max(0.1,n));        // ~ emit rate
@@ -12934,7 +12951,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 555 · 2026-06-19';
+const BUILD_VERSION = 'build 556 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -16610,7 +16627,7 @@ function serializeLevel(){
     audioZones: audioZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, url:z.url||'', vol:+z.vol, loop:!!z.loop })),
     deathZones: deathZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:3) })),
     jumpPads: jumpPads.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:2), power:(+z.power||22) })),
-    fireZones: fireZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:3), dps:(+z.dps||0), den:(+z.den||1), psz:(+z.psz||1), hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(+z.wind||0), spk:(z.spk!==false), sat:(z.sat!=null?+z.sat:1), smoke:(z.smoke===true?1:0) })),
+    fireZones: fireZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, y:(+z.y||0), h:(z.h!=null?+z.h:3), dps:(+z.dps||0), den:(+z.den||1), psz:(+z.psz||1), hue:(z.hue!=null?+z.hue:30), turb:(z.turb!=null?+z.turb:1), wind:(+z.wind||0), spk:(z.spk!==false), sat:(z.sat!=null?+z.sat:1), smoke:(z.smoke===true?1:0), rx:(+z.rx||0), ry:(+z.ry||0), rz:(+z.rz||0), sx:(z.sx!=null?+z.sx:1), sy:(z.sy!=null?+z.sy:1), sz:(z.sz!=null?+z.sz:1) })),
     fx: Object.assign({}, fxCfg),
     deathFx: Object.assign({}, deathFxCfg),
     tracer: Object.assign({}, tracerCfg),
@@ -19517,6 +19534,7 @@ function getSelRot(){
   if(editorActive==='lights'){ const g=editorTargets.lights.obj(); return g?g.rotation:null; }
   if(editorActive==='spawns'){ const g=editorTargets.spawns.obj(); return g?g.rotation:null; }
   if(editorActive==='pstart'){ return playerSpawnMarker?playerSpawnMarker.rotation:null; }
+  if(editorActive==='firezones'){ return (selFireZone>=0 && fireZoneFx[selFireZone])?fireZoneFx[selFireZone].rotation:null; }   // build 556: fire/smoke can be rotated
   return null;
 }
 // Recompute the station's collision boxes at its current transform — gizmo moves change the group/model
@@ -19539,6 +19557,11 @@ function setSelRot(euler){
   } else if(editorActive==='spawns'){
     const g=editorTargets.spawns.obj(); if(!g) return;
     g.rotation.set(0, euler.y, 0); g.userData.mark.face = euler.y;   // spawns only yaw (facing)
+  } else if(editorActive==='firezones'){
+    const g=(selFireZone>=0)?fireZoneFx[selFireZone]:null; if(!g) return;
+    g.rotation.copy(euler);   // build 556: rotate the live group directly (cheap; no particle-system rebuild mid-drag)
+    const z=fireZones[selFireZone]; if(z){ z.rx=euler.x*DEG; z.ry=euler.y*DEG; z.rz=euler.z*DEG; }
+    if(typeof renderFireZonesPanel==='function') renderFireZonesPanel();
   } else if(editorActive==='pstart'){
     playerSpawn.yaw = euler.y; refreshPlayerSpawnMarker();   // player start only yaws (facing)
   }
@@ -19547,6 +19570,7 @@ function setSelRot(euler){
 function getSelScale(){
   if(editorActive==='station' && station && station.model) return station.model.scale;
   if(editorActive==='props'){ const o=editorTargets.props.obj(); return o?o.scale:null; }
+  if(editorActive==='firezones'){ return (selFireZone>=0 && fireZoneFx[selFireZone])?fireZoneFx[selFireZone].scale:null; }   // build 556: fire/smoke can be scaled
   return null;
 }
 function setSelScale(v){
@@ -19559,6 +19583,11 @@ function setSelScale(v){
     const o=editorTargets.props.obj(); if(!o) return;
     o.scale.copy(v); refreshPropCollider(o);
     const ps=editorTargets.props.state; ps.sx=v.x; ps.sy=v.y; ps.sz=v.z;   // per-axis scale fields stay in sync
+  } else if(editorActive==='firezones'){
+    const g=(selFireZone>=0)?fireZoneFx[selFireZone]:null; if(!g) return;
+    g.scale.copy(v);   // build 556: scale the live group directly (no rebuild mid-drag)
+    const z=fireZones[selFireZone]; if(z){ z.sx=+v.x.toFixed(3); z.sy=+v.y.toFixed(3); z.sz=+v.z.toFixed(3); }
+    if(typeof renderFireZonesPanel==='function') renderFireZonesPanel();
   }
 }
 function buildGizmo(){
@@ -19628,7 +19657,8 @@ function updateGizmo(){
   if((editorActive==='lights'||editorActive==='spawns'||editorActive==='pstart') && mode==='scale') mode='translate';
   if(selPickup>=0) mode='translate';   // a pickup spot is just an x/z position
   if(editorActive==='extract') mode='translate';   // the extraction point only moves (radius lives in Game / waves)
-  if(editorActive==='deathzones'||editorActive==='jumppads'||editorActive==='firezones') mode='translate';   // zones move on the floor; size/height live in their panel
+  if(editorActive==='deathzones'||editorActive==='jumppads') mode='translate';   // these flat floor zones only move; size lives in their panel
+  // build 556: fire zones now support rotate + scale gizmo modes (move/rotate/scale), like a prop
   if(editorActive==='turrets') mode='translate';   // move with the gizmo; facing/scale/arc live in the Turrets panel
   gr.translate.visible = (mode==='translate');
   gr.scale.visible = (mode==='scale');
