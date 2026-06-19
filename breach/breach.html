@@ -676,7 +676,7 @@
   <div class="modalCard">
     <button class="modalClose" data-close="creditsModal">✕</button>
     <h2>CREDITS &amp; ATTRIBUTION</h2>
-    <div id="creditsBody" style="text-align:left;font-size:13px;line-height:1.6;max-height:60vh;overflow:auto;padding-right:6px"></div>
+    <div id="creditsBody" style="text-align:left;font-size:13px;line-height:1.6;max-height:60vh;overflow:auto;padding-right:6px;color:#cfe9df"></div>
   </div>
 </div>
 
@@ -12907,7 +12907,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 550 · 2026-06-19';
+const BUILD_VERSION = 'build 551 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -20548,14 +20548,14 @@ function renderCreditsScreen(){
   const host=document.getElementById('creditsBody'); if(!host) return;
   let h='<div style="color:#9fc4ba;margin-bottom:10px">BREACH is built on open-source libraries and free Creative-Commons assets. Thanks to everyone below.</div>';
   h+='<div style="color:#ffd166;font-weight:700;margin:6px 0 3px;letter-spacing:.04em">ENGINE &amp; LIBRARIES</div>';
-  for(const l of LIB_CREDITS) h+='<div style="margin-bottom:2px"><b>'+_creditEsc(l.name)+'</b> — '+_creditEsc(l.by)+' <span style="color:#8fb9ad">['+_creditEsc(l.lic)+']</span> · '+_creditLinkify(l.url)+'</div>';
+  for(const l of LIB_CREDITS) h+='<div style="margin-bottom:2px"><b style="color:#eafff7">'+_creditEsc(l.name)+'</b> — '+_creditEsc(l.by)+' <span style="color:#8fb9ad">['+_creditEsc(l.lic)+']</span> · '+_creditLinkify(l.url)+'</div>';
   h+='<div style="color:#ffd166;font-weight:700;margin:12px 0 3px;letter-spacing:.04em">ASSET SOURCES</div>';
-  for(const s of ASSET_SOURCES) h+='<div style="margin-bottom:2px"><b>'+_creditEsc(s.name)+'</b> — '+_creditEsc(s.note)+' · '+_creditLinkify(s.url)+'</div>';
+  for(const s of ASSET_SOURCES) h+='<div style="margin-bottom:2px"><b style="color:#eafff7">'+_creditEsc(s.name)+'</b> — '+_creditEsc(s.note)+' · '+_creditLinkify(s.url)+'</div>';
   const atts=collectLevelCredits();
   h+='<div style="color:#ffd166;font-weight:700;margin:12px 0 3px;letter-spacing:.04em">ASSETS IN THIS LEVEL ('+atts.length+')</div>';
   if(atts.length){ h+='<div style="color:#8fb9ad;font-size:12px;line-height:1.7">'; for(const a of atts) h+='<div>'+_creditLinkify(a)+'</div>'; h+='</div>'; }
-  else h+='<div style="color:#5a7d72;font-size:12px">No Creative-Commons assets are loaded right now. Models and sounds you add from Poly Pizza, Sketchfab, or Freesound are credited here automatically.</div>';
-  h+='<div style="color:#5a7d72;font-size:11px;margin-top:12px">Poly Haven textures &amp; HDRIs are CC0 (public domain, no attribution required — listed above as a courtesy). When you publish, keep this screen reachable so each asset\u2019s license is satisfied.</div>';
+  else h+='<div style="color:#8fb1a6;font-size:12px">No Creative-Commons assets are loaded right now. Models and sounds you add from Poly Pizza, Sketchfab, or Freesound are credited here automatically.</div>';
+  h+='<div style="color:#7e9d92;font-size:11px;margin-top:12px">Poly Haven textures &amp; HDRIs are CC0 (public domain, no attribution required — listed above as a courtesy). When you publish, keep this screen reachable so each asset\u2019s license is satisfied.</div>';
   host.innerHTML=h;
 }
 function openCredits(){ renderCreditsScreen(); openModal('creditsModal'); }
