@@ -12934,7 +12934,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 553 · 2026-06-19';
+const BUILD_VERSION = 'build 554 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15195,6 +15195,10 @@ function startCinematic(data, editorPreview){
   document.body.classList.add('cine'); _cineShowBars(true);
   _showCineAvatar();
   _startCineAudio();
+  // build 554: frame the opening shot and paint it ONCE right now, so whatever was covering the scene (the
+  // loading screen on deploy, or just the previous frame) is replaced by the cinematic's first frame — never a
+  // split-second flash of the live gameplay view before the camera moves. The loop keeps advancing it after.
+  try{ if(_cineData){ updateCinematic(0); if(typeof renderScene==='function') renderScene(scene, camera); } }catch(e){}
   return true;
 }
 function endCinematic(){
@@ -20014,7 +20018,7 @@ function waitAssetsThenReveal(){
   // The physics world was built at deploy, possibly before async model geometry finished loading, so its
   // static colliders can be incomplete (player passes through). Rebuild it now that all assets are in,
   // so the character controller collides against the fully-loaded scene.
-  const reveal=()=>{ try{ if(physWorld) buildPhysWorld(); }catch(e){} hideLevelLoader(); if(_cineIntroPending){ _cineIntroPending=false; try{ maybeStartIntroCine(); }catch(e){} } };
+  const reveal=()=>{ try{ if(physWorld) buildPhysWorld(); }catch(e){} if(_cineIntroPending){ _cineIntroPending=false; try{ maybeStartIntroCine(); }catch(e){} } hideLevelLoader(); };   // build 554: start (and paint) the cinematic BEFORE the loader fades, so the loader reveals the cinematic — not a stale gameplay frame
   const tick=()=>{
     if(!_levelLoaderActive) return;
     const now=performance.now();
@@ -20138,8 +20142,10 @@ function startGame(){
   teardownInstancing(); buildInstancing();   // (re)collapse repeated static shapes for play
   if(typeof buildPhysWorld==='function') buildPhysWorld();   // build a FRESH physics world for this level every match — never inherit a stale one from a previous session (fixes the client free-fly when no assets were pending, so the loader/reveal never rebuilt it)
   if(typeof maybeStartIntroCine==='function'){   // optional authored intro flythrough (no-op if disabled / no path)
+    const _introWillPlay = (typeof cineCfg!=='undefined' && cineCfg.on && typeof _ccHasData==='function' && _ccHasData(cineCfg));
+    if(_introWillPlay && !_levelLoaderActive){ showLevelLoader(); waitAssetsThenReveal(); }   // build 554: even with assets already cached, hold a cover so the live scene never flashes for a beat before the cinematic takes the camera; reveal() starts the cinematic, then drops the cover
     if(_levelLoaderActive) _cineIntroPending = true;   // defer: starting now would play the cutscene AUDIO behind the loading screen (the loop freezes the shot but the track is already running) and frame a half-loaded scene
-    else _startIntroWhenSettled();   // no loader is up, but loads can still START a few frames from now (async model chains, prewarms) — wait for the counters to go quiet
+    else _startIntroWhenSettled();   // no intro cutscene to cover for — just let late async loads settle (maybeStartIntroCine no-ops if disabled)
   }
   tryPointerLock();
 }
