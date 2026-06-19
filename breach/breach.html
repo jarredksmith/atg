@@ -636,6 +636,7 @@
     <button id="loadCampBtn" class="secBtn ghost"><svg class="eico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/></svg>Load campaign</button>
     <button id="instrBtn" class="secBtn ghost"><svg class="eico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>Instructions</button>
     <button id="helpBtn" class="secBtn ghost"><svg class="eico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>Field manual</button>
+    <button id="creditsBtn" class="secBtn ghost"><svg class="eico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h6"/></svg>Credits</button>
     <button id="ctrlBtn" class="secBtn ghost"></button>
     <button id="fsBtn" class="secBtn ghost" style="display:none"></button>
     <input type="file" id="menuCampFile" accept=".json,application/json" style="display:none">
@@ -662,6 +663,15 @@
       <span style="color:#ffd166">Kill enemies for credits — spend them at the ammo station and supply caches.</span>
       <div class="hint" style="margin-top:10px;color:var(--accent)">Tip: pause → <b>✿ Customize controls</b> to move or resize any on-screen button.</div>
     </div>
+  </div>
+</div>
+
+<!-- Credits & attribution modal (build 549) -->
+<div id="creditsModal" class="modalBack hidden">
+  <div class="modalCard">
+    <button class="modalClose" data-close="creditsModal">✕</button>
+    <h2>CREDITS &amp; ATTRIBUTION</h2>
+    <div id="creditsBody" style="text-align:left;font-size:13px;line-height:1.6;max-height:60vh;overflow:auto;padding-right:6px"></div>
   </div>
 </div>
 
@@ -755,6 +765,7 @@
       <label class="paLbl"><svg class="eico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20 12 4l7 16"/><path d="M7.7 14h8.6"/></svg>Title font<select id="uiDispSel" style="margin-left:auto;background:#0c1418;color:#cfeee2;border:1px solid #2a3a42;border-radius:5px;padding:2px 4px"></select></label>
       <button id="uiThemeReset" class="pBtnGhost" style="font-size:11px;padding:4px 8px">↺ Reset appearance</button>
     </div>
+    <button id="pauseCredits" class="pBtnGhost">Credits &amp; licenses</button>
     <button id="pauseExit" class="pBtnExit">⌂ Exit to main menu</button>
   </div>
 </div>
@@ -12891,7 +12902,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 548 · 2026-06-19';
+const BUILD_VERSION = 'build 549 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -17742,7 +17753,7 @@ function renderEditorFields(){
     const enPsHead=document.createElement('div'); enPsHead.className='hint'; enPsHead.style.margin='8px 0 3px'; enPsHead.innerHTML='<b>🔍 Poly Pizza</b> — search free models, click to use for this enemy type';
     eHost.appendChild(enPsHead);
     const enPsHost=document.createElement('div'); eHost.appendChild(enPsHost);
-    renderModelSearch(enPsHost, (m, st)=>{ eUrl.value=m.glb; pushUndoSnapshot(); swapEnemyModel(m.glb, editorEnemyType); refreshEnemyVisuals(); if(st) st.textContent='Using "'+m.title+'" — credit: '+(m.attribution||''); }, { placeholder:'e.g. zombie, alien, drone' });
+    renderModelSearch(enPsHost, (m, st)=>{ eUrl.value=m.glb; pushUndoSnapshot(); swapEnemyModel(m.glb, editorEnemyType); refreshEnemyVisuals(); creditAsset(m.attribution); if(st) st.textContent='Using "'+m.title+'" — credit: '+(m.attribution||''); }, { placeholder:'e.g. zombie, alien, drone' });
     const eScaleRow=document.createElement('label'); eScaleRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 2px;';
     const esSp=document.createElement('span'); esSp.textContent='Model scale'; esSp.style.minWidth='86px';
     // Scale spans a huge range (0.001 .. 50), so the slider is LOGARITHMIC — small values get real precision
@@ -18132,7 +18143,7 @@ function renderEditorFields(){
     const ltPsHead=document.createElement('div'); ltPsHead.className='hint'; ltPsHead.style.margin='8px 0 3px'; ltPsHead.innerHTML='<b>🔍 Poly Pizza</b> — search free models, click to use as the loot box';
     lHost.appendChild(ltPsHead);
     const ltPsHost=document.createElement('div'); lHost.appendChild(ltPsHost);
-    renderModelSearch(ltPsHost, (m, st)=>{ url.value=m.glb; pushUndoSnapshot(); swapChestModel(m.glb); for(const ch of chests.slice()){ scene.remove(ch.mesh); } chests.length=0; chestTimer=Math.min(chestTimer,2); if(st) st.textContent='Using "'+m.title+'" — credit: '+(m.attribution||''); }, { placeholder:'e.g. chest, crate, barrel' });
+    renderModelSearch(ltPsHost, (m, st)=>{ url.value=m.glb; pushUndoSnapshot(); swapChestModel(m.glb); for(const ch of chests.slice()){ scene.remove(ch.mesh); } chests.length=0; chestTimer=Math.min(chestTimer,2); creditAsset(m.attribution); if(st) st.textContent='Using "'+m.title+'" — credit: '+(m.attribution||''); }, { placeholder:'e.g. chest, crate, barrel' });
     const sRow=document.createElement('label'); sRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 2px;';
     const sSp=document.createElement('span'); sSp.textContent='Model scale'; sSp.style.minWidth='86px';
     const sNum=document.createElement('input'); sNum.type='number'; sNum.min='0.05'; sNum.max='50'; sNum.step='0.05'; sNum.value=chestModelScale; sNum.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
@@ -18855,7 +18866,7 @@ function renderEditorFields(){
       const psHead=document.createElement('div'); psHead.className='hint'; psHead.style.margin='10px 0 3px'; psHead.innerHTML='<b>🔍 Poly Pizza</b> — search free models, click one to use it';
       urlHost.appendChild(psHead);
       const psHost=document.createElement('div'); urlHost.appendChild(psHost);
-      renderModelSearch(psHost, (m, st)=>{ inp.value=m.glb; tgt.pickedThumb=m.thumb||''; if(tgt.setUrl) tgt.setUrl(m.glb); if(st) st.textContent='Using "'+m.title+'" — credit: '+(m.attribution||''); }, { placeholder:'e.g. pistol, robot, barrel' });
+      renderModelSearch(psHost, (m, st)=>{ inp.value=m.glb; tgt.pickedThumb=m.thumb||''; if(tgt.setUrl) tgt.setUrl(m.glb); creditAsset(m.attribution); if(st) st.textContent='Using "'+m.title+'" — credit: '+(m.attribution||''); }, { placeholder:'e.g. pistol, robot, barrel' });
     }
     if(tgt===editorTargets.gun){   // per-weapon shoot sound (moved here from the old Sounds tab)
       if(!audioSettings.sounds) audioSettings.sounds=_emptySounds(); if(!audioSettings.sounds.shoot) audioSettings.sounds.shoot={};
@@ -19170,7 +19181,7 @@ function renderEditorFields(){
     const tpsHead=document.createElement('div'); tpsHead.className='hint'; tpsHead.style.margin='10px 0 3px'; tpsHead.innerHTML='<b>\uD83D\uDD0D Poly Pizza</b> \u2014 search free models, click one to use for the turret';
     urlHost.appendChild(tpsHead);
     const tpsHost=document.createElement('div'); urlHost.appendChild(tpsHost);
-    renderModelSearch(tpsHost, (m, st)=>{ inp.value=m.glb; pushUndoSnapshot(); turretModelUrl=m.glb; rebuildTurretVisuals(); if(st) st.textContent='Using \u201c'+m.title+'\u201d \u2014 credit: '+(m.attribution||''); }, { placeholder:'e.g. turret, cannon, gun emplacement' });
+    renderModelSearch(tpsHost, (m, st)=>{ inp.value=m.glb; pushUndoSnapshot(); turretModelUrl=m.glb; rebuildTurretVisuals(); creditAsset(m.attribution); if(st) st.textContent='Using \u201c'+m.title+'\u201d \u2014 credit: '+(m.attribution||''); }, { placeholder:'e.g. turret, cannon, gun emplacement' });
     // build 544/545: shared model-alignment controls (the model is shared, so these orient ITS barrel + muzzle for every turret)
     { const mch=document.createElement('div'); mch.className='hint'; mch.style.margin='10px 0 2px'; mch.innerHTML='<b>Model alignment</b> \u2014 shared by every turret: orient the barrel + muzzle of the model'; urlHost.appendChild(mch);
       const _tRow=(label, get, set, mn, mx, st)=>{
@@ -20334,6 +20345,7 @@ function renderFreesoundBrowser(host, refresh, directTarget){
       const nm=document.createElement('div'); nm.textContent=snd.name; nm.style.cssText='color:#cfeee2;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
       const meta=document.createElement('div'); meta.style.cssText='color:#5a7d72;font-size:10px;'; meta.textContent=(snd.username?('by '+snd.username):'')+(snd.duration?(' \u00b7 '+snd.duration.toFixed(1)+'s'):'')+(snd.license?(' \u00b7 '+fsLicShort(snd.license)):'');
       info.appendChild(nm); info.appendChild(meta);
+      const _fsAtt=(snd.name||'Sound')+(snd.username?(' by '+snd.username):'')+' ['+fsLicShort(snd.license)+'] — via Freesound'+(snd.license?(' · '+snd.license):'');   // build 549: credit string for the picked sound
       const play=document.createElement('button'); play.textContent='\u25b6'; play.title='Preview'; play.style.cssText='flex:0 0 auto;width:26px;'+B;
       play.onclick=()=>{ try{
         if(_fsAudio && _fsAudioBtn===play && !_fsAudio.paused){ _fsAudio.pause(); _fsAudio=null; _fsAudioBtn=null; play.textContent='\u25b6'; play.title='Preview'; return; }   // same card playing -> stop
@@ -20345,13 +20357,13 @@ function renderFreesoundBrowser(host, refresh, directTarget){
       }catch(e){} };
       if(directTarget){
         const useb=document.createElement('button'); useb.textContent='Use'; useb.style.cssText='flex:0 0 auto;'+B;
-        useb.onclick=()=>{ directTarget.set(snd.preview); saveAudioSettings(); initAudio(); loadSound(snd.preview); status.textContent='Assigned \u2713'; if(refresh) refresh(); };
+        useb.onclick=()=>{ directTarget.set(snd.preview); creditAsset(_fsAtt); saveAudioSettings(); initAudio(); loadSound(snd.preview); status.textContent='Assigned \u2713'; if(refresh) refresh(); };
         card.appendChild(info); card.appendChild(play); card.appendChild(useb);
       } else {
         const sel=document.createElement('select'); sel.style.cssText='flex:0 0 auto;max-width:118px;'+I;
         const ph=document.createElement('option'); ph.value=''; ph.textContent='Assign to\u2026'; sel.appendChild(ph);
         slots.forEach((sl,i)=>{ const o=document.createElement('option'); o.value=String(i); o.textContent=sl.label; sel.appendChild(o); });
-        sel.onchange=()=>{ const i=+sel.value; sel.value=''; if(!(i>=0)||i!==i) return; slots[i].set(snd.preview); saveAudioSettings(); initAudio(); loadSound(snd.preview); status.textContent='Assigned to '+slots[i].label+' \u2713'; if(refresh) refresh(); };
+        sel.onchange=()=>{ const i=+sel.value; sel.value=''; if(!(i>=0)||i!==i) return; slots[i].set(snd.preview); creditAsset(_fsAtt); saveAudioSettings(); initAudio(); loadSound(snd.preview); status.textContent='Assigned to '+slots[i].label+' \u2713'; if(refresh) refresh(); };
         card.appendChild(info); card.appendChild(play); card.appendChild(sel);
       }
       list.appendChild(card);
@@ -20405,6 +20417,7 @@ function bindMenu(){
   // First run: greet a cold visitor with the instructions once (device-aware), then never auto-open again.
   try{ if(!localStorage.getItem('breach_seen')){ localStorage.setItem('breach_seen','1'); syncInstrControls(); openModal('instrModal'); } }catch(e){}
   const hb=document.getElementById('helpBtn'); if(hb) hb.onclick=()=>{ try{ window.open('breach-help.html','_blank'); }catch(e){} };   // full docs, hosted beside the game
+  const crb=document.getElementById('creditsBtn'); if(crb) crb.onclick=openCredits;   // build 549: player-facing credits + license screen
   const cb=document.getElementById('ctrlBtn');
   if(cb){
     const lbl=()=>{ cb.innerHTML=UI_ICON.gamepad + 'Controls: ' + (_ctrlPref==='touch'?'Touch':_ctrlPref==='desktop'?'Desktop':'Auto'); };
@@ -20480,6 +20493,7 @@ function bindPauseMenu(){
   const crmb=document.getElementById('pauseCrouchMode'); if(crmb){ const updc=()=>{ crmb.textContent='Crouch: '+(_crouchMode==='toggle'?'Toggle':'Hold'); }; updc(); crmb.onclick=()=>{ _crouchMode = _crouchMode==='toggle'?'hold':'toggle'; _crouchToggled=false; try{ localStorage.setItem('breach_crouch_mode', _crouchMode); }catch(e){} updc(); }; }   // Toggle lets players crouch-walk without the Ctrl+W browser close-combo
   const cmb=document.getElementById('pauseCamMode'); if(cmb){ const updc=()=>{ cmb.textContent='Camera: '+(tpMode?'Third person':'First person'); }; updc(); cmb.onclick=()=>{ tpMode=!tpMode; try{ localStorage.setItem('breach_tp', tpMode?'1':'0'); }catch(e){} updc(); }; }
   const x=document.getElementById('pauseExit'); if(x) x.onclick=exitToMenu;
+  const pc=document.getElementById('pauseCredits'); if(pc) pc.onclick=openCredits;   // build 549: credits reachable mid-game from the pause menu
   const mc=document.getElementById('muteCb'); if(mc){ mc.checked=audioSettings.muted; mc.onchange=()=>{ audioSettings.muted=mc.checked; applyAudioSettings(); saveAudioSettings(); }; }
   const vM=document.getElementById('volMaster'); if(vM){ vM.value=Math.round(audioSettings.master*100); vM.oninput=()=>{ audioSettings.master=(+vM.value)/100; applyAudioSettings(); saveAudioSettings(); }; }
   const vMu=document.getElementById('volMusic'); if(vMu){ vMu.value=Math.round(audioSettings.music*100); vMu.oninput=()=>{ audioSettings.music=(+vMu.value)/100; applyAudioSettings(); saveAudioSettings(); }; }
@@ -20498,6 +20512,48 @@ function syncInstrControls(){   // show the controls that match this device — 
   if(kb) kb.style.display = isTouch ? 'none' : '';
   if(tc) tc.style.display = isTouch ? '' : 'none';
 }
+// ---------- build 549: Credits & attribution screen (release requirement) ----------
+// The engines/libraries below must be credited (their licenses require it). CC assets (models from Poly Pizza /
+// Sketchfab, sounds from Freesound) get per-item credit. The library + source lines are static; the per-asset
+// lines are gathered live — placed props persist their attribution in the level, and anything picked this
+// session (turret/enemy/loot/weapon models + sounds, which don't persist their own credit yet) is captured in
+// assetCredits so the screen is complete while authoring/playtesting. Poly Haven textures/HDRIs are CC0.
+const LIB_CREDITS = [
+  { name:'three.js', by:'Ricardo Cabello (mrdoob) & contributors', lic:'MIT', url:'https://threejs.org' },
+  { name:'Rapier (@dimforge/rapier3d-compat)', by:'Dimforge', lic:'Apache-2.0', url:'https://rapier.rs' },
+  { name:'PeerJS', by:'PeerJS contributors', lic:'MIT', url:'https://peerjs.com' }
+];
+const ASSET_SOURCES = [
+  { name:'Poly Pizza', note:'low-poly 3D models (CC0 / CC-BY)', url:'https://poly.pizza' },
+  { name:'Sketchfab', note:'downloadable 3D models (various CC)', url:'https://sketchfab.com' },
+  { name:'Poly Haven', note:'textures & HDRIs (CC0)', url:'https://polyhaven.com' },
+  { name:'Freesound', note:'sound effects (various CC)', url:'https://freesound.org' }
+];
+const assetCredits = new Set();   // session-captured attributions for slots that don't persist their own credit
+function creditAsset(s){ if(s && typeof s==='string'){ const t=s.trim(); if(t) assetCredits.add(t); } }   // build 549: register a CC asset credit (called by the model/sound pickers)
+function collectLevelCredits(){   // de-duped, sorted per-asset attributions: placed props (persisted) + anything picked this session
+  const set=new Set();
+  if(typeof propModels!=='undefined') for(const o of propModels){ if(o && o.userData && o.userData.attribution) set.add(o.userData.attribution); }
+  assetCredits.forEach(a=>set.add(a));
+  return [...set].sort((a,b)=>a.localeCompare(b));
+}
+function _creditEsc(s){ return String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function _creditLinkify(s){ return _creditEsc(s).replace(/(https?:\/\/[^\s)]+)/g, '<a href="$1" target="_blank" rel="noopener" style="color:#7fe6cf">$1</a>'); }   // escape first, then linkify — safe against markup in author-supplied strings
+function renderCreditsScreen(){
+  const host=document.getElementById('creditsBody'); if(!host) return;
+  let h='<div style="color:#9fc4ba;margin-bottom:10px">BREACH is built on open-source libraries and free Creative-Commons assets. Thanks to everyone below.</div>';
+  h+='<div style="color:#ffd166;font-weight:700;margin:6px 0 3px;letter-spacing:.04em">ENGINE &amp; LIBRARIES</div>';
+  for(const l of LIB_CREDITS) h+='<div style="margin-bottom:2px"><b>'+_creditEsc(l.name)+'</b> — '+_creditEsc(l.by)+' <span style="color:#8fb9ad">['+_creditEsc(l.lic)+']</span> · '+_creditLinkify(l.url)+'</div>';
+  h+='<div style="color:#ffd166;font-weight:700;margin:12px 0 3px;letter-spacing:.04em">ASSET SOURCES</div>';
+  for(const s of ASSET_SOURCES) h+='<div style="margin-bottom:2px"><b>'+_creditEsc(s.name)+'</b> — '+_creditEsc(s.note)+' · '+_creditLinkify(s.url)+'</div>';
+  const atts=collectLevelCredits();
+  h+='<div style="color:#ffd166;font-weight:700;margin:12px 0 3px;letter-spacing:.04em">ASSETS IN THIS LEVEL ('+atts.length+')</div>';
+  if(atts.length){ h+='<div style="color:#8fb9ad;font-size:12px;line-height:1.7">'; for(const a of atts) h+='<div>'+_creditLinkify(a)+'</div>'; h+='</div>'; }
+  else h+='<div style="color:#5a7d72;font-size:12px">No Creative-Commons assets are loaded right now. Models and sounds you add from Poly Pizza, Sketchfab, or Freesound are credited here automatically.</div>';
+  h+='<div style="color:#5a7d72;font-size:11px;margin-top:12px">Poly Haven textures &amp; HDRIs are CC0 (public domain, no attribution required — listed above as a courtesy). When you publish, keep this screen reachable so each asset\u2019s license is satisfied.</div>';
+  host.innerHTML=h;
+}
+function openCredits(){ renderCreditsScreen(); openModal('creditsModal'); }
 function openModal(id){ const m=document.getElementById(id); if(m) m.classList.remove('hidden'); }
 function closeModal(id){ const m=document.getElementById(id); if(m) m.classList.add('hidden'); }
 function bindModals(){
