@@ -12791,7 +12791,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 530 · 2026-06-17';
+const BUILD_VERSION = 'build 531 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15556,6 +15556,11 @@ function loop(){
     const players = allPlayers();
     const _eDir = new THREE.Vector3();
     const nowMs = performance.now();
+    // build 531: give solo/campaign enemies the SAME nav-grid pathfinding the MP bots use, so they route
+    // around walls/props instead of beelining into them. Build the grid incrementally (no spawn freeze;
+    // enemies beeline until it's ready). Bots are PvP-only, so nothing else competes for this budget here.
+    if(!NAV.built){ if(!NAV.building && typeof navBuildBegin==='function') navBuildBegin(); if(typeof navBuildStep==='function') navBuildStep(5); }
+    _repathBudget = 3;   // cap A* searches per tick so a frame never stalls on many enemy repaths at once
     // Phase 1 — behavior: hunt chases anywhere; patrol/hold use detection + leash and otherwise patrol
     // their area or guard their post. Movement aims at the state's target point; chasing stops just
     // outside melee so they crowd the player instead of bulldozing through.
@@ -15584,7 +15589,15 @@ function loop(){
         const toPx = near.pos.x - en.mesh.position.x, toPz = near.pos.z - en.mesh.position.z, pd = Math.hypot(toPx,toPz)||1;
         if(pd > en.standoff + 1){ en.mesh.position.x += toPx/pd*en.speed*dt; en.mesh.position.z += toPz/pd*en.speed*dt; }
         else if(pd < en.standoff*0.6){ en.mesh.position.x -= toPx/pd*en.speed*dt; en.mesh.position.z -= toPz/pd*en.speed*dt; }
-      } else if(d > stopAt){ _eDir.set(dx,0,dz).multiplyScalar(1/d); en.mesh.position.addScaledVector(_eDir, spd*dt); }
+      } else if(d > stopAt){
+        // chase: route around walls/props via the nav grid (bot-style); beeline if there's no path or the grid isn't built yet
+        let _mvx=dx/d, _mvz=dz/d;
+        if(td.chase && typeof _botFollowPath==='function'){
+          const _wp=_botFollowPath(en._nav||(en._nav={ pos:en.mesh.position }), td.tx, td.tz, dt);
+          if(_wp){ const _pdx=_wp.x-en.mesh.position.x, _pdz=_wp.z-en.mesh.position.z, _pl=Math.hypot(_pdx,_pdz)||1; _mvx=_pdx/_pl; _mvz=_pdz/_pl; }
+        }
+        en.mesh.position.x += _mvx*spd*dt; en.mesh.position.z += _mvz*spd*dt;
+      }
       }
     }
     // Phase 2 — separation: shove overlapping enemies apart so they don't stack / clip through each
