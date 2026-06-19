@@ -742,6 +742,7 @@
     <button id="pauseEditHud" class="pBtnGhost" style="display:none">✿ Customize controls</button>
     <button id="pauseCamMode" class="pBtnGhost">Camera: First person</button>
     <button id="pauseSprintMode" class="pBtnGhost">Sprint: Hold</button>
+    <button id="pauseCrouchMode" class="pBtnGhost">Crouch: Hold</button>
     <div class="pauseAudio">
       <label class="paLbl"><input type="checkbox" id="muteCb"> Mute all</label>
       <label class="paLbl"><svg class="eico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>Master<input type="range" id="volMaster" min="0" max="100" value="80"></label>
@@ -6695,13 +6696,23 @@ function setEnemyAnimState(body, state){
 // _locoSlot: choose forward / back / strafe locomotion from the planar move vector relative to facing yaw.
 // family = 'walk' | 'run' | 'sprint' | 'crouch'. Avatars face -Z, so forward is (-sin yaw, -cos yaw); the
 // move vector is projected onto facing (f) and screen-right (r), and the dominant axis picks the slot.
-function _locoSlot(mx, mz, yaw, family){
+function _locoSlot(mx, mz, yaw, family, cur){
   const sp = Math.hypot(mx, mz);
   if(sp < 1e-4) return family==='crouch' ? 'crouch' : 'idle';
   const fx=-Math.sin(yaw), fz=-Math.cos(yaw);   // forward
   const rx= Math.cos(yaw), rz=-Math.sin(yaw);   // right (level, screen-right)
   const f=(mx*fx+mz*fz)/sp, r=(mx*rx+mz*rz)/sp;
-  const fwd = Math.abs(f) >= Math.abs(r);        // dominant axis: forward/back vs strafe
+  const af=Math.abs(f), ar=Math.abs(r);
+  // forward/back vs strafe, with hysteresis around the 45° diagonal so a HELD diagonal (W+A/D, S+A/D)
+  // doesn't flip the chosen clip every frame. Bias toward whatever's already playing; with no incumbent
+  // (cur omitted, e.g. bots) lean slightly toward forward/back so a clean diagonal still resolves cleanly.
+  const curStrafe = !!(cur && /strafe/i.test(cur));
+  const curFwd = !!(cur && !curStrafe && /walk|run|sprint|back/i.test(cur));
+  const M = 0.22;   // the challenger axis must beat the incumbent by this margin to take over
+  let fwd;
+  if(curStrafe) fwd = af > ar + M;          // strafing now -> only switch to forward when it clearly wins
+  else if(curFwd) fwd = !(ar > af + M);     // forward now -> hold unless strafe clearly wins
+  else fwd = af + 0.12 >= ar;               // no incumbent -> slight forward/back lean
   if(family==='crouch'){
     if(fwd) return f>=0 ? 'crouchWalk' : 'crouchBack';
     return r>0 ? 'crouchStrafeR' : 'crouchStrafeL';
@@ -8330,6 +8341,7 @@ addEventListener('keydown', e=>{
   // (page scroll / button activation) during modifier combos like Shift+Space, which broke jump-while-running.
   if(GAME_KEYS[e.code]){ e.preventDefault(); }
   if(_sprintMode==='toggle' && (e.code==='ShiftLeft'||e.code==='ShiftRight') && !e.repeat){ _sprintToggled = !_sprintToggled; }   // tap toggles run (no need to HOLD Shift while pressing W+Space)
+  if(_crouchMode==='toggle' && (e.code==='ControlLeft'||e.code==='ControlRight') && !e.repeat){ _crouchToggled = !_crouchToggled; }   // tap toggles crouch -> no need to HOLD Ctrl+W (the browser close-tab combo)
   if(e.code==='Tab'){ if(!e.repeat) openRadial(); e.preventDefault(); return; }   // radial deploy menu
   if(e.code==='KeyT' && NET.mode!=='off' && gameOn && !gameOver && !editorOpen && !shopOpen && !choosingUpgrade && !radialOpen){ openChat(); e.preventDefault(); return; }   // T: open multiplayer text chat
   // Crouch is Ctrl, so crouch+WASD lands on browser shortcuts: Ctrl+S (save page), Ctrl+D (bookmark),
@@ -8398,6 +8410,7 @@ addEventListener('keyup', e=>{ keys[e.code]=false; if(e.code==='Tab' && radialOp
 // a wave or round starts. (Gamepad axes re-poll every frame, so they self-correct and aren't cleared here.)
 function clearMovementInput(){
   _sprintToggled=false;
+  _crouchToggled=false;
   for(const k in keys) keys[k]=false;
   touchMoveX=0; touchMoveZ=0; touchSprint=false; touchFiring=false; touchAds=false; touchJump=false; touchLookDX=0; touchLookDY=0;
   sliding=false; firing=false;
@@ -10963,6 +10976,9 @@ let tpMode = (()=>{ try{ return localStorage.getItem('breach_tp')==='1'; }catch(
 const TP_DIST = 4.2, TP_HEIGHT = 0.55, TP_MIN = 1.1;   // chase distance back / lift / closest pull-in past walls
 let _sprintMode = 'hold';   // 'hold' = press Shift to run; 'toggle' = tap Shift to lock running (helps keyboards that ghost W+Shift+Space)
 try{ const v=localStorage.getItem('breach_sprint_mode'); if(v==='toggle'||v==='hold') _sprintMode=v; }catch(e){}
+let _crouchMode = 'hold';   // 'hold' = hold Ctrl to crouch; 'toggle' = tap Ctrl to lock crouch. Toggle lets players crouch-walk WITHOUT holding Ctrl+W (the browser's close-tab combo).
+let _crouchToggled = false;
+try{ const v=localStorage.getItem('breach_crouch_mode'); if(v==='toggle'||v==='hold') _crouchMode=v; }catch(e){}
 let _sprintToggled = false;
 function sprinting(){ if(padSprint || touchSprint) return true; if(_sprintMode==='toggle') return _sprintToggled; return !!keys['ShiftLeft']; }
 // Third-person camera framing (all in camera-local space): side pushes the body left/right of screen,
@@ -11171,7 +11187,7 @@ function updateOwnAvatar(dt){
     else if(sliding && player.onGround) st='slide';             // sprint-slide
     else if(air) st=air;                                        // jumpStart / jump / fall / jumpLand / hardLand
     else if((ads||padAds||touchAds) && _ownSpeed<0.05) st='aim';// holding right-click, standing -> aim pose
-    else if(crouching){ st = _ownSpeed<0.012 ? 'crouch' : _locoSlot(mvx,mvz,player.yaw,'crouch'); }   // crouch idle / directional crouch
+    else if(crouching){ st = _ownSpeed<0.012 ? 'crouch' : _locoSlot(mvx,mvz,player.yaw,'crouch',(a.userData.visual.userData.animState)||''); }   // crouch idle / directional crouch (cur = hysteresis)
     else {
       const cur=(a.userData.visual.userData.animState)||'idle', sm=_ownSpeed;
       let tier;
@@ -11184,7 +11200,7 @@ function updateOwnAvatar(dt){
         if(!_ownFidgetUntil && _ownIdleT >= _ownFidgetAt) _ownFidgetUntil = performance.now()+1400;
         if(_ownFidgetUntil && performance.now()<_ownFidgetUntil) st='idleFidget';
         else { if(_ownFidgetUntil){ _ownFidgetUntil=0; _ownIdleT=0; _ownFidgetAt=0; } st='idle'; }
-      } else { _ownIdleT=0; _ownFidgetAt=0; _ownFidgetUntil=0; st=_locoSlot(mvx,mvz,player.yaw,tier); }   // forward/back/strafe by movement vs facing
+      } else { _ownIdleT=0; _ownFidgetAt=0; _ownFidgetUntil=0; st=_locoSlot(mvx,mvz,player.yaw,tier,cur); }   // forward/back/strafe by movement vs facing (cur = hysteresis)
     }
     setEnemyAnimState(a, st);
   }
@@ -11491,8 +11507,8 @@ function netInterpolate(dt){
       rp._aspd = (rp._aspd||0)*0.7 + md*0.3;   // low-pass: raw interpolation deltas are spiky and flip the tier frame-to-frame otherwise
       const tier = rp._aspd > (rp._wasRun?0.06:0.105) ? 'run' : (rp._aspd>0.02 ? 'walk' : 'idle'); rp._wasRun=(tier==='run');   // hysteresis: enter run high, hold it low
       if(rp.hs!=null && rp.hs!==rp._lastHs){ rp._lastHs=rp.hs; rp._hitT=performance.now()+260; rp._hitDir=(rp.hd|0); }   // a fresh networked hit -> directional flinch one-shot
-      let _st = rp.crouch ? (md>0.02 ? _locoSlot(_dx,_dz,rp.yaw,'crouch') : 'crouch')
-                          : (tier==='idle' ? 'idle' : _locoSlot(_dx,_dz,rp.yaw,tier));   // directional locomotion (fwd/back/strafe), matching the local body
+      let _st = rp.crouch ? (md>0.02 ? _locoSlot(_dx,_dz,rp.yaw,'crouch',rp.mesh.userData.visual.userData.animState) : 'crouch')
+                          : (tier==='idle' ? 'idle' : _locoSlot(_dx,_dz,rp.yaw,tier,rp.mesh.userData.visual.userData.animState));   // directional locomotion (fwd/back/strafe), matching the local body
       if(rp.ads && md<0.05 && !rp.crouch) _st='aim';                  // aiming (right-click) pose, standing
       if(rp.air) _st='jump';                                          // airborne flag travels in the state packet
       if(rp.slide) _st='slide';                                       // sliding flag travels in the state packet
@@ -12761,7 +12777,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 526 · 2026-06-17';
+const BUILD_VERSION = 'build 527 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15229,7 +15245,7 @@ function loop(){
   if(matchWarmup>0){ wish.set(0,0,0); moveScale=0; }   // frozen during the pre-match GENERATING/countdown (no pre-positioning advantage)
   if(mountedTurret){ wish.set(0,0,0); moveScale=0; }   // frozen while manning a turret
   wish.normalize();
-  let _wantCrouch = (keys['ControlLeft']||keys['ControlRight']||padCrouch);   // Ctrl = crouch (C is slide, kept separate)
+  let _wantCrouch = ((_crouchMode==='toggle') ? _crouchToggled : (keys['ControlLeft']||keys['ControlRight'])) || padCrouch;   // Ctrl = crouch (C is slide, kept separate); toggle mode avoids holding Ctrl+W
   if(!_wantCrouch && crouchT > 0.4){   // releasing crouch: only stand if there's headroom for the full body
     const _feetY = player.pos.y - EYE;
     if(ceilingAt(player.pos.x, player.pos.z, _feetY) < _feetY + PLAYER_HEIGHT + 0.05) _wantCrouch = true;
@@ -20273,6 +20289,7 @@ function bindPauseMenu(){
   const r=document.getElementById('pauseResume'); if(r) r.onclick=resumeGame;
   const eh=document.getElementById('pauseEditHud'); if(eh) eh.onclick=()=>{ const pm=document.getElementById('pauseMenu'); if(pm) pm.classList.add('hidden'); enterTouchEdit(); };
   const smb=document.getElementById('pauseSprintMode'); if(smb){ const upds=()=>{ smb.textContent='Sprint: '+(_sprintMode==='toggle'?'Toggle':'Hold'); }; upds(); smb.onclick=()=>{ _sprintMode = _sprintMode==='toggle'?'hold':'toggle'; _sprintToggled=false; try{ localStorage.setItem('breach_sprint_mode', _sprintMode); }catch(e){} upds(); }; }
+  const crmb=document.getElementById('pauseCrouchMode'); if(crmb){ const updc=()=>{ crmb.textContent='Crouch: '+(_crouchMode==='toggle'?'Toggle':'Hold'); }; updc(); crmb.onclick=()=>{ _crouchMode = _crouchMode==='toggle'?'hold':'toggle'; _crouchToggled=false; try{ localStorage.setItem('breach_crouch_mode', _crouchMode); }catch(e){} updc(); }; }   // Toggle lets players crouch-walk without the Ctrl+W browser close-combo
   const cmb=document.getElementById('pauseCamMode'); if(cmb){ const updc=()=>{ cmb.textContent='Camera: '+(tpMode?'Third person':'First person'); }; updc(); cmb.onclick=()=>{ tpMode=!tpMode; try{ localStorage.setItem('breach_tp', tpMode?'1':'0'); }catch(e){} updc(); }; }
   const x=document.getElementById('pauseExit'); if(x) x.onclick=exitToMenu;
   const mc=document.getElementById('muteCb'); if(mc){ mc.checked=audioSettings.muted; mc.onchange=()=>{ audioSettings.muted=mc.checked; applyAudioSettings(); saveAudioSettings(); }; }
