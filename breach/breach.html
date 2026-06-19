@@ -8908,16 +8908,24 @@ function spawnEnemy(spawn){
   const mesh = new THREE.Group();   // logical body (capsule-sized); visual is a child
   let px, pz, _spawnY=null, _spawnYaw=null;
   const _regionOn = !!(gameCfg && gameCfg.spawnRegion && gameCfg.spawnRegion.on);
-  if(spawn){ px = spawn.x; pz = spawn.z; }
-  else if(_regionOn && typeof randomSpawn==='function'){ const sp=randomSpawn(); px=sp.x; pz=sp.z; _spawnY=sp.y; _spawnYaw=sp.yaw; }   // build 530: a spawn region is active -> confine random/wave-fallback spawns inside it (clearance + surface validated), exactly like MP bots; explicit editor-placed spawns are left as-is
+  if(spawn && spawn.x!=null){ px = spawn.x; pz = spawn.z; }
+  else if(_regionOn && typeof randomSpawn==='function'){ const sp=randomSpawn(); px=sp.x; pz=sp.z; _spawnY=sp.y; _spawnYaw=sp.yaw; }
   else {
     do { const a=Math.random()*Math.PI*2, r=ARENA*0.6+Math.random()*ARENA*0.3;
          px=Math.cos(a)*r; pz=Math.sin(a)*r; }
     while(Math.abs(px)>ARENA-3 || Math.abs(pz)>ARENA-3);
   }
+  // build 532: when a spawn region is active, confine EVERY spawn to it — both random/wave descriptors (which
+  // carry the old perimeter-ring position) and authored markers placed outside the boundary. If the chosen
+  // spot is outside the region, re-sample a valid in-region point (clearance + surface validated), just like
+  // MP. Points already inside the region keep their authored position. This is why region spawning "did
+  // nothing" before: every wave descriptor ships an explicit x/z, so the null-spawn branch was never hit.
+  if(_regionOn && typeof _inRegion==='function' && !_inRegion(px,pz) && typeof randomSpawn==='function'){
+    const sp=randomSpawn(); px=sp.x; pz=sp.z; _spawnY=sp.y; _spawnYaw=sp.yaw;
+  }
   mesh.position.set(px, (_spawnY!=null ? _spawnY+1.4 : 1.4), pz);
-  if(spawn && spawn.face) mesh.rotation.y = spawn.face;
-  else if(_spawnYaw!=null) mesh.rotation.y = _spawnYaw;   // face the play space, like a region spawn does in MP
+  if(spawn && spawn.face && _spawnYaw==null) mesh.rotation.y = spawn.face;
+  else if(_spawnYaw!=null) mesh.rotation.y = _spawnYaw;   // a re-sampled region spawn faces the play space
   const typeKey = (spawn && spawn.type && ENEMY_TYPES[spawn.type]) ? spawn.type : 'grunt';
   const ty = ENEMY_TYPES[typeKey];
   mesh.userData.enemyType = typeKey;   // read by buildEnemyVisual for per-type scale + tint
@@ -12791,7 +12799,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 531 · 2026-06-17';
+const BUILD_VERSION = 'build 532 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
