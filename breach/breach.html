@@ -5776,6 +5776,7 @@ THREE.RGBELoader = RGBELoader;
 window.GAME_START = function(){
 const THREE = window.THREE;
 const RAD = Math.PI/180, DEG = 180/Math.PI;   // declared first: used by wepView/applyWeaponMuzzle during init (TDZ-safe)
+let editorOpen = false;   // editor panel open — declared first so async boot callbacks (audio/music/loaders) never hit a temporal-dead-zone read
 
 // ---------- Audio (procedural, no files — works fully offline) ----------
 let actx = null;
@@ -8267,7 +8268,7 @@ function applyWorldCfg(){
   if(typeof applySkyRotation==='function') applySkyRotation();   // re-orient the cached sky if only rotation changed
   if(typeof setTerrainFromCfg==='function') setTerrainFromCfg();   // rebuild the floor height-mesh only if terrain changed
 }
-let editorOpen = false;        // transform editor panel open — declared early to stay TDZ-safe during init
+// editorOpen is declared at the top of GAME_START (TDZ-safe for boot)
 let _editorOpenFlag = false;   // mirror of editorOpen, read by applyWorldCfg at init
 applyWorldCfg();
 // crouch (hold Ctrl): lowers the view and slows movement. Slide is on C (sprint + tap C).
@@ -8301,7 +8302,7 @@ const TOUCH_LOOK_SENS = 0.0042, TOUCH_ADS_SENS = 0.0022;
 // Pointer Lock isn't supported on iOS Safari (the methods are undefined). Route every call through these
 // guards so a missing API can't throw — touch devices steer via the on-screen look pad instead.
 let chatOpen=false;   // multiplayer text chat input is focused
-function tryPointerLock(){ if(isTouch) return; const el = renderer && renderer.domElement; if(el && el.requestPointerLock){ try{ el.requestPointerLock(); }catch(e){} } }
+function tryPointerLock(){ if(isTouch) return; const el = renderer && renderer.domElement; if(el && el.requestPointerLock){ try{ const p = el.requestPointerLock(); if(p && typeof p.catch==='function') p.catch(()=>{}); }catch(e){} } }   // Chrome returns a promise that rejects (e.g. re-locking too soon after exit) — swallow it so it doesn't surface as an error
 function safeExitPointerLock(){ if(document.exitPointerLock){ try{ document.exitPointerLock.call(document); }catch(e){} } }
 function typingInField(e){
   const t = e.target, tag = (t && t.tagName) || '';
@@ -12744,7 +12745,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 524 · 2026-06-17';
+const BUILD_VERSION = 'build 525 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
