@@ -10772,7 +10772,7 @@ function _applyGunGrip(gun, weaponKey, gripOverride){
   const gr = gripOverride || tpGunGrip(weaponKey);
   gun.position.set(gr.x, gr.y, gr.z);
   gun.rotation.set(gr.pitch, gr.yaw, gr.roll);
-  gun.scale.setScalar(gr.scale||1);
+  gun.scale.setScalar((gr.scale||1) * (gun.userData.norm||1));
   gun.userData.gripQuat = gun.quaternion.clone();   // base orientation the aim-pitch resets to each frame
 }
 // place the gun on a hand bone: the grip offset becomes a SMALL local nudge in the hand's space, and we undo
@@ -10782,7 +10782,7 @@ function _applyGunGripToHand(gun, bone, weaponKey, gripOverride){
   const gr = gripOverride || tpGunGrip(weaponKey);
   gun.position.set(gr.x, gr.y, gr.z);
   gun.rotation.set(gr.pitch, gr.yaw, gr.roll);
-  let s = gr.scale||1;
+  let s = (gr.scale||1) * (gun.userData.norm||1);
   bone.updateWorldMatrix(true,false);
   const bs=new THREE.Vector3(); bone.matrixWorld.decompose(new THREE.Vector3(), new THREE.Quaternion(), bs);
   const avg=(bs.x+bs.y+bs.z)/3; if(avg>1e-4) s/=avg;   // counter the bone's world scale so the gun keeps its size
@@ -10812,6 +10812,8 @@ function attachAvatarGun(g, weaponKey, gripOverride){
       if(g.userData.gun){ if(g.userData.gun.parent) g.userData.gun.parent.remove(g.userData.gun); g.userData.gun=null; }
       const gun = THREE.cloneSkinned(gltf.scene);
       gun.traverse(o=>{ if(o.isMesh){ o.castShadow=true; o.raycast=()=>{}; } });   // gun never blocks shots/picks
+      gun.updateMatrixWorld(true);
+      { const _bb=new THREE.Box3().setFromObject(gun); if(!_bb.isEmpty()){ const _sz=new THREE.Vector3(); _bb.getSize(_sz); const _md=Math.max(_sz.x,_sz.y,_sz.z); gun.userData.norm=(_md>1e-4)?(0.62/_md):1; } else gun.userData.norm=1; }   // size-normalize so the grip scale isn't tied to the GLB's authored units (fixes arena-sized guns on remote players/bots)
       const hand = _findHandBone(g.userData.visual);
       if(hand){ hand.add(gun); g.userData.gunBone=hand; _applyGunGripToHand(gun, hand, weaponKey, g.userData.gripOverride); }   // follows the hand animation
       else { g.add(gun); g.userData.gunBone=null; _applyGunGrip(gun, weaponKey, g.userData.gripOverride); }                        // no usable bone -> fixed body grip
@@ -11229,10 +11231,10 @@ function upsertCoinMesh(c){
 function _packGrip(){ const g=tpGunGrip(typeof curWep!=='undefined'?curWep:'rifle'); return [ +(+g.x).toFixed(3), +(+g.y).toFixed(3), +(+g.z).toFixed(3), +(+g.yaw).toFixed(3), +(+g.pitch).toFixed(3), +(+g.roll).toFixed(3), +((g.scale==null?1:+g.scale)).toFixed(3) ]; }
 function _unpackGrip(a){ return (a && a.length>=7) ? { x:+a[0], y:+a[1], z:+a[2], yaw:+a[3], pitch:+a[4], roll:+a[5], scale:+a[6] } : null; }
 function serializeWorld(){
-  const P=[{ id:0, p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:owned.indexOf(curWep), g:_packGrip(), hp:Math.max(0,player.hp), j:player.onGround?0:1, sl:sliding?1:0, ad:(ads||padAds||touchAds)?1:0, cr:crouching?1:0, hd:_netHitDir, hs:_netHitSeq, n:NET.name||'Host' }];
+  const P=[{ id:0, p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:curWep, g:_packGrip(), hp:Math.max(0,player.hp), j:player.onGround?0:1, sl:sliding?1:0, ad:(ads||padAds||touchAds)?1:0, cr:crouching?1:0, hd:_netHitDir, hs:_netHitSeq, n:NET.name||'Host' }];
   for(const id in NET.players){ const rp=NET.players[id];
     P.push({ id:+id, p:[rp.posEye.x,rp.posEye.y,rp.posEye.z], y:rp.yaw, pi:rp.pitch||0, w:rp.wep, g:(rp.grip?[rp.grip.x,rp.grip.y,rp.grip.z,rp.grip.yaw,rp.grip.pitch,rp.grip.roll,rp.grip.scale]:null), hp:rp.hp, j:rp.air?1:0, sl:rp.slide?1:0, ad:rp.ads?1:0, cr:rp.crouch?1:0, hd:rp.hd||0, hs:rp.hs||0, n:rp.name }); }
-  for(const b of bots){ if(b.dead && !b._dying) continue; P.push({ id:b.id, p:[b.pos.x,EYE,b.pos.z], y:b.yaw, pi:0, w:0, hp:(b.dead?0:b.hp), hd:b._netHitDir||0, hs:b._netHitSeq||0, n:b.name }); }   // build 502: keep dead-but-dying bots in the snapshot (+ hd/hs) so clients play the directional death, then they prune on respawn
+  for(const b of bots){ if(b.dead && !b._dying) continue; P.push({ id:b.id, p:[b.pos.x,EYE,b.pos.z], y:b.yaw, pi:0, w:'rifle', hp:(b.dead?0:b.hp), hd:b._netHitDir||0, hs:b._netHitSeq||0, n:b.name }); }   // build 502: keep dead-but-dying bots in the snapshot (+ hd/hs) so clients play the directional death, then they prune on respawn
   const E=enemies.map(e=>({ id:e.id, p:[e.mesh.position.x,e.mesh.position.y,e.mesh.position.z], hd:e._netHitDir||0, hs:e._netHitSeq||0 }));
   const C=coins.map(c=>({ id:c.id, p:[c.mesh.position.x,c.mesh.position.z] }));
   // dynamic physics props (position + orientation) so clients see them roll
@@ -11441,7 +11443,7 @@ function netTick(dt){
   if(NET.sendTimer<=0){
     NET.sendTimer=0.05;
     if(NET.mode==='client' && NET.conn && NET.conn.open){
-      try{ NET.conn.send({ t:'st', p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:owned.indexOf(curWep), g:_packGrip(), hp:Math.max(0,player.hp), j:player.onGround?0:1, sl:sliding?1:0, ad:(ads||padAds||touchAds)?1:0, cr:crouching?1:0, hd:_netHitDir, hs:_netHitSeq, n:NET.name }); }catch(e){}
+      try{ NET.conn.send({ t:'st', p:[player.pos.x,player.pos.y,player.pos.z], y:player.yaw, pi:player.pitch, w:curWep, g:_packGrip(), hp:Math.max(0,player.hp), j:player.onGround?0:1, sl:sliding?1:0, ad:(ads||padAds||touchAds)?1:0, cr:crouching?1:0, hd:_netHitDir, hs:_netHitSeq, n:NET.name }); }catch(e){}
       if(heldProp && heldNidLocal!=null){ const tgt=_localHoldTarget(); try{ NET.conn.send({ t:'hold', nid:heldNidLocal, p:[tgt.x,tgt.y,tgt.z] }); }catch(e){} }
     } else if(NET.mode==='host'){
       broadcastWorld();
@@ -12571,7 +12573,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 519 · 2026-06-17';
+const BUILD_VERSION = 'build 520 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
