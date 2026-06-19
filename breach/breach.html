@@ -7770,6 +7770,8 @@ const TURRET_DEFAULT = { scale:1, yawArc:120, pitchMin:-15, pitchMax:35, eye:[0,
 const turretModels = [];   // live turret groups (group holds the model/primitive + an editor marker)
 let turretModelUrl = (savedLevel && savedLevel.turret && savedLevel.turret.url) || '';   // one shared custom GLB for all turrets
 let turretModelScale = (savedLevel && savedLevel.turret && +savedLevel.turret.scale) || 1;
+let turretModelYaw = (savedLevel && savedLevel.turret && +savedLevel.turret.modelYaw) || 0;   // build 544: degrees — rotate the shared model so its barrel faces the turret's forward (the aim/camera direction), independent of each turret's placement Facing
+let turretMuzzle = { fwd:(savedLevel&&savedLevel.turret&&savedLevel.turret.muz&&+savedLevel.turret.muz.fwd)||1.1, up:(savedLevel&&savedLevel.turret&&savedLevel.turret.muz&&+savedLevel.turret.muz.up)||0, side:(savedLevel&&savedLevel.turret&&savedLevel.turret.muz&&+savedLevel.turret.muz.side)||0 };   // build 545: tracer/shot origin offset from the mount eye, along the aim (fwd) + up + right, in scale-1 units
 let selTurrets = [];
 function _turretPrimitive(g){   // visible placeholder so a turret shows up before/without a custom model
   const grp=new THREE.Group();
@@ -7802,12 +7804,15 @@ function buildTurret(opts){
   if(turretModelUrl){
     loadGLTFCached(turretModelUrl,
       (gltf)=>{ if(g.userData._dead) return; if(g.userData.visual){ g.remove(g.userData.visual); g.userData.visual=null; } const m=THREE.cloneSkinned(gltf.scene); m.traverse(o=>{ if(o.isMesh){ o.castShadow=true; } }); const _s2=(turretModelScale||1)*(g.userData.turret.scale||1); m.scale.setScalar(_s2); m.updateMatrixWorld(true); const _bx=new THREE.Box3().setFromObject(m); if(isFinite(_bx.max.y) && _s2>0){ g.userData._modelBox={ maxY:_bx.max.y/_s2, maxZ:_bx.max.z/_s2, minZ:_bx.min.z/_s2 }; }   // build 537: scale-1 local extents so the mount camera can clear a large model; g.add below puts m at the group origin so this box is in turret-local space
-        g.add(m); g.userData.visual=m; g.userData._prim=false; },
+        g.add(m); g.userData.visual=m; g.userData._prim=false; m.rotation.y=(turretModelYaw||0)*RAD; },
       ()=>{ if(!g.userData._dead && !g.userData.visual) _turretPrimitive(g); });   // load failed -> placeholder
   } else { _turretPrimitive(g); }
   const marker=_turretMarker(); marker.visible=!!(typeof editorOpen!=='undefined' && editorOpen); g.add(marker); g.userData.marker=marker;
   scene.add(g); turretModels.push(g); return g;
 }
+// build 544: re-apply the shared model-yaw base to every resting turret (live, no reload). A mounted turret
+// is driven by turretUpdate, so skip it; the primitive placeholder is already barrel-forward, so skip it too.
+function _applyTurretModelYaw(){ for(const g of turretModels){ if(g.userData.visual && !g.userData._prim && g!==mountedTurret) g.userData.visual.rotation.y=(turretModelYaw||0)*RAD; } }
 function removeTurret(idx){ const g=turretModels[idx]; if(!g) return; g.userData._dead=true; scene.remove(g); turretModels.splice(idx,1); }
 function clearTurrets(){ for(let i=turretModels.length-1;i>=0;i--) removeTurret(i); }
 function _turretOpts(g){ const t=g.userData.turret||{}; return { x:+g.position.x, y:+g.position.y, z:+g.position.z, yaw:+g.rotation.y, scale:+(t.scale!=null?t.scale:1), yawArc:+(t.yawArc!=null?t.yawArc:TURRET_DEFAULT.yawArc), pitchMin:+(t.pitchMin!=null?t.pitchMin:TURRET_DEFAULT.pitchMin), pitchMax:+(t.pitchMax!=null?t.pitchMax:TURRET_DEFAULT.pitchMax), eye:(t.eye||TURRET_DEFAULT.eye).slice() }; }
@@ -10723,7 +10728,7 @@ function loadLevelFromNet(level){
     level.props.forEach((p,i)=>{ try{ spawnProp(p.src, p.t, (obj)=>{ try{ applyPropDynState(obj, p); if(p.lk){ obj.userData.lockId=p.lk; if(p.lkc) obj.userData.lockConsume=true; } if(p.tg) obj.userData.tag=p.tg; if(Array.isArray(p.sg)) obj.userData.signals=p.sg.map(s=>{ const x={ when:s.w, do:s.d, target:s.t }; if(s.c) x.clip=s.c; if(s.n) x.cs=s.n; return x; }); if(p.snd>1) obj.userData.sigNeed=+p.snd; if(p.att) obj.userData.attribution=p.att; if(p.xa) xaApply(obj, p.xa); if(obj.userData.nid) NET.sentProps.set(obj.userData.nid, obj.userData.phys ? 'dyn' : propTuple(obj)); }catch(e){ console.warn('net prop '+i+' apply failed', e); } }, i, {trig:(p.animTrig||(p.anim==='trigger'?'interact':'auto')), play:(p.animPlay||(p.anim==='trigger'?'once':'loop'))}, p.mat || (p.tex ? {tex:p.tex} : null), undefined, p.nid, p.animClip); }catch(e){ console.warn('net prop '+i+' failed', e); } });
   }
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
-  turretModelUrl=(level.turret && level.turret.url)||''; turretModelScale=(level.turret && +level.turret.scale)||1; clearTurrets(); if(Array.isArray(level.turrets)) for(const T of level.turrets) buildTurret(T);
+  turretModelUrl=(level.turret && level.turret.url)||''; turretModelScale=(level.turret && +level.turret.scale)||1; turretModelYaw=(level.turret && +level.turret.modelYaw)||0; turretMuzzle={ fwd:(level.turret&&level.turret.muz&&+level.turret.muz.fwd)||1.1, up:(level.turret&&level.turret.muz&&+level.turret.muz.up)||0, side:(level.turret&&level.turret.muz&&+level.turret.muz.side)||0 }; clearTurrets(); if(Array.isArray(level.turrets)) for(const T of level.turrets) buildTurret(T);
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns) buildSpawnMarker(sp); } setSpawnMarkersVisible(editorOpen);
   pickupsOn = (level.pickupsOn !== false);
@@ -12403,10 +12408,16 @@ function turretEyeWorld(g, out){   // mount-camera world position from the turre
   let ey=e[1]; const bb=g.userData._modelBox; if(bb && isFinite(bb.maxY)) ey=Math.max(ey, bb.maxY+0.45);
   out.set(e[0]*s, ey*s, e[2]*s); g.updateMatrixWorld(true); return out.applyMatrix4(g.matrixWorld);
 }
-function turretBarrelWorld(g, out){   // muzzle origin: the eye nudged forward along the current aim (cosmetic tracer start)
+function turretBarrelWorld(g, out){   // muzzle origin: the eye offset by the authored muzzle along the current aim (cosmetic tracer start)
   turretEyeWorld(g, out);
   const cy=Math.cos(player.yaw), sy=Math.sin(player.yaw), cp=Math.cos(player.pitch), sp=Math.sin(player.pitch);
-  out.x += (-sy*cp)*1.1; out.y += sp*1.1; out.z += (-cy*cp)*1.1; return out;
+  const s=(g.userData._prim?1:(turretModelScale||1))*((g.userData.turret&&g.userData.turret.scale)||1);   // scale the muzzle with the model
+  const mz=turretMuzzle||{fwd:1.1,up:0,side:0}; const F=(mz.fwd!=null?mz.fwd:1.1)*s, U=(mz.up||0)*s, S=(mz.side||0)*s;
+  // basis along the aim: forward, aim-up, right. fwd reproduces the old +1.1 nudge; up/side let the muzzle sit at the real barrel tip.
+  out.x += (-sy*cp)*F + (sy*sp)*U + (cy)*S;
+  out.y += (sp)*F + (cp)*U;
+  out.z += (-cy*cp)*F + (cy*sp)*U + (-sy)*S;
+  return out;
 }
 function mountTurret(g){
   if(mountedTurret || !g) return;
@@ -12425,7 +12436,7 @@ function dismountTurret(){
   player.pos.set(g.position.x+side.x*1.6, (g.position.y||0)+EYE, g.position.z+side.z*1.6);
   player.vel.set(0,0,0); player.onGround=true;
   if(_turretReturn){ player.yaw=_turretReturn.yaw; player.pitch=_turretReturn.pitch; }
-  if(g.userData.visual){ g.userData.visual.rotation.y=0; g.userData.visual.rotation.x=0; }   // re-center the cosmetic aim
+  if(g.userData.visual){ g.userData.visual.rotation.y=(g.userData._prim?0:(turretModelYaw||0)*RAD); g.userData.visual.rotation.x=0; }   // re-center the cosmetic aim to the model-yaw base
   const hud=document.getElementById('turretHud'); if(hud) hud.style.display='none';
   if(SFX.swap) SFX.swap();
 }
@@ -12442,7 +12453,7 @@ function turretUpdate(dt){
   if(!gameOn || gameOver || (player.hp!=null && player.hp<=0)){ dismountTurret(); return; }   // died / match ended -> release control
   player.pos.set(g.position.x, (g.position.y||0)+EYE, g.position.z); player.vel.set(0,0,0); player.onGround=true;   // pin the operator to the mount
   const dy=_turretAimClamp(g);
-  if(g.userData.visual){ g.userData.visual.rotation.y=dy; g.userData.visual.rotation.x=-player.pitch; }   // traverse + elevate the model (shots use the camera, so this is purely visual)
+  if(g.userData.visual){ const _myaw=g.userData._prim?0:(turretModelYaw||0)*RAD; g.userData.visual.rotation.y=_myaw+dy; g.userData.visual.rotation.x=-player.pitch; }   // model-yaw base + traverse + elevate (shots use the camera, so this is purely visual)
   _turretHeat=Math.max(0, _turretHeat - TURRET_GUN.coolRate*dt);
   if(_turretOverheated && _turretHeat<=TURRET_GUN.recoverAt) _turretOverheated=false;
   const hb=document.getElementById('turretHeatFill'); if(hb){ hb.style.width=(Math.min(1,_turretHeat)*100).toFixed(0)+'%'; hb.style.background=_turretOverheated?'#f5505e':(_turretHeat>0.7?'#ffae42':'#38f5b5'); }
@@ -12818,7 +12829,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 542 · 2026-06-17';
+const BUILD_VERSION = 'build 545 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -16057,7 +16068,7 @@ const editorTargets = {
       { k:'pz',       label:'Pos Z',        min:-65, max:65, step:STEP_POS },
       { k:'py',       label:'Pos Y',        min:-5,  max:20, step:STEP_POS },
       { k:'yaw',      label:'Facing',       min:-180, max:180, step:STEP_ROT },
-      { k:'scale',    label:'Scale',        min:0.05, max:6, step:STEP_SCALE },
+      { k:'scale',    label:'Scale',        min:0.02, max:50, step:STEP_SCALE },
       { k:'yawArc',   label:'Traverse arc', min:10,  max:360, step:1 },
       { k:'pitchMin', label:'Pitch min',    min:-60, max:0,  step:1 },
       { k:'pitchMax', label:'Pitch max',    min:0,   max:80, step:1 },
@@ -16069,7 +16080,7 @@ const editorTargets = {
       this.state.scale=t.scale; this.state.yawArc=t.yawArc; this.state.pitchMin=t.pitchMin; this.state.pitchMax=t.pitchMax; },
     apply(){ const g=this.obj(); if(!g) return; const t=g.userData.turret, s=this.state;
       g.position.set(s.px,s.py,s.pz); g.rotation.y=s.yaw*RAD;
-      t.scale=Math.max(0.05,s.scale); t.yawArc=Math.max(10,Math.min(360,s.yawArc));
+      t.scale=Math.max(0.02,s.scale); t.yawArc=Math.max(10,Math.min(360,s.yawArc));
       t.pitchMin=Math.min(0,s.pitchMin); t.pitchMax=Math.max(0,s.pitchMax);
       _turretRescale(g); refreshTurretMarker(g); },
     code(){ return '// ===== Mounted turrets ===== (authored in-editor; saved in the level JSON under "turrets"; shared model under "turret")'; }
@@ -16465,7 +16476,7 @@ function serializeLevel(){
     enemies: ENEMY_TYPE_KEYS.reduce((a,k)=>{ const m=enemyModelCfg(k); a[k]={ url:m.url, scale:m.scale, face:m.face, cr:m.cr, ch:m.ch, yoff:m.yoff, xoff:m.xoff, zoff:m.zoff, clip:m.clip, clips:Object.assign({}, m.clips), clipSpeed:Object.assign({}, m.clipSpeed||{}), clipHold:Object.assign({}, m.clipHold||{}), clipInPlace:Object.assign({}, m.clipInPlace||{}) }; return a; }, {}),
     props:   propModels.filter(o=>o && !o.userData.runtime).map(propEntry),
     lights:  lightModels.map(g=>_lightOpts(g)),
-    turret:  { url: turretModelUrl, scale: turretModelScale },
+    turret:  { url: turretModelUrl, scale: turretModelScale, modelYaw: turretModelYaw, muz: { fwd:turretMuzzle.fwd, up:turretMuzzle.up, side:turretMuzzle.side } },
     turrets: turretModels.map(_turretOpts),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
     pickupsOn: pickupsOn,
@@ -16793,7 +16804,7 @@ function restoreLevel(level){
   // lights
   for(let i=lightModels.length-1;i>=0;i--) removeLight(i);
   if(Array.isArray(level.lights)){ for(const L of level.lights) buildLight(L); }
-  turretModelUrl=(level.turret && level.turret.url)||''; turretModelScale=(level.turret && +level.turret.scale)||1; clearTurrets(); if(Array.isArray(level.turrets)) for(const T of level.turrets) buildTurret(T);
+  turretModelUrl=(level.turret && level.turret.url)||''; turretModelScale=(level.turret && +level.turret.scale)||1; turretModelYaw=(level.turret && +level.turret.modelYaw)||0; turretMuzzle={ fwd:(level.turret&&level.turret.muz&&+level.turret.muz.fwd)||1.1, up:(level.turret&&level.turret.muz&&+level.turret.muz.up)||0, side:(level.turret&&level.turret.muz&&+level.turret.muz.side)||0 }; clearTurrets(); if(Array.isArray(level.turrets)) for(const T of level.turrets) buildTurret(T);
   // enemy spawns
   for(let i=spawnMarkers.length-1;i>=0;i--) removeSpawnMarker(i);
   if(Array.isArray(level.spawns)){ for(const sp of level.spawns) buildSpawnMarker(sp); } setSpawnMarkersVisible(editorOpen);
@@ -19091,6 +19102,23 @@ function renderEditorFields(){
     urlHost.appendChild(tpsHead);
     const tpsHost=document.createElement('div'); urlHost.appendChild(tpsHost);
     renderModelSearch(tpsHost, (m, st)=>{ inp.value=m.glb; pushUndoSnapshot(); turretModelUrl=m.glb; rebuildTurretVisuals(); if(st) st.textContent='Using \u201c'+m.title+'\u201d \u2014 credit: '+(m.attribution||''); }, { placeholder:'e.g. turret, cannon, gun emplacement' });
+    // build 544/545: shared model-alignment controls (the model is shared, so these orient ITS barrel + muzzle for every turret)
+    { const mch=document.createElement('div'); mch.className='hint'; mch.style.margin='10px 0 2px'; mch.innerHTML='<b>Model alignment</b> \u2014 shared by every turret: orient the barrel + muzzle of the model'; urlHost.appendChild(mch);
+      const _tRow=(label, get, set, mn, mx, st)=>{
+        const lb=document.createElement('label'); lb.className='field'; const nm=document.createElement('span'); nm.textContent=label;
+        const nu=document.createElement('input'); nu.type='number'; nu.className='valnum'; nu.step=st; nu.value=(+get()).toFixed(3); lb.appendChild(nm); lb.appendChild(nu);
+        const rg=document.createElement('input'); rg.type='range'; rg.min=mn; rg.max=mx; rg.step=st; rg.value=get();
+        const commit=(v,fromSlider)=>{ v=parseFloat(v); if(isNaN(v)) return; set(v); rg.value=v; if(fromSlider) nu.value=(+v).toFixed(3); else rg.value=v; if(typeof updateEditorOut==='function') updateEditorOut(); };
+        rg.addEventListener('pointerdown', ()=>{ if(typeof pushUndoSnapshot==='function') pushUndoSnapshot(); }); rg.oninput=()=>commit(rg.value,true);
+        nu.onfocus=()=>{ if(typeof pushUndoSnapshot==='function') pushUndoSnapshot(); }; nu.onchange=()=>commit(nu.value,false);
+        urlHost.appendChild(lb); urlHost.appendChild(rg);
+      };
+      _tRow('Model facing (\u00b0)', ()=>turretModelYaw, v=>{ turretModelYaw=v; _applyTurretModelYaw(); }, -180, 180, 1);
+      _tRow('Muzzle forward', ()=>turretMuzzle.fwd, v=>{ turretMuzzle.fwd=v; }, -3, 8, 0.05);
+      _tRow('Muzzle up',      ()=>turretMuzzle.up,  v=>{ turretMuzzle.up=v;  }, -4, 4, 0.05);
+      _tRow('Muzzle right',   ()=>turretMuzzle.side, v=>{ turretMuzzle.side=v; }, -4, 4, 0.05);
+      const mzh=document.createElement('div'); mzh.className='hint'; mzh.style.margin='2px 0 0'; mzh.textContent='Model facing aligns the barrel with the aim so you look down it when mounted. Muzzle sets where tracers start \u2014 mount a turret and fire to preview.'; urlHost.appendChild(mzh);
+    }
     // build 536: turret fire sound (saved on this device, travels with the level like other custom SFX)
     if(!audioSettings.sounds) audioSettings.sounds=_emptySounds();
     const tsh=document.createElement('div'); tsh.className='hint'; tsh.style.margin='10px 0 2px'; tsh.innerHTML='<b>Turret fire sound</b> \u2014 played when a mounted turret shoots (saved on this device)'; urlHost.appendChild(tsh);
