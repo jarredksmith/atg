@@ -8431,10 +8431,11 @@ addEventListener('wheel', e=>{
 
 // pointer lock look
 let locked = false;let lookFresh = false;   // set when pointer lock is (re)acquired -> drop the first mousemove (it can carry a huge catch-up delta)
+let _lastLookDX = 0, _lastLookDY = 0;   // running reference of recent per-event look deltas, for spurious-spike rejection
 const MAX_LOOK_DELTA = 300;   // px per mousemove event; guards against spurious spikes that snap the view
 let editorDragLook = false, editorDragMoved = false, editorDragPan = false;   // editor mouse states
 renderer.domElement.addEventListener('click', ()=>{ if(!isTouch && gameOn && !locked && !shopOpen && !editorOpen && !paused) tryPointerLock(); });
-document.addEventListener('pointerlockchange', ()=>{ const was=locked; locked = document.pointerLockElement === renderer.domElement; if(locked && !was){ lookFresh = true; if(paused) resumeGame(); }
+document.addEventListener('pointerlockchange', ()=>{ const was=locked; locked = document.pointerLockElement === renderer.domElement; if(locked && !was){ lookFresh = true; _lastLookDX=0; _lastLookDY=0; if(paused) resumeGame(); }
   if(!locked && was && !isTouch && gameOn && !gameOver && !shopOpen && !editorOpen && !choosingUpgrade && !paused && !chatOpen && !mapOpen) openPause(); });   // Esc releases the lock -> show the pause menu (but not when opening chat)
 // Ctrl+W (crouch + forward) is the browser's close-tab shortcut and can't be cancelled from a keydown.
 // While actively playing (pointer locked), ask the browser to confirm before unloading so an accidental
@@ -8463,7 +8464,17 @@ document.addEventListener('mousemove', e=>{
   }
   if(!locked) return;
   if(lookFresh){ lookFresh = false; return; }   // first event after (re)locking can be a large catch-up jump — ignore it
-  // clamp per-event deltas so a spurious browser/driver spike can't whip the view to a new direction
+  // Spurious-spike rejection: the Chrome pointer-lock movementX/Y glitch delivers a single event that's huge
+  // in absolute terms, OR a sharp outlier vs the recent delta (large AND many times bigger than the previous
+  // event). Clamping such an event still snaps the view, so DROP the whole event instead. A real flick ramps
+  // up over several events, so its running reference is already large and it passes the relative test.
+  const _adx = Math.abs(e.movementX), _ady = Math.abs(e.movementY);
+  const _spike = _adx > MAX_LOOK_DELTA || _ady > MAX_LOOK_DELTA
+              || (_adx > 120 && _adx > _lastLookDX*5 + 40)
+              || (_ady > 120 && _ady > _lastLookDY*5 + 40);
+  _lastLookDX = _adx; _lastLookDY = _ady;   // always update: a sustained fast flick keeps the reference high so only an ISOLATED spike is dropped
+  if(_spike) return;
+  // clamp per-event deltas as a final backstop in case a value slips past the spike test
   const mx = Math.max(-MAX_LOOK_DELTA, Math.min(MAX_LOOK_DELTA, e.movementX));
   const my = Math.max(-MAX_LOOK_DELTA, Math.min(MAX_LOOK_DELTA, e.movementY));
   const sens = ads ? ((typeof WEAPONS!=='undefined' && WEAPONS[curWep] && WEAPONS[curWep].scope) ? SCOPE_SENS : ADS_SENS) : HIP_SENS;
@@ -12777,7 +12788,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 527 · 2026-06-17';
+const BUILD_VERSION = 'build 529 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15631,7 +15642,11 @@ function loop(){
       en.mesh.position.z = Math.max(-elim, Math.min(elim, en.mesh.position.z));
 
       const near = en._near || players[0];
-      en.mesh.position.y = terrainHeightAt(en.mesh.position.x, en.mesh.position.z) + 1.4 + Math.sin(t*4+en.id)*0.08 + (en.launchY||0);
+      // build 529: ground on the SAME walkable-floor + ramp logic as the player and the MP bots (prop /
+      // imported-floor-mesh aware) instead of bare terrain — fixes enemies sinking into an arena floor mesh.
+      // No more idle "hover bob": stand exactly on the surface (launch arc still rides on top via launchY).
+      const _egF = (typeof groundHeightAt==='function') ? groundHeightAt(en.mesh.position.x, en.mesh.position.z, en.mesh.position.y - 1.4) : terrainHeightAt(en.mesh.position.x, en.mesh.position.z);
+      en.mesh.position.y = _egF + 1.4 + (en.launchY||0);
       const fx = (en._faceX!=null) ? en._faceX : near.pos.x, fz = (en._faceZ!=null) ? en._faceZ : near.pos.z;
       if(en.grounded===false){   // launched -> tumble through the air
         en._spin=(en._spin||0)+(Math.hypot(en.evx||0,en.evz||0)+Math.abs(en.vy||0))*dt*0.5;
