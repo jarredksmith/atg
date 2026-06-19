@@ -8960,7 +8960,7 @@ function enemyDesiredTarget(en, px, pz, dist, now){
   const eY = (en.mesh.position.y!=null) ? en.mesh.position.y : 1.4;
   const pEyeY = (en._nearEyeY!=null) ? en._nearEyeY : 1.4;
   const sees = (Math.abs(pEyeY - eY) < 3.0) &&
-               (typeof segmentBlocked!=='function' || !segmentBlocked(en.mesh.position.x, en.mesh.position.z, px, pz, 1.4));
+               (typeof segmentBlocked!=='function' || !segmentBlocked(en.mesh.position.x, en.mesh.position.z, px, pz, (eY + pEyeY) * 0.5));   // build 533: sightline at the real surface eye-level (enemies were grounded onto an elevated/mesh floor in 529, so a fixed 1.4 was below the floor and broke detection)
 
   // HUNT: relentless pursuer. Still chases anywhere, but only "sees" (and fires) with LOS; when sight breaks
   // it heads to the last spot it saw the player rather than x-raying through walls.
@@ -12799,7 +12799,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 532 · 2026-06-17';
+const BUILD_VERSION = 'build 533 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15690,14 +15690,14 @@ function loop(){
           en._burstT -= dt;
           if(en._burstT<=0){
             const tg=en._burstTgt;
-            if(tg && tg.pos && !segmentBlocked(en.mesh.position.x, en.mesh.position.z, tg.pos.x, tg.pos.z, 1.4)){ fireEnemyShot(en, tg, 0.035); }
+            if(tg && tg.pos && !segmentBlocked(en.mesh.position.x, en.mesh.position.z, tg.pos.x, tg.pos.z, (en.mesh.position.y + (tg.pos.y!=null?tg.pos.y:en.mesh.position.y)) * 0.5)){ fireEnemyShot(en, tg, 0.035); }
             en._burstN--; en._burstT = en.burstGap;
             if(en._burstN<=0) en._burstTgt=null;
           }
         }
         else if(en._chase && en._see && en.shootCd<=0 && !editorOpen && en._dist < en.standoff*1.7
            && Math.abs((near.pos.y - EYE) - en.mesh.position.y) < 2.6   // roughly the same level — no shooting through a floor
-           && !segmentBlocked(en.mesh.position.x, en.mesh.position.z, near.pos.x, near.pos.z, 1.4)){
+           && !segmentBlocked(en.mesh.position.x, en.mesh.position.z, near.pos.x, near.pos.z, (en.mesh.position.y + (near.pos.y!=null?near.pos.y:en.mesh.position.y)) * 0.5)){
           fireEnemyShot(en, near, (en.burst>1)?0.02:0);   // round 1 of the burst (or the whole shot for single-fire types)
           en._burstN = Math.max(0,(en.burst||1)-1); en._burstT = en.burstGap; en._burstTgt = (en._burstN>0)?near:null;
           en.shootCd = en.fireCd; en._attackT = nowMs + (en.burst>1 ? 450 + en.burst*en.burstGap*1000 : 450);   // attack anim spans the whole burst
