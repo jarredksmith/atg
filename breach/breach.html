@@ -8979,8 +8979,15 @@ function enemyDesiredTarget(en, px, pz, dist, now){
   // line-of-sight: can this enemy actually SEE the player right now? (same wall test the gun uses)
   const eY = (en.mesh.position.y!=null) ? en.mesh.position.y : 1.4;
   const pEyeY = (en._nearEyeY!=null) ? en._nearEyeY : 1.4;
-  const sees = (Math.abs(pEyeY - eY) < 3.0) &&
-               (typeof segmentBlocked!=='function' || !segmentBlocked(en.mesh.position.x, en.mesh.position.z, px, pz, (eY + pEyeY) * 0.5));   // build 533: sightline at the real surface eye-level (enemies were grounded onto an elevated/mesh floor in 529, so a fixed 1.4 was below the floor and broke detection)
+  // build 546: segmentBlocked scans every collider — refresh LOS ~9x/sec per enemy and cache it (the bots do
+  // the same), instead of raycasting every frame. Unthrottled, a wave of enemies was O(enemies x colliders)
+  // per frame and a big part of the single-digit wave framerate.
+  if(en._losT==null || now - en._losT > 110){
+    en._losT = now;
+    en._seesC = (Math.abs(pEyeY - eY) < 3.0) &&
+                (typeof segmentBlocked!=='function' || !segmentBlocked(en.mesh.position.x, en.mesh.position.z, px, pz, (eY + pEyeY) * 0.5));   // build 533: sightline at the real surface eye-level
+  }
+  const sees = !!en._seesC;
 
   // HUNT: relentless pursuer. Still chases anywhere, but only "sees" (and fires) with LOS; when sight breaks
   // it heads to the last spot it saw the player rather than x-raying through walls.
@@ -12829,7 +12836,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 545 · 2026-06-17';
+const BUILD_VERSION = 'build 546 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15641,14 +15648,12 @@ function loop(){
           if(_wp){ const _pdx=_wp.x-en.mesh.position.x, _pdz=_wp.z-en.mesh.position.z, _pl=Math.hypot(_pdx,_pdz);
             if(_pl > 0.5){ _mvx=_pdx/_pl; _mvz=_pdz/_pl; } }
         }
-        if(en._stuckT>0.6 && td.chase){ if(!en._stuckSide) en._stuckSide=((en.id%2)?1:-1); const _px=-_mvz*en._stuckSide, _pz=_mvx*en._stuckSide; _mvx=_mvx*0.5+_px*1.2; _mvz=_mvz*0.5+_pz*1.2; const _l=Math.hypot(_mvx,_mvz)||1; _mvx/=_l; _mvz/=_l; }   // build 540: wedged -> wall-follow to one side until it slides clear
-        // build 542: wall-aware step (same as the MP bots) — try the full move, else slide along whichever axis
-        // is open, instead of walking head-on into a wall and being shoved straight back to the same spot by
-        // the obstacle resolver (which has no slide). This was the "blocked by collision / never leaves spawn".
-        const _estep=spd*dt, _efy=en.mesh.position.y-1.4, _ecx=en.mesh.position.x+_mvx*_estep, _ecz=en.mesh.position.z+_mvz*_estep;
-        if(typeof clearAt!=='function' || clearAt(_ecx,_ecz,_efy)){ en.mesh.position.x=_ecx; en.mesh.position.z=_ecz; }
-        else if(clearAt(_ecx,en.mesh.position.z,_efy)){ en.mesh.position.x=_ecx; }
-        else if(clearAt(en.mesh.position.x,_ecz,_efy)){ en.mesh.position.z=_ecz; }
+        if(en._stuckT>0.2 && td.chase){ if(!en._stuckSide) en._stuckSide=((en.id%2)?1:-1); const _px=-_mvz*en._stuckSide, _pz=_mvx*en._stuckSide; _mvx=_mvx*0.5+_px*1.2; _mvz=_mvz*0.5+_pz*1.2; const _l=Math.hypot(_mvx,_mvz)||1; _mvx/=_l; _mvz/=_l; }   // build 540/546: wedged -> wall-follow to one side; faster trigger (0.2s) so a head-on pin clears quickly
+        // build 546: integrate directly and let Phase 3 resolve real penetration. The build-542 per-step clearAt
+        // (up to 3 collider-scans + a raycast PER enemy PER frame) tanked wave framerates to single digits and
+        // over-rejected on imported meshes ("invisible collider"). Pathfinding routes around walls; the nudge
+        // above handles a head-on pin between waypoints.
+        en.mesh.position.x += _mvx*spd*dt; en.mesh.position.z += _mvz*spd*dt;
       }
       }
     }
@@ -15713,8 +15718,14 @@ function loop(){
       // build 529: ground on the SAME walkable-floor + ramp logic as the player and the MP bots (prop /
       // imported-floor-mesh aware) instead of bare terrain — fixes enemies sinking into an arena floor mesh.
       // No more idle "hover bob": stand exactly on the surface (launch arc still rides on top via launchY).
-      const _egF = (typeof groundHeightAt==='function') ? groundHeightAt(en.mesh.position.x, en.mesh.position.z, en.mesh.position.y - 1.4) : terrainHeightAt(en.mesh.position.x, en.mesh.position.z);
-      en.mesh.position.y = _egF + 1.4 + (en.launchY||0);
+      // build 546: groundHeightAt does a downward raycast. Refresh it ~10x/sec per enemy (or when it moves to
+      // a new cell), caching between, instead of raycasting every frame for every enemy — another big slice of
+      // the wave framerate. The launch arc (launchY) still rides on top live.
+      if(en._grT==null || nowMs-en._grT>100 || Math.abs(en.mesh.position.x-(en._grX||0))>0.8 || Math.abs(en.mesh.position.z-(en._grZ||0))>0.8){
+        en._grT=nowMs; en._grX=en.mesh.position.x; en._grZ=en.mesh.position.z;
+        en._groundY = (typeof groundHeightAt==='function') ? groundHeightAt(en.mesh.position.x, en.mesh.position.z, en.mesh.position.y - 1.4) : terrainHeightAt(en.mesh.position.x, en.mesh.position.z);
+      }
+      en.mesh.position.y = (en._groundY!=null?en._groundY:0) + 1.4 + (en.launchY||0);
       const fx = (en._faceX!=null) ? en._faceX : near.pos.x, fz = (en._faceZ!=null) ? en._faceZ : near.pos.z;
       if(en.grounded===false){   // launched -> tumble through the air
         en._spin=(en._spin||0)+(Math.hypot(en.evx||0,en.evz||0)+Math.abs(en.vy||0))*dt*0.5;
