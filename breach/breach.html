@@ -5851,8 +5851,8 @@ const SFX = {
 // URLs are stored in audioSettings.sounds (per device). When a sample is loaded for an event we play it;
 // otherwise we fall back to the procedural SFX above. Samples route through sfxBus, so the SFX volume applies.
 const _soundBuffers = {};   // url -> AudioBuffer | 'loading' | 'error'
-function _emptySounds(){ return { shoot:{}, reload:'', explode:'', coin:'', hit:'', kill:'', hurt:'' }; }
-function _sanitizeSounds(s){ const o=_emptySounds(); if(s && typeof s==='object'){ if(s.shoot && typeof s.shoot==='object'){ for(const k in s.shoot){ if(typeof s.shoot[k]==='string') o.shoot[k]=s.shoot[k]; } } for(const k of ['reload','explode','coin','hit','kill','hurt']){ if(typeof s[k]==='string') o[k]=s[k]; } } return o; }
+function _emptySounds(){ return { shoot:{}, reload:'', explode:'', coin:'', hit:'', kill:'', hurt:'', turret:'' }; }
+function _sanitizeSounds(s){ const o=_emptySounds(); if(s && typeof s==='object'){ if(s.shoot && typeof s.shoot==='object'){ for(const k in s.shoot){ if(typeof s.shoot[k]==='string') o.shoot[k]=s.shoot[k]; } } for(const k of ['reload','explode','coin','hit','kill','hurt','turret']){ if(typeof s[k]==='string') o[k]=s[k]; } } return o; }
 function loadSound(url, cb){
   if(!url){ cb && cb('empty'); return; }
   if(!actx) initAudio();
@@ -5874,7 +5874,7 @@ function playSample(url){
   if(!(buf && buf.duration!==undefined)){ loadSound(url); return false; }   // not decoded yet -> let the synth play this time
   try{ const src=actx.createBufferSource(); src.buffer=buf; src.connect(sfxBus); src.start(); return true; }catch(e){ return false; }
 }
-function preloadCustomSounds(){ const s=curSounds(); if(!s) return; if(s.shoot){ for(const k in s.shoot) loadSound(s.shoot[k]); } for(const k of ['reload','explode','coin','hit','kill','hurt']) loadSound(s[k]); }
+function preloadCustomSounds(){ const s=curSounds(); if(!s) return; if(s.shoot){ for(const k in s.shoot) loadSound(s.shoot[k]); } for(const k of ['reload','explode','coin','hit','kill','hurt','turret']) loadSound(s[k]); }
 
 // ---------- Audio buses + persisted volume settings (separate from level data) ----------
 let masterBus=null, sfxBus=null, musicBus=null;
@@ -7801,7 +7801,8 @@ function buildTurret(opts){
   g.userData.turret={ scale:(opts.scale!=null?+opts.scale:1), yawArc:(opts.yawArc!=null?+opts.yawArc:TURRET_DEFAULT.yawArc), pitchMin:(opts.pitchMin!=null?+opts.pitchMin:TURRET_DEFAULT.pitchMin), pitchMax:(opts.pitchMax!=null?+opts.pitchMax:TURRET_DEFAULT.pitchMax), eye:(Array.isArray(opts.eye)?opts.eye.slice():TURRET_DEFAULT.eye.slice()) };
   if(turretModelUrl){
     loadGLTFCached(turretModelUrl,
-      (gltf)=>{ if(g.userData._dead) return; if(g.userData.visual){ g.remove(g.userData.visual); g.userData.visual=null; } const m=THREE.cloneSkinned(gltf.scene); m.traverse(o=>{ if(o.isMesh){ o.castShadow=true; } }); m.scale.setScalar((turretModelScale||1)*(g.userData.turret.scale||1)); g.add(m); g.userData.visual=m; g.userData._prim=false; },
+      (gltf)=>{ if(g.userData._dead) return; if(g.userData.visual){ g.remove(g.userData.visual); g.userData.visual=null; } const m=THREE.cloneSkinned(gltf.scene); m.traverse(o=>{ if(o.isMesh){ o.castShadow=true; } }); const _s2=(turretModelScale||1)*(g.userData.turret.scale||1); m.scale.setScalar(_s2); m.updateMatrixWorld(true); const _bx=new THREE.Box3().setFromObject(m); if(isFinite(_bx.max.y) && _s2>0){ g.userData._modelBox={ maxY:_bx.max.y/_s2, maxZ:_bx.max.z/_s2, minZ:_bx.min.z/_s2 }; }   // build 537: scale-1 local extents so the mount camera can clear a large model; g.add below puts m at the group origin so this box is in turret-local space
+        g.add(m); g.userData.visual=m; g.userData._prim=false; },
       ()=>{ if(!g.userData._dead && !g.userData.visual) _turretPrimitive(g); });   // load failed -> placeholder
   } else { _turretPrimitive(g); }
   const marker=_turretMarker(); marker.visible=!!(typeof editorOpen!=='undefined' && editorOpen); g.add(marker); g.userData.marker=marker;
@@ -8923,7 +8924,21 @@ function spawnEnemy(spawn){
   if(_regionOn && typeof _inRegion==='function' && !_inRegion(px,pz) && typeof randomSpawn==='function'){
     const sp=randomSpawn(); px=sp.x; pz=sp.z; _spawnY=sp.y; _spawnYaw=sp.yaw;
   }
-  mesh.position.set(px, (_spawnY!=null ? _spawnY+1.4 : 1.4), pz);
+  // build 538: never start an enemy buried in the arena mesh. On an imported arena (rock walls, cliffs) a
+  // wave/marker x,z can land inside a rock -> the enemy is trapped on the wrong side and can't path out, and
+  // a fixed Y=1.4 leaves it under an elevated floor. Snap to the real surface; if the body is buried, spiral
+  // out to the nearest clear column, then fall back to a fresh random spawn, so it starts standing in the open.
+  { const _surfAt=(x,z)=>{ const s=(typeof surfaceTopAt==='function')?surfaceTopAt(x,z):-Infinity; const t=(typeof terrainHeightAt==='function')?terrainHeightAt(x,z):0; return (s>-Infinity)?Math.max(s,t):t; };
+    let _fy=(_spawnY!=null)?_spawnY:_surfAt(px,pz);
+    if(typeof clearAt==='function' && !clearAt(px,pz,_fy)){
+      let _found=null;
+      for(let r=1.2; r<=8 && !_found; r+=1.2){ for(let a=0;a<12;a++){ const ang=a/12*6.2831853, qx=px+Math.cos(ang)*r, qz=pz+Math.sin(ang)*r, qy=_surfAt(qx,qz); if(clearAt(qx,qz,qy)){ _found={x:qx,z:qz,y:qy}; break; } } }
+      if(!_found && typeof randomSpawn==='function'){ const sp=randomSpawn(); _found={x:sp.x,z:sp.z,y:sp.y}; if(_spawnYaw==null) _spawnYaw=sp.yaw; }
+      if(_found){ px=_found.x; pz=_found.z; _fy=_found.y; }
+    }
+    _spawnY=_fy;
+  }
+  mesh.position.set(px, _spawnY+1.4, pz);
   if(spawn && spawn.face && _spawnYaw==null) mesh.rotation.y = spawn.face;
   else if(_spawnYaw!=null) mesh.rotation.y = _spawnYaw;   // a re-sampled region spawn faces the play space
   const typeKey = (spawn && spawn.type && ENEMY_TYPES[spawn.type]) ? spawn.type : 'grunt';
@@ -12383,7 +12398,10 @@ const TURRET_GUN = { fireRate:70, dmg:16, spread:0.02, range:150, heatPerShot:0.
 const _tv0 = new THREE.Vector3(), _tv1 = new THREE.Vector3();
 function turretEyeWorld(g, out){   // mount-camera world position from the turret's local eye offset
   const e=g.userData.turret.eye||TURRET_DEFAULT.eye; const s=(g.userData._prim?1:(turretModelScale||1))*(g.userData.turret.scale||1);
-  out.set(e[0]*s, e[1]*s, e[2]*s); g.updateMatrixWorld(true); return out.applyMatrix4(g.matrixWorld);
+  // build 537: keep the camera above the model's top so a large GLB can't swallow the view or seat the
+  // player inside the mesh. The authored eye still wins when it already clears the model. (scale-1 units; ×s)
+  let ey=e[1]; const bb=g.userData._modelBox; if(bb && isFinite(bb.maxY)) ey=Math.max(ey, bb.maxY+0.45);
+  out.set(e[0]*s, ey*s, e[2]*s); g.updateMatrixWorld(true); return out.applyMatrix4(g.matrixWorld);
 }
 function turretBarrelWorld(g, out){   // muzzle origin: the eye nudged forward along the current aim (cosmetic tracer start)
   turretEyeWorld(g, out);
@@ -12436,7 +12454,8 @@ function turretFire(){
   _turretLastShot=now;
   _turretHeat=Math.min(1,_turretHeat+TURRET_GUN.heatPerShot);
   if(_turretHeat>=1){ _turretOverheated=true; if(SFX.empty) SFX.empty(); }
-  SFX.shoot(); addShake(0.05);
+  if(!(curSounds().turret && playSample(curSounds().turret))) SFX.shoot();   // build 536: custom turret fire sound if authored, else the default shoot SFX
+  addShake(0.05);
   const origin=turretBarrelWorld(mountedTurret, _tv0.clone());
   if(NET.mode!=='off'){ const _fd=new THREE.Vector3(); camera.getWorldDirection(_fd); netFire(origin, _fd); }   // others see/hear the tracer (full mount sync is Phase 2)
   const sx=(Math.random()-0.5)*TURRET_GUN.spread, sy=(Math.random()-0.5)*TURRET_GUN.spread;
@@ -12799,7 +12818,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 534 · 2026-06-17';
+const BUILD_VERSION = 'build 540 · 2026-06-17';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -15609,6 +15628,7 @@ function loop(){
           if(_wp){ const _pdx=_wp.x-en.mesh.position.x, _pdz=_wp.z-en.mesh.position.z, _pl=Math.hypot(_pdx,_pdz);
             if(_pl > 0.5){ _mvx=_pdx/_pl; _mvz=_pdz/_pl; } }   // ignore a waypoint we're basically already on -> keep the beeline so we never freeze
         }
+        if(en._stuckT>0.6 && td.chase){ if(!en._stuckSide) en._stuckSide=((en.id%2)?1:-1); const _px=-_mvz*en._stuckSide, _pz=_mvx*en._stuckSide; _mvx=_mvx*0.5+_px*1.2; _mvz=_mvz*0.5+_pz*1.2; const _l=Math.hypot(_mvx,_mvz)||1; _mvx/=_l; _mvz/=_l; }   // build 540: wedged on a rock/wall -> wall-follow to one consistent side until it slides clear
         en.mesh.position.x += _mvx*spd*dt; en.mesh.position.z += _mvz*spd*dt;
       }
       }
@@ -15707,10 +15727,19 @@ function loop(){
           en._burstN = Math.max(0,(en.burst||1)-1); en._burstT = en.burstGap; en._burstTgt = (en._burstN>0)?near:null;
           en.shootCd = en.fireCd; en._attackT = nowMs + (en.burst>1 ? 450 + en.burst*en.burstGap*1000 : 450);   // attack anim spans the whole burst
         }
-      } else if(en._chase && en._see && en._dist < (en._reach || 2.4) && Math.abs((near.pos.y - EYE) - en.mesh.position.y) < 2.6 && en.cooldown<=0 && !editorOpen){   // aware/chasing melee enemy in reach AND at roughly the same height attacks (no hitting a floor above/below)
+      } else if(en._chase && en._dist < (en._reach || 2.4) && Math.abs((near.pos.y - EYE) - en.mesh.position.y) < 2.6 && en.cooldown<=0 && !editorOpen){   // build 539: a chasing melee enemy in reach AND at roughly the same height attacks on PROXIMITY (no LOS gate — at melee range the sightline is moot, and requiring it meant they only swung when literally touching on a cover-heavy map)
         en.cooldown = 0.8; en._attackT = nowMs + 550;   // brief attack-animation window
         near.hurt(en.dmg || 9, en.mesh.position.x, en.mesh.position.z);   // routes to the local player or, in co-op, the remote one
       }
+      // build 540: stuck recovery — a chasing enemy that stops making progress is wedged on a rock/wall. The
+      // Phase-1 nudge wall-follows around it; if it stays jammed for a few seconds, hop to a fresh clear spawn
+      // so it can't sit pinned in a tiny pocket forever (same safety the MP bots have).
+      if(en._chase){
+        const _mv = Math.hypot(en.mesh.position.x - (en._spx!=null?en._spx:en.mesh.position.x), en.mesh.position.z - (en._spz!=null?en._spz:en.mesh.position.z));
+        if(_mv < (en.speed||3)*dt*0.3){ en._stuckT=(en._stuckT||0)+dt; } else { en._stuckT=0; en._stuckSide=0; }
+        if(en._stuckT>3.5 && typeof randomSpawn==='function'){ const sp=randomSpawn(); en.mesh.position.set(sp.x,(sp.y||0)+1.4,sp.z); en.vy=0; en.evx=0; en.evz=0; en.grounded=true; en._stuckT=0; en._stuckSide=0; }
+      } else { en._stuckT=0; en._stuckSide=0; }
+      en._spx = en.mesh.position.x; en._spz = en.mesh.position.z;
       // drive the animation state machine: attack window > running (chasing) > walking (patrol) > idle
       if(en.mesh.userData.hasModel && en.mesh.userData.visual && en.mesh.userData.visual.userData.stateActions){
         const moved = Math.hypot(en.mesh.position.x - (en._apx!=null?en._apx:en.mesh.position.x), en.mesh.position.z - (en._apz!=null?en._apz:en.mesh.position.z));
@@ -19049,6 +19078,16 @@ function renderEditorFields(){
     const mh=document.createElement('div'); mh.className='hint'; mh.style.margin='2px 0 0';
     mh.textContent='One model is shared by all turrets; set its base size with Scale. Traverse arc + pitch limits define how far it can aim when a player mans it.';
     urlHost.appendChild(mh);
+    // build 535: same Poly Pizza / Sketchfab model search the gun + station use, scoped to the shared turret model
+    const tpsHead=document.createElement('div'); tpsHead.className='hint'; tpsHead.style.margin='10px 0 3px'; tpsHead.innerHTML='<b>\uD83D\uDD0D Poly Pizza</b> \u2014 search free models, click one to use for the turret';
+    urlHost.appendChild(tpsHead);
+    const tpsHost=document.createElement('div'); urlHost.appendChild(tpsHost);
+    renderModelSearch(tpsHost, (m, st)=>{ inp.value=m.glb; pushUndoSnapshot(); turretModelUrl=m.glb; rebuildTurretVisuals(); if(st) st.textContent='Using \u201c'+m.title+'\u201d \u2014 credit: '+(m.attribution||''); }, { placeholder:'e.g. turret, cannon, gun emplacement' });
+    // build 536: turret fire sound (saved on this device, travels with the level like other custom SFX)
+    if(!audioSettings.sounds) audioSettings.sounds=_emptySounds();
+    const tsh=document.createElement('div'); tsh.className='hint'; tsh.style.margin='10px 0 2px'; tsh.innerHTML='<b>Turret fire sound</b> \u2014 played when a mounted turret shoots (saved on this device)'; urlHost.appendChild(tsh);
+    urlHost.appendChild(_sndRow('Turret fire', ()=>audioSettings.sounds.turret, v=>{ audioSettings.sounds.turret=v||''; }));
+    urlHost.appendChild(renderFreesoundBrowser(urlHost, ()=>renderEditorFields(), { label:'Turret fire', set:v=>{ audioSettings.sounds.turret=v||''; } }));
   }
   if(tgt.addable){
     const row2 = document.createElement('div'); row2.className='row2'; row2.style.marginTop='6px';
@@ -20162,7 +20201,7 @@ function _fsAssignSlots(){
   out.push({ label:'Music', set:u=>{ audioSettings.musicUrl=u||''; if(_musicOn){ stopMusic(); startMusic(); } } });
   const W=(typeof WEAPONS!=='undefined')?WEAPONS:{};
   for(const k of Object.keys(W)){ const nm=(W[k]&&W[k].name)?W[k].name:k; out.push({ label:'Shoot \u00b7 '+nm, set:u=>{ if(!audioSettings.sounds.shoot) audioSettings.sounds.shoot={}; if(u) audioSettings.sounds.shoot[k]=u; else delete audioSettings.sounds.shoot[k]; } }); }
-  for(const [lab,key] of [['Reload','reload'],['Grenade','explode'],['Coin','coin'],['Hit marker','hit'],['Enemy kill','kill'],['Player hurt','hurt']]){ out.push({ label:lab, set:u=>{ audioSettings.sounds[key]=u; } }); }
+  for(const [lab,key] of [['Reload','reload'],['Grenade','explode'],['Coin','coin'],['Hit marker','hit'],['Enemy kill','kill'],['Player hurt','hurt'],['Turret fire','turret']]){ out.push({ label:lab, set:u=>{ audioSettings.sounds[key]=u; } }); }
   return out;
 }
 function renderFreesoundBrowser(host, refresh, directTarget){
