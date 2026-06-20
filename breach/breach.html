@@ -9547,7 +9547,10 @@ const SCENE_CATALOG = {
   sign:     { terms:'sign',            size:1.4, zone:'wall',   n:2 },
   trashcan: { terms:'trash can',       size:0.9, zone:'corner', n:3 },
   computer: { terms:'computer',        size:0.7, zone:'wall',   n:3 },
-  vending:  { terms:'vending machine', size:1.9, zone:'wall',   n:2 }
+  vending:  { terms:'vending machine', size:1.9, zone:'wall',   n:2 },
+  painting: { terms:'framed painting', size:1.1, zone:'mount',  n:3 },
+  clock:    { terms:'wall clock',       size:0.5, zone:'mount',  n:1 },
+  whiteboard:{ terms:'whiteboard',      size:1.6, zone:'mount',  n:1 }
 };
 // word -> catalog category (plurals + common synonyms). First match wins per word.
 const SCENE_SYN = {
@@ -9570,6 +9573,8 @@ const SCENE_SYN = {
   cart:'cart', carts:'cart', trolley:'cart',
   register:'register', registers:'register', till:'register',
   tv:'tv', television:'tv', televisions:'tv', monitor:'tv', screen:'tv',
+  painting:'painting', paintings:'painting', art:'painting', artwork:'painting', picture:'painting', poster:'painting', frame:'painting',
+  clock:'clock', whiteboard:'whiteboard', chalkboard:'whiteboard',
   computer:'computer', computers:'computer', pc:'computer', desktop:'computer', laptop:'computer', keyboard:'computer',
   sign:'sign', signs:'sign', signage:'sign',
   trash:'trashcan', garbage:'trashcan', bin:'trashcan', dumpster:'trashcan',
@@ -9641,14 +9646,15 @@ function _sceneCellZone(n, s, e, w){
 function _planFurnish(items, pools, rnd, cap){
   cap = cap || 40; const out=[];
   const pop = z => (pools[z] && pools[z].length ? pools[z].pop() : null);
-  const ORDER = { wall:['wall','corner'], corner:['corner','wall'], center:['center','wall','corner'], any:['wall','corner','center'] };
+  const ORDER = { wall:['wall','corner'], corner:['corner','wall'], center:['center','wall','corner'], any:['wall','corner','center'], mount:['wall','corner'] };
   const take = zone => { for(const z of (ORDER[zone]||[zone])){ const s=pop(z); if(s) return s; } return null; };
   for(const it of (items||[])){
     if(!it || !it.term) continue;
+    const mount = (it.zone==='mount');
     for(let i=0;i<(it.n||1) && out.length<cap;i++){
       const sp = take(it.zone||'any');
       if(!sp) break;   // no suitable spot left -> skip rather than drop it somewhere illogical
-      out.push({ term:it.term, q2:it.q2, size:(it.size||1.2), x:sp.x, z:sp.z, yaw:(sp.yaw!=null?sp.yaw:(rnd?rnd()*Math.PI*2:0)), nx:(sp.nx||0), nz:(sp.nz||0) });
+      out.push({ term:it.term, q2:it.q2, size:(it.size||1.2), mount, x:sp.x, z:sp.z, yaw:(sp.yaw!=null?sp.yaw:(rnd?rnd()*Math.PI*2:0)), nx:(sp.nx||0), nz:(sp.nz||0) });
     }
   }
   return out;
@@ -9680,18 +9686,44 @@ function _furnishExecute(placements, room){
     if(i>=placements.length) return;
     const p=placements[i++];
     const queries = [p.term, p.q2].filter((q,idx,a)=> q && a.indexOf(q)===idx);   // user's words first, broad fallback second
-    const place=(srcUrl, attr, onFail)=>{ spawnProp(srcUrl, [p.x, 0, p.z, 0, p.yaw, 0, 1], (obj)=>{ if(obj){ if(attr) obj.userData.attribution=attr; _fitPropToSize(obj, p.size); _hugWall(obj, p.nx, p.nz, room); if(typeof renderModelCredits==='function') renderModelCredits(); } }, undefined, 'loop', null, ()=>{ if(onFail) onFail(); }); };
-    // try one query across both sources (Sketchfab preferred); on a miss/failure, advance to the next query
-    const trySrc=(q, hit, miss)=>{
-      const ppFor=()=>{ if(!ppOk){ miss(); return; } ppSearch(q, (m)=>{ const r=(m||[]).find(x=>x&&x.glb); if(r) hit(r.glb, r.attribution); else miss(); }, ()=>miss()); };
-      if(sfOk) sfSearch(q, (res)=>{ const r=(res||[]).find(x=>x&&x.uid); if(r) hit('sketchfab:'+r.uid, r.attribution); else ppFor(); }, ()=>ppFor());
-      else ppFor();
+    const place=(srcUrl, attr)=>{ spawnProp(srcUrl, [p.x, 0, p.z, 0, p.yaw, 0, 1], (obj)=>{ if(!obj) return; if(attr) obj.userData.attribution=attr; _fitPropToSize(obj, p.size); _hugWall(obj, p.nx, p.nz, room);
+      if(p.mount){ const gy=(typeof terrainHeightAt==='function'?terrainHeightAt(p.x,p.z):0); obj.position.y = gy + 1.55; if(obj.userData.footR!=null) obj.userData.footR=0.1; }   // wall art / screens hang at eye height, not on the floor
+      if(typeof renderModelCredits==='function') renderModelCredits(); }, undefined, 'loop', null, ()=>{}); };
+    // walk [term,q2] x [Sketchfab,PolyPizza], scoring each result set by title relevance. Stop at the first
+    // CONFIDENT match (a model whose name actually contains the query words); otherwise keep the best weak
+    // candidate and place that, so we still get something rather than a random first hit (e.g. a server rack
+    // for "computer"). Only place nothing if every search came back empty.
+    const attempts=[]; for(const q of queries){ if(sfOk) attempts.push({q,src:'sf'}); if(ppOk) attempts.push({q,src:'pp'}); }
+    let best=null;   // { url, attr, score }
+    const step=(k)=>{
+      if(k>=attempts.length){ if(best) place(best.url, best.attr); return; }
+      const a=attempts[k];
+      const onPick=(pick)=>{ if(pick && pick.model){ const url = a.src==='sf' ? ('sketchfab:'+pick.model.uid) : pick.model.glb; if(pick.score>=1){ place(url, pick.model.attribution); return; } if(!best || pick.score>best.score) best={ url, attr:pick.model.attribution, score:pick.score }; } step(k+1); };
+      if(a.src==='sf') sfSearch(a.q, (res)=>onPick(_pickModel((res||[]).filter(x=>x&&x.uid), a.q)), ()=>step(k+1));
+      else            ppSearch(a.q, (m)=>onPick(_pickModel((m||[]).filter(x=>x&&x.glb), a.q)), ()=>step(k+1));
     };
-    const run=(qi)=>{ if(qi>=queries.length) return; trySrc(queries[qi], (src,attr)=>place(src, attr, ()=>run(qi+1)), ()=>run(qi+1)); };
-    run(0);
+    step(0);
     setTimeout(next, 140);   // stagger the NEXT item; downloads proceed in parallel (the browser caps concurrency)
   };
   next();
+}
+// Score model search results by how well the title matches the query and return { model, score } (or null when
+// there are no results). score>=1 means the title actually contains the query's words -> a confident match.
+function _pickModel(results, query){
+  const list = results||[]; if(!list.length) return null;
+  const qt = String(query||'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w && !_SCENE_STOP[w]).map(_stemWord);
+  if(!qt.length) return { model:list[0], score:0 };
+  const head = qt[qt.length-1];
+  let best=list[0], bestScore=-1e9;
+  for(let i=0;i<list.length;i++){ const r=list[i]; if(!r) continue;
+    const title=String(r.title||'').toLowerCase();
+    const tt=title.split(/[^a-z0-9]+/).filter(Boolean).map(_stemWord);
+    let s=0; for(const q of qt){ if(tt.indexOf(q)>=0) s+=1; else if(title.indexOf(q)>=0) s+=0.5; }
+    if(tt.indexOf(head)>=0) s+=1.5;     // the head noun ("computer" in "office computer") matters most
+    s -= i*0.05;                         // gentle tie-break toward the library's own ranking
+    if(s>bestScore){ bestScore=s; best=r; }
+  }
+  return { model:best, score:bestScore };
 }
 // ===== build 571: AI scene builder (optional, editor-only) =====
 // With an Anthropic key, Claude composes the scene per-room (a break room gets tables/vending/coffee, a reception
@@ -9699,7 +9731,7 @@ function _furnishExecute(placements, room){
 // normalises into the SAME item shape the rule parser produces, so the planner + executor are reused unchanged.
 // _aiNormalizePlan is pure (unit-tested); the fetch is thin glue with the rule parser as the no-key fallback.
 function _aiNormalizePlan(obj, numRooms){
-  const ZONES={ wall:1, corner:1, center:1, any:1 };
+  const ZONES={ wall:1, corner:1, center:1, any:1, mount:1 };
   let rooms = (obj && Array.isArray(obj.rooms)) ? obj.rooms : (Array.isArray(obj) ? obj : []);
   const cap = numRooms || rooms.length;
   const out=[];
@@ -9722,14 +9754,18 @@ function _aiPlanScene(desc, roomInfos, cb, errcb){
   const key=aiGetKey(); if(!key){ errcb && errcb(new Error('no key')); return; }
   const prompt =
     'You are furnishing a procedurally generated '+(desc?('"'+desc.replace(/"/g,'')+'"'):'building')+' for a 3D game level editor.\n'
-    + 'There are '+roomInfos.length+' rooms with approximate floor sizes:\n'
-    + roomInfos.map((r,i)=>(i+1)+'. about '+r.w+'m by '+r.d+'m').join('\n') + '\n\n'
-    + 'Give each room a role that fits the description, then furnish it. Each item needs: '
-    + '"term" (a short concrete search query for a free 3D model library, e.g. "vending machine", "office chair", "reception desk"), '
-    + '"size" (real-world length of its LONGEST side in metres), "zone" (one of "wall","corner","center","any"), and "count" (1-6). '
-    + 'Use 3 to 6 items per room and keep them plausible for the room size. '
-    + 'Return ONLY minified JSON (no prose, no code fences) shaped exactly like: '
-    + '{"rooms":[{"role":"reception","items":[{"term":"reception desk","size":2.2,"zone":"wall","count":1}]}]}';
+    + 'There are '+roomInfos.length+' connected rooms. Sizes (and which one is the entrance the player walks in through):\n'
+    + roomInfos.map((r,i)=>(i+1)+'. about '+r.w+'m by '+r.d+'m'+(r.entrance?' (ENTRANCE)':'')).join('\n') + '\n\n'
+    + 'Assign each room a role from the description, fitting the role to the room SIZE: put the conference room / open areas in the LARGEST rooms, '
+    + 'small rooms become bathrooms, closets or single offices, and the reception/lobby should be the ENTRANCE room. Reuse a role (e.g. several offices) when the description implies it.\n'
+    + 'Then furnish each room with items that BELONG to its role. Each item: '
+    + '"term" (a short concrete search query for a free 3D model library, e.g. "office chair", "vending machine", "reception desk", "potted plant"), '
+    + '"size" (real-world length of its LONGEST side in metres), '
+    + '"zone" (one of: "wall" = flush against a wall like desks/couches/counters/vending; "center" = free-standing like tables/conference tables; "corner" = plants/lamps/bins; "mount" = hung ON a wall at eye height like paintings/tv/clocks/whiteboards), '
+    + 'and "count" (small, scaled to the room: a tiny room fits ~2-3 items, a big room ~5-7). '
+    + 'Skip items that can only sit ON furniture (a computer or phone on a desk) for now. Use realistic metre sizes so nothing is giant. '
+    + 'Return ONLY minified JSON (no prose, no code fences) exactly like: '
+    + '{"rooms":[{"role":"reception","items":[{"term":"reception desk","size":2.2,"zone":"wall","count":1},{"term":"painting","size":1.1,"zone":"mount","count":2}]}]}';
   fetch('https://api.anthropic.com/v1/messages', {
     method:'POST',
     headers:{ 'content-type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
@@ -9841,7 +9877,7 @@ function generateOffice(opts){
   const inB=(r,c)=> (r>0 && c>0 && r<G-1 && c<G-1);   // keep a solid outer shell
   const carveRect=(r0,c0,r1,c1)=>{ for(let r=r0;r<r1;r++) for(let c=c0;c<c1;c++){ if(inB(r,c)) wall[r][c]=false; } };
   const carveCorr=(r1,c1,r2,c2)=>{ let r=r1,c=c1; while(c!==c2){ if(inB(r,c)) wall[r][c]=false; c+=(c2>c?1:-1); } while(r!==r2){ if(inB(r,c)) wall[r][c]=false; r+=(r2>r?1:-1); } if(inB(r,c)) wall[r][c]=false; };   // L-shaped, 1 cell wide
-  const MINSZ=5;
+  const MINSZ=4;
   const split=(r0,c0,r1,c1,depth)=>{
     const h=r1-r0, w=c1-c0, canV=(w>=2*MINSZ), canH=(h>=2*MINSZ);
     if(depth<=0 || (!canV && !canH)){                 // leaf -> a room filling the region minus a 1-cell wall margin
@@ -9871,7 +9907,7 @@ function generateOffice(opts){
   const sx=rooms.length?cx(rooms[0][1]):0, sz=rooms.length?cz(rooms[0][0]):0;
   const floorSpots=[], coverSpots=[];
   const zonePools={ wall:[], corner:[], center:[] };   // build 567: spots for furniture, by where they sit in a room
-  for(let r=0;r<G;r++) for(let c=0;c<G;c++){ if(!isFloor(r,c)) continue; const x=cx(c), z=cz(r); if((x-sx)*(x-sx)+(z-sz)*(z-sz) < (cell*2.2)*(cell*2.2)) continue; floorSpots.push([x,z]);
+  for(let r=0;r<G;r++) for(let c=0;c<G;c++){ if(!isFloor(r,c)) continue; const x=cx(c), z=cz(r); if((x-sx)*(x-sx)+(z-sz)*(z-sz) < (cell*1.4)*(cell*1.4)) continue; floorSpots.push([x,z]);
     const n=isFloor(r-1,c), s2=isFloor(r+1,c), e=isFloor(r,c+1), w=isFloor(r,c-1);
     if((n?1:0)+(s2?1:0)+(e?1:0)+(w?1:0)>=3) coverSpots.push([x,z]);   // roomy = 3+ open neighbours -> not a 1-wide hallway
     const zone=_sceneCellZone(n,s2,e,w);
@@ -9883,7 +9919,7 @@ function generateOffice(opts){
   const roomPools=[];
   for(const rc of roomRects){ const rp={ wall:[], corner:[], center:[] };
     for(let r=rc[0];r<rc[2];r++) for(let c=rc[1];c<rc[3];c++){ if(!isFloor(r,c)) continue; const x=cx(c), z=cz(r);
-      if((x-sx)*(x-sx)+(z-sz)*(z-sz) < (cell*2.2)*(cell*2.2)) continue;
+      if((x-sx)*(x-sx)+(z-sz)*(z-sz) < (cell*1.4)*(cell*1.4)) continue;
       const n=isFloor(r-1,c), s2=isFloor(r+1,c), e=isFloor(r,c+1), w=isFloor(r,c-1);
       const zone=_sceneCellZone(n,s2,e,w); if(zone==='corridor') continue;
       const ox=(e?1:0)-(w?1:0), oz=(s2?1:0)-(n?1:0); const spot={ x:+x.toFixed(2), z:+z.toFixed(2), yaw:((ox||oz)?Math.atan2(ox,oz):0), nx:-ox, nz:-oz };
@@ -9894,9 +9930,9 @@ function generateOffice(opts){
   if(opts.cover!==false){ _genShuffle(rnd, coverSpots); _genScatterCover(rnd, coverSpots, gndAt, 0.22); }
   if(opts.loot!==false){ _genPlaceExtract(floorSpots, sx, sz); const pk=floorSpots.slice(); _genShuffle(rnd, pk); _genSeedPickups(rnd, pk, gndAt); }
   // one cool overhead light per room (office fluorescent feel), budgeted under the active-light cap
-  let placed=0; const lstep=Math.max(1, Math.ceil(rooms.length/13));
-  for(let i=0;i<rooms.length && placed<14;i+=lstep){ const [r,c]=rooms[i]; if(typeof buildLight==='function'){ buildLight({ type:'point', color:(lm?lm.color:0xeaf2ff), intensity:(lm?lm.intensity:3), distance:cell*5, t:[cx(c), gndAt(cx(c),cz(r))+wallH*0.82, cz(r)] }); placed++; } }
-  if(typeof buildLight==='function') buildLight({ type:'point', color:0xfff0d8, intensity:2.5, distance:span*0.7, t:[0, gndAt(0,0)+wallH*1.7, 0] });   // soft global fill
+  let placed=0; const lstep=Math.max(1, Math.ceil(rooms.length/20));
+  for(let i=0;i<rooms.length && placed<20;i+=lstep){ const [r,c]=rooms[i]; if(typeof buildLight==='function'){ buildLight({ type:'point', color:(lm?lm.color:0xeaf2ff), intensity:Math.max(3.6,(lm?lm.intensity:3)), distance:cell*6, t:[cx(c), gndAt(cx(c),cz(r))+wallH*0.82, cz(r)] }); placed++; } }
+  if(typeof buildLight==='function') buildLight({ type:'point', color:0xfff0d8, intensity:3.2, distance:span*0.8, t:[0, gndAt(0,0)+wallH*1.7, 0] });   // soft global fill
   // player start in the first room; a few enemy spawns spread across rooms (wave / co-op support)
   if(rooms.length){ const [r,c]=rooms[0]; playerSpawn.x=+cx(c).toFixed(2); playerSpawn.z=+cz(r).toFixed(2); playerSpawn.y=0; playerSpawn.yaw=Math.atan2(-cx(c), -cz(r)); if(typeof refreshPlayerSpawnMarker==='function') refreshPlayerSpawnMarker(); }
   const sstep=Math.max(1, Math.floor(rooms.length/4));
@@ -9907,7 +9943,7 @@ function generateOffice(opts){
   // furnish each room from its own pool; any failure falls back to the keyword path so generate never stalls.
   const _furnishDet = ()=>{ if(spec.items.length){ _genShuffle(rnd, zonePools.wall); _genShuffle(rnd, zonePools.corner); _genShuffle(rnd, zonePools.center); _furnishExecute(_planFurnish(spec.items, zonePools, rnd), cell); } };
   if(opts.desc && typeof aiGetKey==='function' && aiGetKey() && typeof _aiPlanScene==='function'){
-    const roomInfos = roomRects.map(r=>({ w:Math.max(1,Math.round((r[3]-r[1])*cell)), d:Math.max(1,Math.round((r[2]-r[0])*cell)) }));
+    const roomInfos = roomRects.map((r,idx)=>({ w:Math.max(1,Math.round((r[3]-r[1])*cell)), d:Math.max(1,Math.round((r[2]-r[0])*cell)), entrance:(idx===0) }));
     if(typeof toast==='function') toast('Composing the scene with Claude\u2026');
     _aiPlanScene(opts.desc, roomInfos, (plan)=>{
       let all=[];
@@ -13513,7 +13549,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 571 · 2026-06-19';
+const BUILD_VERSION = 'build 572 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
