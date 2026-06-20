@@ -9463,7 +9463,7 @@ function removeFireZone(i){ pushUndoSnapshot(); fireZones.splice(i,1); if(selFir
 // bots) spawn via randomSpawn(), which validates points against geometry, so they land in open corridors.
 // Seeded with a small PRNG so a given seed reproduces the same maze (each click rolls a fresh random seed).
 function _mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15, 1|a); t=t+Math.imul(t^t>>>7, 61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
-let _genCells=9, _lastMazeSeed=0, _genCover=true, _genLoot=true, _genTex=true, _genDesc='';
+let _genCells=9, _lastMazeSeed=0, _genCover=true, _genLoot=true, _genTex=true, _genDesc='', _genVision=true;
 const _GEN_FLOOR_TEX=['wood','tiles','concrete','carpet','marble'];
 const _GEN_WALL_TEX=['concrete','plaster','brick','painted','stone'];
 // build 562: after a layout is built, asynchronously pick a random Poly Haven (CC0) texture for the floor and
@@ -9672,58 +9672,71 @@ function _hugWall(obj, nx, nz, room){
   obj.updateMatrixWorld(true);
   obj.userData.footR=_propFootR(obj); if(typeof refreshPropCollider==='function') refreshPropCollider(obj);
 }
-// Async glue (not unit-tested — network): for each planned placement, search for a model, drop the first usable
-// result in at its planned spot, fit to the category's real-world size, ground it, credit it. Prefers Sketchfab
-// (a far deeper catalog) when a token is present, and falls back to Poly Pizza per placement on a miss/error.
-function _furnishExecute(placements, room){
+// Title relevance of a model name to a query (pure). >=1 means the name actually contains the query's words.
+function _titleScore(title, query){
+  const qt = String(query||'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w && !_SCENE_STOP[w]).map(_stemWord);
+  if(!qt.length) return 0;
+  const head = qt[qt.length-1];
+  const tl = String(title||'').toLowerCase(); const tt = tl.split(/[^a-z0-9]+/).filter(Boolean).map(_stemWord);
+  let s=0; for(const q of qt){ if(tt.indexOf(q)>=0) s+=1; else if(tl.indexOf(q)>=0) s+=0.5; }
+  if(tt.indexOf(head)>=0) s+=1.5;     // the head noun ("computer" in "office computer") matters most
+  return s;
+}
+function _pickModel(results, query){   // best single result by title (kept for the no-key path / tests)
+  const list = results||[]; if(!list.length) return null;
+  let best=list[0], bestScore=-1e9;
+  for(let i=0;i<list.length;i++){ const r=list[i]; if(!r) continue; const s=_titleScore(r.title, query) - i*0.05; if(s>bestScore){ bestScore=s; best=r; } }
+  return { model:best, score:bestScore };
+}
+function _rankByTitle(cands, query){   // candidates sorted best-first by title score (stable-ish via tiny index bias)
+  return (cands||[]).map((c,i)=>({ c, s:_titleScore(c&&c.title, query) - i*0.02 })).sort((a,b)=>b.s-a.s).map(x=>x.c);
+}
+let _furnishScale = 1.6; try{ const _fs=parseFloat(localStorage.getItem('breach_furnish_scale')); if(isFinite(_fs)&&_fs>0) _furnishScale=_fs; }catch(e){}   // build 573: global size multiplier (real-world sizes read small in big rooms)
+const _AI_VISION_K = 5;   // candidate thumbnails shown to the vision picker per item
+// Async glue (network). Groups planned placements by search term, gathers candidate models (with thumbnails) once
+// per distinct item, then chooses which model to use: with a key + vision on, Claude looks at the thumbnails and
+// picks the ones that actually look right (rejecting wrong/cluttered models); otherwise the best title match.
+// Multiple instances of an item rotate through the approved models for variety, and everything is fit to its
+// real-world size times the furniture-scale multiplier, then wall-hugged / mounted.
+function _furnishExecute(placements, room, fopts){
   if(!placements || !placements.length) return;
-  room = room || 4.5;
+  room = room || 4.5; fopts = fopts || {};
   const sfOk = (typeof sfSearch==='function' && typeof sfGetToken==='function' && !!sfGetToken());
   const ppOk = (typeof ppSearch==='function' && (typeof ppGetKey!=='function' || !!ppGetKey()));
   if(!sfOk && !ppOk){ if(typeof toast==='function') toast('Add a Sketchfab or Poly Pizza key (Models tab) to furnish from a description'); return; }
-  let i=0;
-  const next=()=>{
-    if(i>=placements.length) return;
-    const p=placements[i++];
-    const queries = [p.term, p.q2].filter((q,idx,a)=> q && a.indexOf(q)===idx);   // user's words first, broad fallback second
-    const place=(srcUrl, attr)=>{ spawnProp(srcUrl, [p.x, 0, p.z, 0, p.yaw, 0, 1], (obj)=>{ if(!obj) return; if(attr) obj.userData.attribution=attr; _fitPropToSize(obj, p.size); _hugWall(obj, p.nx, p.nz, room);
-      if(p.mount){ const gy=(typeof terrainHeightAt==='function'?terrainHeightAt(p.x,p.z):0); obj.position.y = gy + 1.55; if(obj.userData.footR!=null) obj.userData.footR=0.1; }   // wall art / screens hang at eye height, not on the floor
-      if(typeof renderModelCredits==='function') renderModelCredits(); }, undefined, 'loop', null, ()=>{}); };
-    // walk [term,q2] x [Sketchfab,PolyPizza], scoring each result set by title relevance. Stop at the first
-    // CONFIDENT match (a model whose name actually contains the query words); otherwise keep the best weak
-    // candidate and place that, so we still get something rather than a random first hit (e.g. a server rack
-    // for "computer"). Only place nothing if every search came back empty.
-    const attempts=[]; for(const q of queries){ if(sfOk) attempts.push({q,src:'sf'}); if(ppOk) attempts.push({q,src:'pp'}); }
-    let best=null;   // { url, attr, score }
-    const step=(k)=>{
-      if(k>=attempts.length){ if(best) place(best.url, best.attr); return; }
-      const a=attempts[k];
-      const onPick=(pick)=>{ if(pick && pick.model){ const url = a.src==='sf' ? ('sketchfab:'+pick.model.uid) : pick.model.glb; if(pick.score>=1){ place(url, pick.model.attribution); return; } if(!best || pick.score>best.score) best={ url, attr:pick.model.attribution, score:pick.score }; } step(k+1); };
-      if(a.src==='sf') sfSearch(a.q, (res)=>onPick(_pickModel((res||[]).filter(x=>x&&x.uid), a.q)), ()=>step(k+1));
-      else            ppSearch(a.q, (m)=>onPick(_pickModel((m||[]).filter(x=>x&&x.glb), a.q)), ()=>step(k+1));
+  const useVision = !!(fopts.vision && typeof aiGetKey==='function' && aiGetKey() && typeof _aiPickModel==='function');
+  const scale = (typeof _furnishScale==='number' && _furnishScale>0) ? _furnishScale : 1;
+  const place=(p, ref)=>{ if(!ref || !ref.url) return; spawnProp(ref.url, [p.x, 0, p.z, 0, p.yaw, 0, 1], (obj)=>{ if(!obj) return; if(ref.attr) obj.userData.attribution=ref.attr; _fitPropToSize(obj, (p.size||1.2)*scale); _hugWall(obj, p.nx, p.nz, room);
+    if(p.mount){ const gy=(typeof terrainHeightAt==='function'?terrainHeightAt(p.x,p.z):0); obj.position.y = gy + 1.55; if(obj.userData.footR!=null) obj.userData.footR=0.1; }   // wall art / screens hang at eye height
+    if(typeof renderModelCredits==='function') renderModelCredits(); }, undefined, 'loop', null, ()=>{}); };
+  // group identical items so we search + (vision-)pick once, then place every instance
+  const groups=new Map();
+  for(const p of placements){ const k=(p.term||'')+'|'+(p.q2||''); if(!groups.has(k)) groups.set(k, { term:p.term, q2:p.q2, items:[] }); groups.get(k).items.push(p); }
+  const glist=[...groups.values()]; let gi=0;
+  const finishGroup=(g, refs)=>{ if(refs && refs.length) g.items.forEach((p,idx)=> place(p, refs[idx % refs.length])); };
+  const gather=(g, cb)=>{   // collect up to K candidates {url,title,thumb,attr} from [term,q2] x [SF,PP]
+    const queries=[g.term, g.q2].filter((q,i,a)=> q && a.indexOf(q)===i); const cands=[]; let qi=0, sp=0;
+    const step=()=>{ if(cands.length>=_AI_VISION_K || qi>=queries.length){ cb(cands); return; }
+      const q=queries[qi]; const adv=()=>{ sp++; if(sp>1){ sp=0; qi++; } step(); };
+      if(sp===0){ if(!sfOk){ adv(); return; } sfSearch(q, (res)=>{ for(const r of (res||[])){ if(r&&r.uid&&cands.length<_AI_VISION_K) cands.push({ url:'sketchfab:'+r.uid, title:r.title, thumb:r.thumb, attr:r.attribution }); } adv(); }, ()=>adv()); }
+      else      { if(!ppOk){ adv(); return; } ppSearch(q, (m)=>{ for(const r of (m||[])){ if(r&&r.glb&&cands.length<_AI_VISION_K) cands.push({ url:r.glb, title:r.title, thumb:r.thumb, attr:r.attribution }); } adv(); }, ()=>adv()); }
     };
-    step(0);
-    setTimeout(next, 140);   // stagger the NEXT item; downloads proceed in parallel (the browser caps concurrency)
+    step();
   };
-  next();
-}
-// Score model search results by how well the title matches the query and return { model, score } (or null when
-// there are no results). score>=1 means the title actually contains the query's words -> a confident match.
-function _pickModel(results, query){
-  const list = results||[]; if(!list.length) return null;
-  const qt = String(query||'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w && !_SCENE_STOP[w]).map(_stemWord);
-  if(!qt.length) return { model:list[0], score:0 };
-  const head = qt[qt.length-1];
-  let best=list[0], bestScore=-1e9;
-  for(let i=0;i<list.length;i++){ const r=list[i]; if(!r) continue;
-    const title=String(r.title||'').toLowerCase();
-    const tt=title.split(/[^a-z0-9]+/).filter(Boolean).map(_stemWord);
-    let s=0; for(const q of qt){ if(tt.indexOf(q)>=0) s+=1; else if(title.indexOf(q)>=0) s+=0.5; }
-    if(tt.indexOf(head)>=0) s+=1.5;     // the head noun ("computer" in "office computer") matters most
-    s -= i*0.05;                         // gentle tie-break toward the library's own ranking
-    if(s>bestScore){ bestScore=s; best=r; }
-  }
-  return { model:best, score:bestScore };
+  const nextGroup=()=>{
+    if(gi>=glist.length){ if(useVision && typeof toast==='function') toast('Scene furnished'); return; }
+    const g=glist[gi++];
+    gather(g, (cands)=>{
+      const proceed=(refs)=>{ finishGroup(g, refs); setTimeout(nextGroup, useVision?40:120); };
+      if(!cands.length){ proceed([]); return; }
+      if(useVision){
+        if(typeof toast==='function') toast('Claude is checking models for \u201c'+g.term+'\u201d ('+gi+'/'+glist.length+')\u2026');
+        _aiPickModel(g.term, fopts.context||'', cands, (good)=>{ const refs=(good&&good.length?good:[]).map(i=>cands[i]).filter(Boolean); proceed(refs.length?refs:[ _rankByTitle(cands,g.term)[0] ]); },
+                     ()=>{ proceed([ _rankByTitle(cands,g.term)[0] ]); });
+      } else { proceed(_rankByTitle(cands, g.term).slice(0,3)); }   // no key: best title matches, rotate top 3 for variety
+    });
+  };
+  nextGroup();
 }
 // ===== build 571: AI scene builder (optional, editor-only) =====
 // With an Anthropic key, Claude composes the scene per-room (a break room gets tables/vending/coffee, a reception
@@ -9780,6 +9793,38 @@ function _aiPlanScene(desc, roomInfos, cb, errcb){
     const parsed=JSON.parse(clean.slice(start, end+1));
     cb(_aiNormalizePlan(parsed, roomInfos.length));
   })
+  .catch(err=>{ errcb && errcb(err); });
+}
+// build 573: vision model picker. Given candidate models (with thumbnail URLs), Claude looks at the thumbnails and
+// returns the ones that actually look like the requested prop, best first (empty if none fit). _aiParsePick is pure.
+function _aiParsePick(txt, n){
+  const s=String(txt||''); let arr=null;
+  try{ const a=s.indexOf('{'), b=s.lastIndexOf('}'); if(a>=0&&b>a){ const o=JSON.parse(s.slice(a,b+1)); if(o&&Array.isArray(o.good)) arr=o.good; } }catch(e){}
+  if(!arr){ try{ const a=s.indexOf('['), b=s.lastIndexOf(']'); if(a>=0&&b>a){ const o=JSON.parse(s.slice(a,b+1)); if(Array.isArray(o)) arr=o; } }catch(e){} }
+  if(!arr){ const m=s.match(/-?\d+/g); arr = m ? m.map(Number) : []; }
+  const out=[]; for(const v of (arr||[])){ const i=Math.round(+v)-1; if(i>=0 && i<n && out.indexOf(i)<0) out.push(i); }   // 1-based -> 0-based, in range, de-duped
+  return out;
+}
+function _aiPickModel(term, context, cands, cb, errcb){
+  const key=aiGetKey(); if(!key){ errcb && errcb(new Error('no key')); return; }
+  const withThumbs=(cands||[]).filter(c=>c && c.thumb);
+  if(!withThumbs.length){ errcb && errcb(new Error('no thumbnails')); return; }   // nothing to look at -> caller falls back to title
+  const content=[{ type:'text', text:
+    'I am choosing a 3D model to place as "'+term+'"'+(context?(' for '+String(context).slice(0,80)):'')+' in a game level. '
+    + 'Below are '+withThumbs.length+' candidate models, each a numbered thumbnail. Pick the ones that clearly look like a single, realistic "'+term+'" suitable to drop into a room. '
+    + 'Reject wrong objects, logos or text cards, tiny unclear renders, and cluttered multi-object scenes. '
+    + 'Reply with ONLY JSON {"good":[numbers, best first]} — use an empty array if none are acceptable.' }];
+  withThumbs.forEach((c,i)=>{ content.push({ type:'text', text:'Candidate '+(i+1)+': '+(c.title||'(untitled)') }); content.push({ type:'image', source:{ type:'url', url:c.thumb } }); });
+  fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST',
+    headers:{ 'content-type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
+    body: JSON.stringify({ model:AI_MODEL, max_tokens:200, messages:[{ role:'user', content }] })
+  })
+  .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+  .then(d=>{ const txt=(d && Array.isArray(d.content)) ? d.content.filter(b=>b&&b.type==='text').map(b=>b.text).join('') : '';
+    const idx=_aiParsePick(txt, withThumbs.length);
+    // map back to the original cands array (we filtered out thumb-less ones)
+    cb(idx.map(i=>cands.indexOf(withThumbs[i])).filter(i=>i>=0)); })
   .catch(err=>{ errcb && errcb(err); });
 }
 function generateMaze(opts){
@@ -9948,7 +9993,7 @@ function generateOffice(opts){
     _aiPlanScene(opts.desc, roomInfos, (plan)=>{
       let all=[];
       for(let i=0;i<plan.length && i<roomPools.length;i++){ const rp=roomPools[i]; _genShuffle(rnd, rp.wall); _genShuffle(rnd, rp.corner); _genShuffle(rnd, rp.center); all=all.concat(_planFurnish(plan[i].items, rp, rnd, 10)); }
-      if(all.length){ if(typeof toast==='function') toast('Placing '+all.length+' props from Claude\u2019s plan\u2026'); _furnishExecute(all, cell); } else _furnishDet();
+      if(all.length){ if(typeof toast==='function') toast('Placing '+all.length+' props from Claude\u2019s plan\u2026'); _furnishExecute(all, cell, { vision:(typeof _genVision==='undefined'?true:_genVision), context:opts.desc }); } else _furnishDet();
     }, (err)=>{ if(typeof toast==='function') toast('AI scene failed ('+((err&&err.message)||'error')+') \u2014 using keyword placement'); _furnishDet(); });
   } else { _furnishDet(); }
   if(gameCfg && gameCfg.spawnRegion) gameCfg.spawnRegion.on=false;
@@ -9991,12 +10036,21 @@ function renderGeneratePanel(){
     an.innerHTML = aiHas ? '\u2713 Rooms are composed by Claude (each room gets a role + matching furniture). Key stays in this browser; only you (the author) need it.'
                          : 'Without a key, the description is placed by keyword. Add a key to have Claude lay out each room logically.';
     host.appendChild(an);
+    if(aiHas){ const vl=document.createElement('label'); vl.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:11px;margin:2px 0 2px;cursor:pointer;'; const vc=document.createElement('input'); vc.type='checkbox'; vc.checked=_genVision; vc.style.accentColor='var(--accent)'; vc.onchange=()=>{ _genVision=vc.checked; }; const vs=document.createElement('span'); vs.innerHTML='<b>Verify models with vision</b> \u2014 Claude looks at thumbnails and rejects wrong ones (slower, more API calls)'; vl.appendChild(vc); vl.appendChild(vs); host.appendChild(vl); }
   }
   // content toggles
   const mkChk=(label,get,set)=>{ const l=document.createElement('label'); l.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:11px;margin:3px 0;cursor:pointer;'; const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=get(); cb.style.accentColor='var(--accent)'; cb.onchange=()=>set(cb.checked); const s=document.createElement('span'); s.innerHTML=label; l.appendChild(cb); l.appendChild(s); host.appendChild(l); };
   mkChk('<b>Scatter cover</b> \u2014 crates, low barriers, pillars', ()=>_genCover, v=>{ _genCover=v; });
   mkChk('<b>Seed weapons &amp; pickups</b> \u2014 guns, health, ammo, powerups + an extraction point', ()=>_genLoot, v=>{ _genLoot=v; });
   mkChk('<b>Textured surfaces</b> \u2014 random Poly Haven floor + walls (CC0)', ()=>_genTex, v=>{ _genTex=v; });
+  // build 573: global furniture scale (real-world sizes read small in big rooms)
+  if(!isMaze){ const sc=document.createElement('div'); sc.style.cssText='margin:5px 0 2px;';
+    const cur=(typeof _furnishScale==='number'?_furnishScale:1.6);
+    const lab=document.createElement('div'); lab.style.cssText='color:#9fe6cf;font-size:11px;margin-bottom:2px;'; lab.innerHTML='<b>Furniture scale</b> \u2014 <span id="edFurnScaleV">'+cur.toFixed(1)+'\u00d7</span>';
+    const sl=document.createElement('input'); sl.type='range'; sl.min='0.6'; sl.max='3'; sl.step='0.1'; sl.value=String(cur); sl.style.cssText='width:100%;accent-color:var(--accent);';
+    sl.oninput=()=>{ const v=parseFloat(sl.value)||1.6; _furnishScale=v; try{ localStorage.setItem('breach_furnish_scale', String(v)); }catch(e){} const o=sc.querySelector('#edFurnScaleV'); if(o) o.textContent=v.toFixed(1)+'\u00d7'; };
+    sc.appendChild(lab); sc.appendChild(sl); host.appendChild(sc);
+  }
   // generate
   const btn=document.createElement('button'); btn.textContent='\u2699 Generate '+(isMaze?'maze':'office'); btn.style.cssText='width:100%;background:var(--accent);color:#05070a;font-weight:700;border:none;padding:9px;border-radius:6px;margin:4px 0;cursor:pointer;';
   btn.onclick=()=>{ const o={ cells:_genCells, cover:_genCover, loot:_genLoot, tex:_genTex }; if(isMaze) generateMaze(o); else generateOffice(Object.assign(o,{ desc:_genDesc })); };
@@ -13549,7 +13603,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 572 · 2026-06-19';
+const BUILD_VERSION = 'build 573 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
