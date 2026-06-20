@@ -9601,24 +9601,40 @@ function _sceneCellZone(n, s, e, w){
 // placements [{cat, term, size, x, z, yaw}]; cap bounds the total.
 function _planFurnish(cats, pools, rnd, cap){
   cap = cap || 40; const out=[];
-  const pop  = z => (pools[z] && pools[z].length ? pools[z].pop() : null);
-  const take = z => z==='any' ? (pop('center')||pop('wall')||pop('corner')) : pop(z);
+  const pop = z => (pools[z] && pools[z].length ? pools[z].pop() : null);
+  // build 569: zone-aware fallback. Wall/corner items hug walls and NEVER fall into the open centre (the old
+  // "floating desk"); centre items prefer the middle but can use edges; 'any' clutter fills edges then centre.
+  const ORDER = { wall:['wall','corner'], corner:['corner','wall'], center:['center','wall','corner'], any:['wall','corner','center'] };
+  const take = zone => { for(const z of (ORDER[zone]||[zone])){ const s=pop(z); if(s) return s; } return null; };
   for(const cat of cats){
     const spec = SCENE_CATALOG[cat]; if(!spec) continue;
     for(let i=0;i<spec.n && out.length<cap;i++){
-      let sp = take(spec.zone);
-      if(!sp) sp = pop('center')||pop('wall')||pop('corner');   // preferred zone empty -> any remaining spot
-      if(!sp) break;
-      out.push({ cat, term:spec.terms, size:spec.size, x:sp.x, z:sp.z, yaw:(sp.yaw!=null?sp.yaw:(rnd?rnd()*Math.PI*2:0)) });
+      const sp = take(spec.zone);
+      if(!sp) break;   // no suitable spot left -> skip rather than drop it somewhere illogical
+      out.push({ cat, term:spec.terms, size:spec.size, x:sp.x, z:sp.z, yaw:(sp.yaw!=null?sp.yaw:(rnd?rnd()*Math.PI*2:0)), nx:(sp.nx||0), nz:(sp.nz||0) });
     }
   }
   return out;
 }
+// build 569: after a furnished prop is fitted, slide it flush against the wall(s) of its cell so wall/corner
+// items read as against-the-wall instead of floating at cell-centre. nx/nz mark which side(s) the wall is on
+// (a centre cell has both 0 -> nothing moves). Pushes by half a cell minus the prop's half-extent + a margin.
+function _hugWall(obj, nx, nz, room){
+  if(!obj || (!nx && !nz)) return;
+  obj.updateMatrixWorld(true);
+  const b = new THREE.Box3().setFromObject(obj); if(b.isEmpty()) return;
+  const hx=(b.max.x-b.min.x)/2, hz=(b.max.z-b.min.z)/2, m=0.12;
+  if(nx) obj.position.x += Math.sign(nx)*Math.max(0, room*0.5 - hx - m);
+  if(nz) obj.position.z += Math.sign(nz)*Math.max(0, room*0.5 - hz - m);
+  obj.updateMatrixWorld(true);
+  obj.userData.footR=_propFootR(obj); if(typeof refreshPropCollider==='function') refreshPropCollider(obj);
+}
 // Async glue (not unit-tested — network): for each planned placement, search for a model, drop the first usable
 // result in at its planned spot, fit to the category's real-world size, ground it, credit it. Prefers Sketchfab
 // (a far deeper catalog) when a token is present, and falls back to Poly Pizza per placement on a miss/error.
-function _furnishExecute(placements){
+function _furnishExecute(placements, room){
   if(!placements || !placements.length) return;
+  room = room || 4.5;
   const sfOk = (typeof sfSearch==='function' && typeof sfGetToken==='function' && !!sfGetToken());
   const ppOk = (typeof ppSearch==='function' && (typeof ppGetKey!=='function' || !!ppGetKey()));
   if(!sfOk && !ppOk){ if(typeof toast==='function') toast('Add a Sketchfab or Poly Pizza key (Models tab) to furnish from a description'); return; }
@@ -9626,7 +9642,7 @@ function _furnishExecute(placements){
   const next=()=>{
     if(i>=placements.length) return;
     const p=placements[i++];
-    const start=(srcUrl, attr, onFail)=>{ spawnProp(srcUrl, [p.x, 0, p.z, 0, p.yaw, 0, 1], (obj)=>{ if(obj){ if(attr) obj.userData.attribution=attr; _fitPropToSize(obj, p.size); if(typeof renderModelCredits==='function') renderModelCredits(); } }, undefined, 'loop', null, ()=>{ if(onFail) onFail(); }); };
+    const start=(srcUrl, attr, onFail)=>{ spawnProp(srcUrl, [p.x, 0, p.z, 0, p.yaw, 0, 1], (obj)=>{ if(obj){ if(attr) obj.userData.attribution=attr; _fitPropToSize(obj, p.size); _hugWall(obj, p.nx, p.nz, room); if(typeof renderModelCredits==='function') renderModelCredits(); } }, undefined, 'loop', null, ()=>{ if(onFail) onFail(); }); };
     const ppFor=()=>{ if(!ppOk) return; ppSearch(p.term, (models)=>{ const m=(models||[]).find(x=>x&&x.glb); if(m) start(m.glb, m.attribution); }, ()=>{}); };
     if(sfOk) sfSearch(p.term, (res)=>{ const m=(res||[]).find(x=>x&&x.uid); if(m) start('sketchfab:'+m.uid, m.attribution, ppFor); else ppFor(); }, ()=>ppFor());   // prefer Sketchfab; fall back to Poly Pizza on a miss or a failed download
     else ppFor();
@@ -9763,7 +9779,7 @@ function generateOffice(opts){
     const n=isFloor(r-1,c), s2=isFloor(r+1,c), e=isFloor(r,c+1), w=isFloor(r,c-1);
     if((n?1:0)+(s2?1:0)+(e?1:0)+(w?1:0)>=3) coverSpots.push([x,z]);   // roomy = 3+ open neighbours -> not a 1-wide hallway
     const zone=_sceneCellZone(n,s2,e,w);
-    if(zone!=='corridor'){ const ox=(e?1:0)-(w?1:0), oz=(s2?1:0)-(n?1:0); const spot={ x:+x.toFixed(2), z:+z.toFixed(2), yaw:((ox||oz)?Math.atan2(ox,oz):0) };
+    if(zone!=='corridor'){ const ox=(e?1:0)-(w?1:0), oz=(s2?1:0)-(n?1:0); const spot={ x:+x.toFixed(2), z:+z.toFixed(2), yaw:((ox||oz)?Math.atan2(ox,oz):0), nx:-ox, nz:-oz };   // nx,nz = toward the wall (opposite the open side) -> used to hug the wall
       if(zone==='center') zonePools.center.push(spot); else if(zone==='edge') zonePools.wall.push(spot); else zonePools.corner.push(spot); }
   }
   if(opts.cover!==false){ _genShuffle(rnd, coverSpots); _genScatterCover(rnd, coverSpots, gndAt, 0.22); }
@@ -9777,7 +9793,7 @@ function generateOffice(opts){
   const sstep=Math.max(1, Math.floor(rooms.length/4));
   for(let i=0, n=0; i<rooms.length && n<5; i+=sstep, n++){ const [r,c]=rooms[i]; if(typeof buildSpawnMarker==='function') buildSpawnMarker({ mode:'hunt', t:[cx(c), cz(r)], face:0 }); }
   if(opts.tex!==false) _genApplyTextures(rnd, floorProp, wallProps, 4, span, spec.floor, spec.wall);   // build 567: description-driven textures (falls back to random when no theme matched)
-  if(spec.cats.length){ _genShuffle(rnd, zonePools.wall); _genShuffle(rnd, zonePools.corner); _genShuffle(rnd, zonePools.center); _furnishExecute(_planFurnish(spec.cats, zonePools, rnd)); }   // build 567: place curated, sized props from the description
+  if(spec.cats.length){ _genShuffle(rnd, zonePools.wall); _genShuffle(rnd, zonePools.corner); _genShuffle(rnd, zonePools.center); _furnishExecute(_planFurnish(spec.cats, zonePools, rnd), cell); }   // build 567/569: place curated props, hugged to walls
   if(gameCfg && gameCfg.spawnRegion) gameCfg.spawnRegion.on=false;
   NAV.built=false;
   if(typeof refreshSpawnRegionMarker==='function') refreshSpawnRegionMarker();
@@ -13364,7 +13380,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 568 · 2026-06-19';
+const BUILD_VERSION = 'build 569 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
