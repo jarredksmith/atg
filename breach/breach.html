@@ -9614,20 +9614,23 @@ function _planFurnish(cats, pools, rnd, cap){
   }
   return out;
 }
-// Async glue (not unit-tested — network): for each planned placement, search Poly Pizza, drop the first usable
-// result in at its planned spot, fit to the category's real-world size, ground it, credit it. Gentle stagger.
+// Async glue (not unit-tested — network): for each planned placement, search for a model, drop the first usable
+// result in at its planned spot, fit to the category's real-world size, ground it, credit it. Prefers Sketchfab
+// (a far deeper catalog) when a token is present, and falls back to Poly Pizza per placement on a miss/error.
 function _furnishExecute(placements){
   if(!placements || !placements.length) return;
-  if(typeof ppSearch!=='function' || (typeof ppGetKey==='function' && !ppGetKey())){ if(typeof toast==='function') toast('Add a Poly Pizza API key (Models tab) to furnish from a description'); return; }
+  const sfOk = (typeof sfSearch==='function' && typeof sfGetToken==='function' && !!sfGetToken());
+  const ppOk = (typeof ppSearch==='function' && (typeof ppGetKey!=='function' || !!ppGetKey()));
+  if(!sfOk && !ppOk){ if(typeof toast==='function') toast('Add a Sketchfab or Poly Pizza key (Models tab) to furnish from a description'); return; }
   let i=0;
   const next=()=>{
     if(i>=placements.length) return;
     const p=placements[i++];
-    ppSearch(p.term, (models)=>{
-      const m = (models||[]).find(x=>x && x.glb);
-      if(m) spawnProp(m.glb, [p.x, 0, p.z, 0, p.yaw, 0, 1], (obj)=>{ if(!obj) return; if(m.attribution) obj.userData.attribution=m.attribution; _fitPropToSize(obj, p.size); if(typeof renderModelCredits==='function') renderModelCredits(); }, undefined, 'loop', null, ()=>{});
-      setTimeout(next, 120);
-    }, ()=>{ setTimeout(next, 120); });
+    const start=(srcUrl, attr, onFail)=>{ spawnProp(srcUrl, [p.x, 0, p.z, 0, p.yaw, 0, 1], (obj)=>{ if(obj){ if(attr) obj.userData.attribution=attr; _fitPropToSize(obj, p.size); if(typeof renderModelCredits==='function') renderModelCredits(); } }, undefined, 'loop', null, ()=>{ if(onFail) onFail(); }); };
+    const ppFor=()=>{ if(!ppOk) return; ppSearch(p.term, (models)=>{ const m=(models||[]).find(x=>x&&x.glb); if(m) start(m.glb, m.attribution); }, ()=>{}); };
+    if(sfOk) sfSearch(p.term, (res)=>{ const m=(res||[]).find(x=>x&&x.uid); if(m) start('sketchfab:'+m.uid, m.attribution, ppFor); else ppFor(); }, ()=>ppFor());   // prefer Sketchfab; fall back to Poly Pizza on a miss or a failed download
+    else ppFor();
+    setTimeout(next, 140);   // stagger the NEXT search; model downloads proceed in parallel (the browser caps concurrency)
   };
   next();
 }
@@ -13361,7 +13364,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 567 · 2026-06-19';
+const BUILD_VERSION = 'build 568 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
