@@ -9443,10 +9443,10 @@ function generateMaze(opts){
     if(j<C-1 && !openV[i][j] && rnd()<0.18) openV[i][j]=true;
   }
   wipeScene();   // fresh scene (clears placed props / lights / spawns; keeps world / terrain / sky / rules). pushes one undo snapshot, so Undo reverts the whole generate.
-  const baseY=(typeof surfaceTopAt==='function' && surfaceTopAt(0,0)>-Infinity)?surfaceTopAt(0,0):((typeof terrainHeightAt==='function')?terrainHeightAt(0,0):0);
+  const gndAt=(x,z)=> (typeof terrainHeightAt==='function'?terrainHeightAt(x,z):0);   // build 559: sit each wall on the floor at its OWN column (the surface the player spawns on). The old single surfaceTopAt(0,0) sample hovered the maze when origin had overhead / leftover geometry or the ground wasn't flat.
   const cx=(j)=> -half+(j+0.5)*cell, cz=(i)=> -half+(i+0.5)*cell;   // cell-center world X / Z
-  const hwall=(x,z)=> spawnProp('box', [x, baseY+wallH/2, z, 0,0,0, cell+th, wallH, th]);   // wall running along X
-  const vwall=(x,z)=> spawnProp('box', [x, baseY+wallH/2, z, 0,0,0, th, wallH, cell+th]);   // wall running along Z
+  const hwall=(x,z)=> spawnProp('box', [x, gndAt(x,z)+wallH/2, z, 0,0,0, cell+th, wallH, th]);   // wall running along X
+  const vwall=(x,z)=> spawnProp('box', [x, gndAt(x,z)+wallH/2, z, 0,0,0, th, wallH, cell+th]);   // wall running along Z
   for(let j=0;j<C;j++){ hwall(cx(j), -half); hwall(cx(j), half); }   // outer N/S boundary
   for(let i=0;i<C;i++){ vwall(-half, cz(i)); vwall(half, cz(i)); }   // outer W/E boundary
   for(let i=0;i<C;i++) for(let j=0;j<C;j++){
@@ -9456,9 +9456,9 @@ function generateMaze(opts){
   // budgeted warm point lights through the maze (engine caps the active set at 16; nearest-N culling handles any extra)
   const step=Math.max(2, Math.round(C/4)); let placed=0;
   for(let i=1;i<C && placed<14;i+=step) for(let j=1;j<C && placed<14;j+=step){
-    if(typeof buildLight==='function'){ buildLight({ type:'point', color:0xffdca8, intensity:9, distance:cell*2.4, t:[cx(j), baseY+wallH*0.78, cz(i)] }); placed++; }
+    if(typeof buildLight==='function'){ buildLight({ type:'point', color:0xffdca8, intensity:9, distance:cell*2.4, t:[cx(j), gndAt(cx(j),cz(i))+wallH*0.78, cz(i)] }); placed++; }
   }
-  if(typeof buildLight==='function') buildLight({ type:'point', color:0xbfe0ff, intensity:6, distance:span*0.8, t:[0, baseY+wallH*1.6, 0] });   // cool key light over center
+  if(typeof buildLight==='function') buildLight({ type:'point', color:0xbfe0ff, intensity:6, distance:span*0.8, t:[0, gndAt(0,0)+wallH*1.6, 0] });   // cool key light over center
   // player start in a corner cell, facing the maze
   playerSpawn.x=+cx(0).toFixed(2); playerSpawn.z=+cz(0).toFixed(2); playerSpawn.y=0; playerSpawn.yaw=Math.atan2(-cx(0), -cz(0));
   if(typeof refreshPlayerSpawnMarker==='function') refreshPlayerSpawnMarker();
@@ -9506,16 +9506,16 @@ function generateOffice(opts){
   split(0,0,G,G, 5);
   for(let i=0;i<G;i++){ wall[0][i]=wall[G-1][i]=wall[i][0]=wall[i][G-1]=true; }   // force the solid shell
   wipeScene();
-  const baseY=(typeof surfaceTopAt==='function' && surfaceTopAt(0,0)>-Infinity)?surfaceTopAt(0,0):((typeof terrainHeightAt==='function')?terrainHeightAt(0,0):0);
+  const gndAt=(x,z)=> (typeof terrainHeightAt==='function'?terrainHeightAt(x,z):0);   // build 559: sit each wall on the floor at its own column (matches the player's spawn surface) instead of one surfaceTopAt(0,0) sample that could hover the complex
   const cx=(c)=> -half+(c+0.5)*cell, cz=(r)=> -half+(r+0.5)*cell;
   // emit walls, merging contiguous cells into longer boxes (fewer props): horizontal runs first, then vertical leftovers
   const used=[]; for(let i=0;i<G;i++) used.push(new Array(G).fill(false));
-  for(let r=0;r<G;r++){ let c=0; while(c<G){ if(wall[r][c] && !used[r][c]){ let k=c; while(k<G && wall[r][k] && !used[r][k]) k++; if(k-c>=2){ for(let x=c;x<k;x++) used[r][x]=true; const x0=cx(c)-cell/2, x1=cx(k-1)+cell/2; spawnProp('box', [(x0+x1)/2, baseY+wallH/2, cz(r), 0,0,0, (x1-x0), wallH, cell]); c=k; } else c++; } else c++; } }
-  for(let c=0;c<G;c++){ let r=0; while(r<G){ if(wall[r][c] && !used[r][c]){ let k=r; while(k<G && wall[k][c] && !used[k][c]) k++; for(let y=r;y<k;y++) used[y][c]=true; const z0=cz(r)-cell/2, z1=cz(k-1)+cell/2; spawnProp('box', [cx(c), baseY+wallH/2, (z0+z1)/2, 0,0,0, cell, wallH, (z1-z0)]); r=k; } else r++; } }
+  for(let r=0;r<G;r++){ let c=0; while(c<G){ if(wall[r][c] && !used[r][c]){ let k=c; while(k<G && wall[r][k] && !used[r][k]) k++; if(k-c>=2){ for(let x=c;x<k;x++) used[r][x]=true; const x0=cx(c)-cell/2, x1=cx(k-1)+cell/2, mx=(x0+x1)/2; spawnProp('box', [mx, gndAt(mx,cz(r))+wallH/2, cz(r), 0,0,0, (x1-x0), wallH, cell]); c=k; } else c++; } else c++; } }
+  for(let c=0;c<G;c++){ let r=0; while(r<G){ if(wall[r][c] && !used[r][c]){ let k=r; while(k<G && wall[k][c] && !used[k][c]) k++; for(let y=r;y<k;y++) used[y][c]=true; const z0=cz(r)-cell/2, z1=cz(k-1)+cell/2, mz=(z0+z1)/2; spawnProp('box', [cx(c), gndAt(cx(c),mz)+wallH/2, mz, 0,0,0, cell, wallH, (z1-z0)]); r=k; } else r++; } }
   // one cool overhead light per room (office fluorescent feel), budgeted under the active-light cap
   let placed=0; const lstep=Math.max(1, Math.ceil(rooms.length/13));
-  for(let i=0;i<rooms.length && placed<14;i+=lstep){ const [r,c]=rooms[i]; if(typeof buildLight==='function'){ buildLight({ type:'point', color:0xeaf2ff, intensity:7, distance:cell*5, t:[cx(c), baseY+wallH*0.82, cz(r)] }); placed++; } }
-  if(typeof buildLight==='function') buildLight({ type:'point', color:0xfff0d8, intensity:5, distance:span*0.7, t:[0, baseY+wallH*1.7, 0] });   // soft global fill
+  for(let i=0;i<rooms.length && placed<14;i+=lstep){ const [r,c]=rooms[i]; if(typeof buildLight==='function'){ buildLight({ type:'point', color:0xeaf2ff, intensity:7, distance:cell*5, t:[cx(c), gndAt(cx(c),cz(r))+wallH*0.82, cz(r)] }); placed++; } }
+  if(typeof buildLight==='function') buildLight({ type:'point', color:0xfff0d8, intensity:5, distance:span*0.7, t:[0, gndAt(0,0)+wallH*1.7, 0] });   // soft global fill
   // player start in the first room; a few enemy spawns spread across rooms (wave / co-op support)
   if(rooms.length){ const [r,c]=rooms[0]; playerSpawn.x=+cx(c).toFixed(2); playerSpawn.z=+cz(r).toFixed(2); playerSpawn.y=0; playerSpawn.yaw=Math.atan2(-cx(c), -cz(r)); if(typeof refreshPlayerSpawnMarker==='function') refreshPlayerSpawnMarker(); }
   const sstep=Math.max(1, Math.floor(rooms.length/4));
@@ -13094,7 +13094,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 558 · 2026-06-19';
+const BUILD_VERSION = 'build 559 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
