@@ -9424,10 +9424,10 @@ function _genScatterCover(rnd, pool, gndAt, density){
     const s=pool.pop(); if(!s) break;
     const jx=s[0]+(rnd()-0.5)*2.2, jz=s[1]+(rnd()-0.5)*2.2;
     if(typeof clearAt==='function' && !clearAt(jx, jz, gndAt(jx,jz))) continue;   // open spot only (also dodges already-placed cover)
-    const t=rnd(), ry=rnd()*Math.PI, gy=gndAt(jx,jz);
-    if(t<0.45){ const w=1.6+rnd()*1.4, h=1.6+rnd()*1.2; spawnProp('box', [jx, gy+h/2, jz, 0,ry,0, w, h, w]); }                 // crate
-    else if(t<0.8){ const w=2.2+rnd()*1.8, h=1.0+rnd()*0.4, d=0.8+rnd()*0.5; spawnProp('box', [jx, gy+h/2, jz, 0,ry,0, w, h, d]); }   // low shoot-over cover
-    else { const w=0.8+rnd()*0.6, h=2.4+rnd()*1.4; spawnProp('box', [jx, gy+h/2, jz, 0,ry,0, w, h, w]); }                     // pillar
+    const t=rnd(), ry=rnd()*Math.PI;   // t[1]=0: box origin is its base, finalizeProp lifts it onto the terrain
+    if(t<0.45){ const w=1.6+rnd()*1.4, h=1.6+rnd()*1.2; spawnProp('box', [jx, 0, jz, 0,ry,0, w, h, w]); }                 // crate
+    else if(t<0.8){ const w=2.2+rnd()*1.8, h=1.0+rnd()*0.4, d=0.8+rnd()*0.5; spawnProp('box', [jx, 0, jz, 0,ry,0, w, h, d]); }   // low shoot-over cover
+    else { const w=0.8+rnd()*0.6, h=2.4+rnd()*1.4; spawnProp('box', [jx, 0, jz, 0,ry,0, w, h, w]); }                     // pillar
     placed++;
   }
   return placed;
@@ -9481,10 +9481,10 @@ function generateMaze(opts){
     if(j<C-1 && !openV[i][j] && rnd()<0.18) openV[i][j]=true;
   }
   wipeScene();   // fresh scene (clears placed props / lights / spawns; keeps world / terrain / sky / rules). pushes one undo snapshot, so Undo reverts the whole generate.
-  const gndAt=(x,z)=> (typeof terrainHeightAt==='function'?terrainHeightAt(x,z):0);   // build 559: sit each wall on the floor at its OWN column (the surface the player spawns on). The old single surfaceTopAt(0,0) sample hovered the maze when origin had overhead / leftover geometry or the ground wasn't flat.
+  const gndAt=(x,z)=> (typeof terrainHeightAt==='function'?terrainHeightAt(x,z):0);   // used for LIGHT heights (lights are placed at absolute world Y). Walls/cover pass t[1]=0 — the box origin is its base and finalizeProp lifts it onto the terrain (passing a height here would double-count it; +wallH/2 was the build-557/559 hover).
   const cx=(j)=> -half+(j+0.5)*cell, cz=(i)=> -half+(i+0.5)*cell;   // cell-center world X / Z
-  const hwall=(x,z)=> spawnProp('box', [x, gndAt(x,z)+wallH/2, z, 0,0,0, cell+th, wallH, th]);   // wall running along X
-  const vwall=(x,z)=> spawnProp('box', [x, gndAt(x,z)+wallH/2, z, 0,0,0, th, wallH, cell+th]);   // wall running along Z
+  const hwall=(x,z)=> spawnProp('box', [x, 0, z, 0,0,0, cell+th, wallH, th]);   // wall running along X
+  const vwall=(x,z)=> spawnProp('box', [x, 0, z, 0,0,0, th, wallH, cell+th]);   // wall running along Z
   for(let j=0;j<C;j++){ hwall(cx(j), -half); hwall(cx(j), half); }   // outer N/S boundary
   for(let i=0;i<C;i++){ vwall(-half, cz(i)); vwall(half, cz(i)); }   // outer W/E boundary
   for(let i=0;i<C;i++) for(let j=0;j<C;j++){
@@ -9549,12 +9549,12 @@ function generateOffice(opts){
   split(0,0,G,G, 5);
   for(let i=0;i<G;i++){ wall[0][i]=wall[G-1][i]=wall[i][0]=wall[i][G-1]=true; }   // force the solid shell
   wipeScene();
-  const gndAt=(x,z)=> (typeof terrainHeightAt==='function'?terrainHeightAt(x,z):0);   // build 559: sit each wall on the floor at its own column (matches the player's spawn surface) instead of one surfaceTopAt(0,0) sample that could hover the complex
+  const gndAt=(x,z)=> (typeof terrainHeightAt==='function'?terrainHeightAt(x,z):0);   // for LIGHT heights only; walls/cover pass t[1]=0 and finalizeProp lifts the box base onto the terrain
   const cx=(c)=> -half+(c+0.5)*cell, cz=(r)=> -half+(r+0.5)*cell;
   // emit walls, merging contiguous cells into longer boxes (fewer props): horizontal runs first, then vertical leftovers
   const used=[]; for(let i=0;i<G;i++) used.push(new Array(G).fill(false));
-  for(let r=0;r<G;r++){ let c=0; while(c<G){ if(wall[r][c] && !used[r][c]){ let k=c; while(k<G && wall[r][k] && !used[r][k]) k++; if(k-c>=2){ for(let x=c;x<k;x++) used[r][x]=true; const x0=cx(c)-cell/2, x1=cx(k-1)+cell/2, mx=(x0+x1)/2; spawnProp('box', [mx, gndAt(mx,cz(r))+wallH/2, cz(r), 0,0,0, (x1-x0), wallH, cell]); c=k; } else c++; } else c++; } }
-  for(let c=0;c<G;c++){ let r=0; while(r<G){ if(wall[r][c] && !used[r][c]){ let k=r; while(k<G && wall[k][c] && !used[k][c]) k++; for(let y=r;y<k;y++) used[y][c]=true; const z0=cz(r)-cell/2, z1=cz(k-1)+cell/2, mz=(z0+z1)/2; spawnProp('box', [cx(c), gndAt(cx(c),mz)+wallH/2, mz, 0,0,0, cell, wallH, (z1-z0)]); r=k; } else r++; } }
+  for(let r=0;r<G;r++){ let c=0; while(c<G){ if(wall[r][c] && !used[r][c]){ let k=c; while(k<G && wall[r][k] && !used[r][k]) k++; if(k-c>=2){ for(let x=c;x<k;x++) used[r][x]=true; const x0=cx(c)-cell/2, x1=cx(k-1)+cell/2, mx=(x0+x1)/2; spawnProp('box', [mx, 0, cz(r), 0,0,0, (x1-x0), wallH, cell]); c=k; } else c++; } else c++; } }
+  for(let c=0;c<G;c++){ let r=0; while(r<G){ if(wall[r][c] && !used[r][c]){ let k=r; while(k<G && wall[k][c] && !used[k][c]) k++; for(let y=r;y<k;y++) used[y][c]=true; const z0=cz(r)-cell/2, z1=cz(k-1)+cell/2, mz=(z0+z1)/2; spawnProp('box', [cx(c), 0, mz, 0,0,0, cell, wallH, (z1-z0)]); r=k; } else r++; } }
   // build 560: scatter cover (only in "roomy" cells, never narrow corridors) + seed gameplay across all floor cells
   const isFloor=(r,c)=> (r>=0&&c>=0&&r<G&&c<G&&!wall[r][c]);
   const sx=rooms.length?cx(rooms[0][1]):0, sz=rooms.length?cz(rooms[0][0]):0;
@@ -13148,7 +13148,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 560 · 2026-06-19';
+const BUILD_VERSION = 'build 561 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
