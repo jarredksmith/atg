@@ -7479,6 +7479,11 @@ function sfGetToken(){ try{ const own=(localStorage.getItem(SF_TOKEN_KEY)||'').t
 function sfSetToken(k){ try{ localStorage.setItem(SF_TOKEN_KEY, (k||'').trim()); }catch(e){} }
 function sfEnabled(){ try{ return localStorage.getItem(SF_ON_KEY)==='1'; }catch(e){ return false; } }
 function sfSetEnabled(b){ try{ localStorage.setItem(SF_ON_KEY, b?'1':'0'); }catch(e){} }
+// build 571: optional Anthropic key (editor-only) for the AI scene builder. Browser->API direct call uses the
+// documented 'anthropic-dangerous-direct-browser-access' header. Stored like the other source keys.
+const AI_KEY_LS='breach_anthropic_key'; const AI_MODEL='claude-sonnet-4-6';
+function aiGetKey(){ try{ return (localStorage.getItem(AI_KEY_LS)||'').trim(); }catch(e){ return ''; } }
+function aiSetKey(k){ try{ localStorage.setItem(AI_KEY_LS, (k||'').trim()); }catch(e){} }
 function sfThumb(m){ try{ const imgs=(m.thumbnails&&m.thumbnails.images)||[]; const s=imgs.filter(i=>i.width<=320).sort((a,b)=>b.width-a.width)[0]||imgs[0]; return s?s.url:''; }catch(e){ return ''; } }
 function sfMap(m){ return { uid:m.uid, title:m.name||'Untitled', thumb:sfThumb(m), animated:!!(m.animationCount), attribution:(m.name||'Model')+(m.user&&m.user.username?(' by '+m.user.username):'')+(m.license&&m.license.label?(' ['+m.license.label+']'):'')+' \u2014 via Sketchfab' }; }
 function sfFetchPage(url, cb, errcb){   // cb(results, nextPageUrl|null)
@@ -9688,6 +9693,59 @@ function _furnishExecute(placements, room){
   };
   next();
 }
+// ===== build 571: AI scene builder (optional, editor-only) =====
+// With an Anthropic key, Claude composes the scene per-room (a break room gets tables/vending/coffee, a reception
+// gets a desk/chairs/couch/tv, etc.) instead of sprinkling one item list everywhere. It returns a manifest that
+// normalises into the SAME item shape the rule parser produces, so the planner + executor are reused unchanged.
+// _aiNormalizePlan is pure (unit-tested); the fetch is thin glue with the rule parser as the no-key fallback.
+function _aiNormalizePlan(obj, numRooms){
+  const ZONES={ wall:1, corner:1, center:1, any:1 };
+  let rooms = (obj && Array.isArray(obj.rooms)) ? obj.rooms : (Array.isArray(obj) ? obj : []);
+  const cap = numRooms || rooms.length;
+  const out=[];
+  for(let i=0;i<rooms.length && out.length<cap;i++){
+    const r=rooms[i]||{}; const list=Array.isArray(r.items)?r.items:[]; const items=[];
+    for(const it of list){
+      if(!it) continue;
+      const term=String(it.term||it.name||'').trim().replace(/\s+/g,' ').slice(0,40); if(!term) continue;
+      const size=Math.max(0.2, Math.min(6, (+it.size||1.2)));
+      const zone=ZONES[String(it.zone||'').toLowerCase()] ? String(it.zone).toLowerCase() : 'any';
+      const n=Math.max(1, Math.min(8, Math.round(+it.count||1)));
+      items.push({ term, q2:term.split(' ').pop(), size, zone, n });
+      if(items.length>=8) break;
+    }
+    out.push({ role:String(r.role||'room').slice(0,40), items });
+  }
+  return out;
+}
+function _aiPlanScene(desc, roomInfos, cb, errcb){
+  const key=aiGetKey(); if(!key){ errcb && errcb(new Error('no key')); return; }
+  const prompt =
+    'You are furnishing a procedurally generated '+(desc?('"'+desc.replace(/"/g,'')+'"'):'building')+' for a 3D game level editor.\n'
+    + 'There are '+roomInfos.length+' rooms with approximate floor sizes:\n'
+    + roomInfos.map((r,i)=>(i+1)+'. about '+r.w+'m by '+r.d+'m').join('\n') + '\n\n'
+    + 'Give each room a role that fits the description, then furnish it. Each item needs: '
+    + '"term" (a short concrete search query for a free 3D model library, e.g. "vending machine", "office chair", "reception desk"), '
+    + '"size" (real-world length of its LONGEST side in metres), "zone" (one of "wall","corner","center","any"), and "count" (1-6). '
+    + 'Use 3 to 6 items per room and keep them plausible for the room size. '
+    + 'Return ONLY minified JSON (no prose, no code fences) shaped exactly like: '
+    + '{"rooms":[{"role":"reception","items":[{"term":"reception desk","size":2.2,"zone":"wall","count":1}]}]}';
+  fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST',
+    headers:{ 'content-type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
+    body: JSON.stringify({ model:AI_MODEL, max_tokens:1500, messages:[{ role:'user', content:prompt }] })
+  })
+  .then(r=>{ if(!r.ok) return r.text().then(t=>{ throw new Error('HTTP '+r.status+(r.status===401?' — check your Anthropic key':'')); }); return r.json(); })
+  .then(d=>{
+    const txt=(d && Array.isArray(d.content)) ? d.content.filter(b=>b&&b.type==='text').map(b=>b.text).join('') : '';
+    const clean=txt.replace(/```json|```/g,'').trim();
+    const start=clean.indexOf('{'), end=clean.lastIndexOf('}');
+    if(start<0||end<0) throw new Error('the model did not return JSON');
+    const parsed=JSON.parse(clean.slice(start, end+1));
+    cb(_aiNormalizePlan(parsed, roomInfos.length));
+  })
+  .catch(err=>{ errcb && errcb(err); });
+}
 function generateMaze(opts){
   opts=opts||{};
   const C=Math.max(4, Math.min(16, (opts.cells|0) || 9));
@@ -9779,7 +9837,7 @@ function generateOffice(opts){
   const wallH=Math.max(3, opts.wallH||5);
   const span=G*cell, half=span/2;
   const wall=[]; for(let i=0;i<G;i++) wall.push(new Array(G).fill(true));   // true = solid; carve rooms + corridors to false
-  const rooms=[];
+  const rooms=[], roomRects=[];
   const inB=(r,c)=> (r>0 && c>0 && r<G-1 && c<G-1);   // keep a solid outer shell
   const carveRect=(r0,c0,r1,c1)=>{ for(let r=r0;r<r1;r++) for(let c=c0;c<c1;c++){ if(inB(r,c)) wall[r][c]=false; } };
   const carveCorr=(r1,c1,r2,c2)=>{ let r=r1,c=c1; while(c!==c2){ if(inB(r,c)) wall[r][c]=false; c+=(c2>c?1:-1); } while(r!==r2){ if(inB(r,c)) wall[r][c]=false; r+=(r2>r?1:-1); } if(inB(r,c)) wall[r][c]=false; };   // L-shaped, 1 cell wide
@@ -9788,7 +9846,7 @@ function generateOffice(opts){
     const h=r1-r0, w=c1-c0, canV=(w>=2*MINSZ), canH=(h>=2*MINSZ);
     if(depth<=0 || (!canV && !canH)){                 // leaf -> a room filling the region minus a 1-cell wall margin
       carveRect(r0+1, c0+1, r1-1, c1-1);
-      const ctr=[(r0+r1)>>1, (c0+c1)>>1]; rooms.push(ctr); return ctr;
+      const ctr=[(r0+r1)>>1, (c0+c1)>>1]; rooms.push(ctr); roomRects.push([r0+1, c0+1, r1-1, c1-1]); return ctr;
     }
     const doV = (canV && canH) ? (w>=h) : canV;
     let aC, bC;
@@ -9820,6 +9878,19 @@ function generateOffice(opts){
     if(zone!=='corridor'){ const ox=(e?1:0)-(w?1:0), oz=(s2?1:0)-(n?1:0); const spot={ x:+x.toFixed(2), z:+z.toFixed(2), yaw:((ox||oz)?Math.atan2(ox,oz):0), nx:-ox, nz:-oz };   // nx,nz = toward the wall (opposite the open side) -> used to hug the wall
       if(zone==='center') zonePools.center.push(spot); else if(zone==='edge') zonePools.wall.push(spot); else zonePools.corner.push(spot); }
   }
+  // build 571: per-room zone pools (same classification, scoped to each room's carved rect) so the AI scene
+  // builder can furnish each room by its assigned role rather than from one global pool.
+  const roomPools=[];
+  for(const rc of roomRects){ const rp={ wall:[], corner:[], center:[] };
+    for(let r=rc[0];r<rc[2];r++) for(let c=rc[1];c<rc[3];c++){ if(!isFloor(r,c)) continue; const x=cx(c), z=cz(r);
+      if((x-sx)*(x-sx)+(z-sz)*(z-sz) < (cell*2.2)*(cell*2.2)) continue;
+      const n=isFloor(r-1,c), s2=isFloor(r+1,c), e=isFloor(r,c+1), w=isFloor(r,c-1);
+      const zone=_sceneCellZone(n,s2,e,w); if(zone==='corridor') continue;
+      const ox=(e?1:0)-(w?1:0), oz=(s2?1:0)-(n?1:0); const spot={ x:+x.toFixed(2), z:+z.toFixed(2), yaw:((ox||oz)?Math.atan2(ox,oz):0), nx:-ox, nz:-oz };
+      if(zone==='center') rp.center.push(spot); else if(zone==='edge') rp.wall.push(spot); else rp.corner.push(spot);
+    }
+    roomPools.push(rp);
+  }
   if(opts.cover!==false){ _genShuffle(rnd, coverSpots); _genScatterCover(rnd, coverSpots, gndAt, 0.22); }
   if(opts.loot!==false){ _genPlaceExtract(floorSpots, sx, sz); const pk=floorSpots.slice(); _genShuffle(rnd, pk); _genSeedPickups(rnd, pk, gndAt); }
   // one cool overhead light per room (office fluorescent feel), budgeted under the active-light cap
@@ -9831,7 +9902,19 @@ function generateOffice(opts){
   const sstep=Math.max(1, Math.floor(rooms.length/4));
   for(let i=0, n=0; i<rooms.length && n<5; i+=sstep, n++){ const [r,c]=rooms[i]; if(typeof buildSpawnMarker==='function') buildSpawnMarker({ mode:'hunt', t:[cx(c), cz(r)], face:0 }); }
   if(opts.tex!==false) _genApplyTextures(rnd, floorProp, wallProps, 4, span, spec.floor, spec.wall);   // build 567: description-driven textures (falls back to random when no theme matched)
-  if(spec.items.length){ _genShuffle(rnd, zonePools.wall); _genShuffle(rnd, zonePools.corner); _genShuffle(rnd, zonePools.center); _furnishExecute(_planFurnish(spec.items, zonePools, rnd), cell); }   // build 567/569/570: place curated props (open-vocabulary), hugged to walls
+  // build 567/569/570: deterministic keyword placement (global pool). build 571: when an Anthropic key + a
+  // description are present, Claude composes the scene PER ROOM (reception vs break room vs storage...) and we
+  // furnish each room from its own pool; any failure falls back to the keyword path so generate never stalls.
+  const _furnishDet = ()=>{ if(spec.items.length){ _genShuffle(rnd, zonePools.wall); _genShuffle(rnd, zonePools.corner); _genShuffle(rnd, zonePools.center); _furnishExecute(_planFurnish(spec.items, zonePools, rnd), cell); } };
+  if(opts.desc && typeof aiGetKey==='function' && aiGetKey() && typeof _aiPlanScene==='function'){
+    const roomInfos = roomRects.map(r=>({ w:Math.max(1,Math.round((r[3]-r[1])*cell)), d:Math.max(1,Math.round((r[2]-r[0])*cell)) }));
+    if(typeof toast==='function') toast('Composing the scene with Claude\u2026');
+    _aiPlanScene(opts.desc, roomInfos, (plan)=>{
+      let all=[];
+      for(let i=0;i<plan.length && i<roomPools.length;i++){ const rp=roomPools[i]; _genShuffle(rnd, rp.wall); _genShuffle(rnd, rp.corner); _genShuffle(rnd, rp.center); all=all.concat(_planFurnish(plan[i].items, rp, rnd, 10)); }
+      if(all.length){ if(typeof toast==='function') toast('Placing '+all.length+' props from Claude\u2019s plan\u2026'); _furnishExecute(all, cell); } else _furnishDet();
+    }, (err)=>{ if(typeof toast==='function') toast('AI scene failed ('+((err&&err.message)||'error')+') \u2014 using keyword placement'); _furnishDet(); });
+  } else { _furnishDet(); }
   if(gameCfg && gameCfg.spawnRegion) gameCfg.spawnRegion.on=false;
   NAV.built=false;
   if(typeof refreshSpawnRegionMarker==='function') refreshSpawnRegionMarker();
@@ -9860,6 +9943,18 @@ function renderGeneratePanel(){
     const dt=document.createElement('textarea'); dt.value=_genDesc; dt.placeholder='e.g. a hotel lobby with couches, plants, a reception desk'; dt.rows=2;
     dt.style.cssText='width:100%;box-sizing:border-box;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:5px 7px;font-size:12px;resize:vertical;'; dt.oninput=()=>{ _genDesc=dt.value; };
     host.appendChild(dl); host.appendChild(dt);
+    // build 571: optional Anthropic key -> Claude composes the scene per room (reception vs break room vs ...).
+    const aiHas = (typeof aiGetKey==='function' && !!aiGetKey());
+    const ar=document.createElement('div'); ar.style.cssText='display:flex;gap:6px;align-items:center;margin:6px 0 2px;';
+    const ak=document.createElement('input'); ak.type='password'; ak.placeholder=aiHas?'Anthropic key saved \u2014 paste to replace':'Anthropic API key (optional, sk-ant-...)'; ak.value='';
+    ak.style.cssText='flex:1;box-sizing:border-box;background:#0c1418;border:1px solid '+(aiHas?'var(--accent)':'#2a3a42')+';color:#cfeee2;border-radius:4px;padding:5px 7px;font-size:11px;';
+    const sv=document.createElement('button'); sv.textContent=aiHas?'Update':'Save'; sv.style.cssText='background:#16242b;border:1px solid #2a3a42;color:#9fe6cf;border-radius:4px;padding:5px 9px;font-size:11px;cursor:pointer;';
+    sv.onclick=()=>{ if(typeof aiSetKey==='function'){ aiSetKey(ak.value); renderGeneratePanel(); if(typeof toast==='function') toast(ak.value?'Anthropic key saved (this browser only)':'Anthropic key cleared'); } };
+    ar.appendChild(ak); ar.appendChild(sv); host.appendChild(ar);
+    const an=document.createElement('div'); an.className='hint'; an.style.cssText='font-size:10px;opacity:0.75;margin:0 0 2px;';
+    an.innerHTML = aiHas ? '\u2713 Rooms are composed by Claude (each room gets a role + matching furniture). Key stays in this browser; only you (the author) need it.'
+                         : 'Without a key, the description is placed by keyword. Add a key to have Claude lay out each room logically.';
+    host.appendChild(an);
   }
   // content toggles
   const mkChk=(label,get,set)=>{ const l=document.createElement('label'); l.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:11px;margin:3px 0;cursor:pointer;'; const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=get(); cb.style.accentColor='var(--accent)'; cb.onchange=()=>set(cb.checked); const s=document.createElement('span'); s.innerHTML=label; l.appendChild(cb); l.appendChild(s); host.appendChild(l); };
@@ -13418,7 +13513,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 570 · 2026-06-19';
+const BUILD_VERSION = 'build 571 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
