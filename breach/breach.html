@@ -9405,6 +9405,149 @@ function _animateFire(g, tms, dt){
 }
 function addFireZone(){ pushUndoSnapshot(); fireZones.push({ x:+player.pos.x.toFixed(2), z:+player.pos.z.toFixed(2), r:5, y:(typeof surfaceTopAt==='function'&&surfaceTopAt(player.pos.x,player.pos.z)>-Infinity?surfaceTopAt(player.pos.x,player.pos.z):(typeof terrainHeightAt==='function'?terrainHeightAt(player.pos.x,player.pos.z):0)), h:3, dps:15 }); selFireZone=fireZones.length-1; editorActive='firezones'; refreshFireZones(); if(typeof renderFireZonesPanel==='function') renderFireZonesPanel(); if(typeof updateGizmo==='function') updateGizmo(); }
 function removeFireZone(i){ pushUndoSnapshot(); fireZones.splice(i,1); if(selFireZone>=fireZones.length) selFireZone=fireZones.length-1; refreshFireZones(); if(typeof renderFireZonesPanel==='function') renderFireZonesPanel(); }
+// ---------- build 557: auto-generate maze level ----------
+// One click builds a fresh, fully-connected maze out of box props + point lights, sets a player start, and
+// scatters a few enemy spawns. It's just ordinary level data (boxes / lights / spawns), so collision, the nav
+// grid, and the multiplayer level snapshot all work on it with no extra plumbing. Multiplayer players (and
+// bots) spawn via randomSpawn(), which validates points against geometry, so they land in open corridors.
+// Seeded with a small PRNG so a given seed reproduces the same maze (each click rolls a fresh random seed).
+function _mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15, 1|a); t=t+Math.imul(t^t>>>7, 61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+let _genCells=9, _lastMazeSeed=0;
+function generateMaze(opts){
+  opts=opts||{};
+  const C=Math.max(4, Math.min(16, (opts.cells|0) || 9));
+  const seed=(opts.seed!=null)?(opts.seed>>>0):((Math.random()*0xffffffff)>>>0);
+  _lastMazeSeed=seed; const rnd=_mulberry32(seed);
+  const cell=Math.max(7, Math.min(16, opts.cell||11));     // world units per cell (corridor width)
+  const wallH=Math.max(3, opts.wallH||5), th=Math.max(0.4, opts.th||0.7);
+  const span=C*cell, half=span/2;
+  // carve a perfect maze (recursive backtracker): openH[i][j] = south wall of (i,j) open; openV[i][j] = east wall open
+  const openH=[], openV=[], vis=[];
+  for(let i=0;i<C;i++){ openH.push(new Array(C).fill(false)); openV.push(new Array(C).fill(false)); vis.push(new Array(C).fill(false)); }
+  const stack=[[0,0]]; vis[0][0]=true;
+  while(stack.length){
+    const [ci,cj]=stack[stack.length-1]; const nb=[];
+    if(ci>0   && !vis[ci-1][cj]) nb.push([ci-1,cj,'N']);
+    if(ci<C-1 && !vis[ci+1][cj]) nb.push([ci+1,cj,'S']);
+    if(cj>0   && !vis[ci][cj-1]) nb.push([ci,cj-1,'W']);
+    if(cj<C-1 && !vis[ci][cj+1]) nb.push([ci,cj+1,'E']);
+    if(!nb.length){ stack.pop(); continue; }
+    const [ni,nj,dir]=nb[(rnd()*nb.length)|0];
+    if(dir==='S') openH[ci][cj]=true; else if(dir==='N') openH[ni][nj]=true;
+    else if(dir==='E') openV[ci][cj]=true; else openV[ni][nj]=true;
+    vis[ni][nj]=true; stack.push([ni,nj]);
+  }
+  // braid: open ~18% of remaining interior walls so it's loopy (better flow for a shooter than a single path)
+  for(let i=0;i<C;i++) for(let j=0;j<C;j++){
+    if(i<C-1 && !openH[i][j] && rnd()<0.18) openH[i][j]=true;
+    if(j<C-1 && !openV[i][j] && rnd()<0.18) openV[i][j]=true;
+  }
+  wipeScene();   // fresh scene (clears placed props / lights / spawns; keeps world / terrain / sky / rules). pushes one undo snapshot, so Undo reverts the whole generate.
+  const baseY=(typeof surfaceTopAt==='function' && surfaceTopAt(0,0)>-Infinity)?surfaceTopAt(0,0):((typeof terrainHeightAt==='function')?terrainHeightAt(0,0):0);
+  const cx=(j)=> -half+(j+0.5)*cell, cz=(i)=> -half+(i+0.5)*cell;   // cell-center world X / Z
+  const hwall=(x,z)=> spawnProp('box', [x, baseY+wallH/2, z, 0,0,0, cell+th, wallH, th]);   // wall running along X
+  const vwall=(x,z)=> spawnProp('box', [x, baseY+wallH/2, z, 0,0,0, th, wallH, cell+th]);   // wall running along Z
+  for(let j=0;j<C;j++){ hwall(cx(j), -half); hwall(cx(j), half); }   // outer N/S boundary
+  for(let i=0;i<C;i++){ vwall(-half, cz(i)); vwall(half, cz(i)); }   // outer W/E boundary
+  for(let i=0;i<C;i++) for(let j=0;j<C;j++){
+    if(i<C-1 && !openH[i][j]) hwall(cx(j), -half+(i+1)*cell);   // interior south wall of (i,j)
+    if(j<C-1 && !openV[i][j]) vwall(-half+(j+1)*cell, cz(i));   // interior east wall of (i,j)
+  }
+  // budgeted warm point lights through the maze (engine caps the active set at 16; nearest-N culling handles any extra)
+  const step=Math.max(2, Math.round(C/4)); let placed=0;
+  for(let i=1;i<C && placed<14;i+=step) for(let j=1;j<C && placed<14;j+=step){
+    if(typeof buildLight==='function'){ buildLight({ type:'point', color:0xffdca8, intensity:9, distance:cell*2.4, t:[cx(j), baseY+wallH*0.78, cz(i)] }); placed++; }
+  }
+  if(typeof buildLight==='function') buildLight({ type:'point', color:0xbfe0ff, intensity:6, distance:span*0.8, t:[0, baseY+wallH*1.6, 0] });   // cool key light over center
+  // player start in a corner cell, facing the maze
+  playerSpawn.x=+cx(0).toFixed(2); playerSpawn.z=+cz(0).toFixed(2); playerSpawn.y=0; playerSpawn.yaw=Math.atan2(-cx(0), -cz(0));
+  if(typeof refreshPlayerSpawnMarker==='function') refreshPlayerSpawnMarker();
+  // a few enemy spawns spread to the far corners + center (so wave / co-op modes have spawn points on the maze)
+  for(const [i,j] of [[0,C-1],[C-1,0],[C-1,C-1],[(C/2)|0,(C/2)|0]]){ if(typeof buildSpawnMarker==='function') buildSpawnMarker({ mode:'hunt', t:[cx(j), cz(i)], face:0 }); }
+  if(gameCfg && gameCfg.spawnRegion) gameCfg.spawnRegion.on=false;   // MP players spawn across the whole maze (randomSpawn validates against walls)
+  NAV.built=false;   // rebuild the nav grid for the new layout (incremental, on next play/overlay)
+  if(typeof refreshSpawnRegionMarker==='function') refreshSpawnRegionMarker();
+  if(typeof renderEditorFields==='function') renderEditorFields();
+  if(typeof renderGeneratePanel==='function') renderGeneratePanel();
+}
+let _genType='maze';   // build 558: which auto-generate layout the panel button builds ('maze' | 'office')
+// build 558: auto-generate an OFFICE / complex. Same plumbing as the maze (box props + lights + spawns + nav),
+// but the layout is rooms-and-corridors via BSP: recursively split the floorplan, drop a room in each leaf, and
+// connect each split's two halves with an L-corridor. Connecting every split guarantees the whole place is
+// reachable; corridors punch through the thin walls between rooms, which is where the doorways come from.
+function generateOffice(opts){
+  opts=opts||{};
+  const size=Math.max(5, Math.min(14, (opts.cells|0) || 9));
+  const G=Math.max(16, Math.min(40, size*2 + 8));     // floorplan grid (finer than the maze: a room spans several cells)
+  const seed=(opts.seed!=null)?(opts.seed>>>0):((Math.random()*0xffffffff)>>>0);
+  _lastMazeSeed=seed; const rnd=_mulberry32(seed);
+  const cell=Math.max(3.5, Math.min(6, opts.cell||4.5));
+  const wallH=Math.max(3, opts.wallH||5);
+  const span=G*cell, half=span/2;
+  const wall=[]; for(let i=0;i<G;i++) wall.push(new Array(G).fill(true));   // true = solid; carve rooms + corridors to false
+  const rooms=[];
+  const inB=(r,c)=> (r>0 && c>0 && r<G-1 && c<G-1);   // keep a solid outer shell
+  const carveRect=(r0,c0,r1,c1)=>{ for(let r=r0;r<r1;r++) for(let c=c0;c<c1;c++){ if(inB(r,c)) wall[r][c]=false; } };
+  const carveCorr=(r1,c1,r2,c2)=>{ let r=r1,c=c1; while(c!==c2){ if(inB(r,c)) wall[r][c]=false; c+=(c2>c?1:-1); } while(r!==r2){ if(inB(r,c)) wall[r][c]=false; r+=(r2>r?1:-1); } if(inB(r,c)) wall[r][c]=false; };   // L-shaped, 1 cell wide
+  const MINSZ=5;
+  const split=(r0,c0,r1,c1,depth)=>{
+    const h=r1-r0, w=c1-c0, canV=(w>=2*MINSZ), canH=(h>=2*MINSZ);
+    if(depth<=0 || (!canV && !canH)){                 // leaf -> a room filling the region minus a 1-cell wall margin
+      carveRect(r0+1, c0+1, r1-1, c1-1);
+      const ctr=[(r0+r1)>>1, (c0+c1)>>1]; rooms.push(ctr); return ctr;
+    }
+    const doV = (canV && canH) ? (w>=h) : canV;
+    let aC, bC;
+    if(doV){ const sc=c0+MINSZ+((rnd()*(w-2*MINSZ+1))|0); aC=split(r0,c0,r1,sc,depth-1); bC=split(r0,sc,r1,c1,depth-1); }
+    else   { const sr=r0+MINSZ+((rnd()*(h-2*MINSZ+1))|0); aC=split(r0,c0,sr,c1,depth-1); bC=split(sr,c0,r1,c1,depth-1); }
+    carveCorr(aC[0],aC[1], bC[0],bC[1]);              // connect the two halves -> every room ends up reachable
+    return aC;
+  };
+  split(0,0,G,G, 5);
+  for(let i=0;i<G;i++){ wall[0][i]=wall[G-1][i]=wall[i][0]=wall[i][G-1]=true; }   // force the solid shell
+  wipeScene();
+  const baseY=(typeof surfaceTopAt==='function' && surfaceTopAt(0,0)>-Infinity)?surfaceTopAt(0,0):((typeof terrainHeightAt==='function')?terrainHeightAt(0,0):0);
+  const cx=(c)=> -half+(c+0.5)*cell, cz=(r)=> -half+(r+0.5)*cell;
+  // emit walls, merging contiguous cells into longer boxes (fewer props): horizontal runs first, then vertical leftovers
+  const used=[]; for(let i=0;i<G;i++) used.push(new Array(G).fill(false));
+  for(let r=0;r<G;r++){ let c=0; while(c<G){ if(wall[r][c] && !used[r][c]){ let k=c; while(k<G && wall[r][k] && !used[r][k]) k++; if(k-c>=2){ for(let x=c;x<k;x++) used[r][x]=true; const x0=cx(c)-cell/2, x1=cx(k-1)+cell/2; spawnProp('box', [(x0+x1)/2, baseY+wallH/2, cz(r), 0,0,0, (x1-x0), wallH, cell]); c=k; } else c++; } else c++; } }
+  for(let c=0;c<G;c++){ let r=0; while(r<G){ if(wall[r][c] && !used[r][c]){ let k=r; while(k<G && wall[k][c] && !used[k][c]) k++; for(let y=r;y<k;y++) used[y][c]=true; const z0=cz(r)-cell/2, z1=cz(k-1)+cell/2; spawnProp('box', [cx(c), baseY+wallH/2, (z0+z1)/2, 0,0,0, cell, wallH, (z1-z0)]); r=k; } else r++; } }
+  // one cool overhead light per room (office fluorescent feel), budgeted under the active-light cap
+  let placed=0; const lstep=Math.max(1, Math.ceil(rooms.length/13));
+  for(let i=0;i<rooms.length && placed<14;i+=lstep){ const [r,c]=rooms[i]; if(typeof buildLight==='function'){ buildLight({ type:'point', color:0xeaf2ff, intensity:7, distance:cell*5, t:[cx(c), baseY+wallH*0.82, cz(r)] }); placed++; } }
+  if(typeof buildLight==='function') buildLight({ type:'point', color:0xfff0d8, intensity:5, distance:span*0.7, t:[0, baseY+wallH*1.7, 0] });   // soft global fill
+  // player start in the first room; a few enemy spawns spread across rooms (wave / co-op support)
+  if(rooms.length){ const [r,c]=rooms[0]; playerSpawn.x=+cx(c).toFixed(2); playerSpawn.z=+cz(r).toFixed(2); playerSpawn.y=0; playerSpawn.yaw=Math.atan2(-cx(c), -cz(r)); if(typeof refreshPlayerSpawnMarker==='function') refreshPlayerSpawnMarker(); }
+  const sstep=Math.max(1, Math.floor(rooms.length/4));
+  for(let i=0, n=0; i<rooms.length && n<5; i+=sstep, n++){ const [r,c]=rooms[i]; if(typeof buildSpawnMarker==='function') buildSpawnMarker({ mode:'hunt', t:[cx(c), cz(r)], face:0 }); }
+  if(gameCfg && gameCfg.spawnRegion) gameCfg.spawnRegion.on=false;
+  NAV.built=false;
+  if(typeof refreshSpawnRegionMarker==='function') refreshSpawnRegionMarker();
+  if(typeof renderEditorFields==='function') renderEditorFields();
+  if(typeof renderGeneratePanel==='function') renderGeneratePanel();
+}
+function renderGeneratePanel(){
+  const host=(editorEl && editorEl.querySelector('#edGenerate')); if(!host) return;
+  host.innerHTML='';
+  const isMaze=(_genType!=='office');
+  const hint=document.createElement('div'); hint.className='hint'; hint.innerHTML='Replaces the scene with a fresh, connected '+(isMaze?'<b>maze</b>':'<b>office complex</b>')+' built from boxes + lights \u2014 multiplayer-ready (collision, navigation, and the lobby snapshot all work on it). <b>Clears placed props / lights / spawns</b>; Undo restores them.'; host.appendChild(hint);
+  // layout toggle
+  const seg=document.createElement('div'); seg.style.cssText='display:flex;gap:6px;margin:7px 0;';
+  const mkSeg=(label,val)=>{ const b=document.createElement('button'); b.textContent=label; const on=(_genType===val); b.style.cssText='flex:1;padding:6px;border-radius:6px;font-weight:700;cursor:pointer;border:1px solid '+(on?'var(--accent)':'#2a3a42')+';background:'+(on?'rgba(56,245,181,0.22)':'transparent')+';color:'+(on?'#eafff7':'#9fe6cf')+';'; b.onclick=()=>{ _genType=val; renderGeneratePanel(); }; return b; };
+  seg.appendChild(mkSeg('Maze','maze')); seg.appendChild(mkSeg('Office','office')); host.appendChild(seg);
+  // size
+  const row=document.createElement('label'); row.style.cssText='display:flex;align-items:center;gap:8px;color:#9fe6cf;font-size:12px;margin:6px 0;';
+  const sp=document.createElement('span'); sp.textContent='Size'; sp.style.minWidth='52px';
+  const rng=document.createElement('input'); rng.type='range'; rng.min=5; rng.max=14; rng.step=1; rng.value=_genCells; rng.style.cssText='flex:1;accent-color:var(--accent);';
+  const num=document.createElement('span'); num.style.cssText='width:64px;color:#cfeee2;font-size:12px;'; const sizeLbl=()=> isMaze?(_genCells+'\u00d7'+_genCells):'~'+(_genCells*2+8)+' wide'; num.textContent=sizeLbl();
+  rng.oninput=()=>{ _genCells=+rng.value; num.textContent=sizeLbl(); };
+  row.appendChild(sp); row.appendChild(rng); row.appendChild(num); host.appendChild(row);
+  // generate
+  const btn=document.createElement('button'); btn.textContent='\u2699 Generate '+(isMaze?'maze':'office'); btn.style.cssText='width:100%;background:var(--accent);color:#05070a;font-weight:700;border:none;padding:9px;border-radius:6px;margin:4px 0;cursor:pointer;';
+  btn.onclick=()=>{ if(isMaze) generateMaze({ cells:_genCells }); else generateOffice({ cells:_genCells }); };
+  host.appendChild(btn);
+  const seedLine=document.createElement('div'); seedLine.className='hint'; seedLine.style.cssText='font-size:10px;opacity:0.7;margin-top:4px;'; seedLine.textContent=_lastMazeSeed?('Last seed: '+_lastMazeSeed+' \u00b7 each click rolls a new one'):'Each click makes a new unique layout.'; host.appendChild(seedLine);
+}
 function renderFireZonesPanel(){
   const host = (editorEl && editorEl.querySelector('#edFireZones')); if(!host) return;
   host.innerHTML='';
@@ -12951,7 +13094,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 556 · 2026-06-19';
+const BUILD_VERSION = 'build 558 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -16284,7 +16427,7 @@ const PRIM_ICON = {
 };
 const MODE_SECTIONS = {
   build:   ['gizmo','object','material','transform','characters'],
-  scene:   ['world','audiozones','deathzones','jumppads','firezones'],
+  scene:   ['world','generate','audiozones','deathzones','jumppads','firezones'],
   enemies: ['enemies','gizmo','object','transform'],   // spawn points live here now; their picker/fields/gizmo sections come along
   rules:   ['game','pickups','loot'],
   kit:     ['object','transform','impactfx','tracerfx','crosshair'],   // 'object' carries the weapon model import + per-weapon shoot sound; impact/streak FX; music/SFX live in Scene
@@ -17299,6 +17442,7 @@ function buildEditorPanel(){
     + sec('Material', 'material', '<div id="edMaterial"></div>')
     + sec('Transform', 'transform', '<div id="edFields"></div>')
     + sec('World', 'world', '<div id="edWorld"></div>')
+    + sec('Auto-generate', 'generate', '<div id="edGenerate"></div>')
     + sec('Enemies', 'enemies', '<div id="edEnemies"></div>')
     + sec('Game / waves', 'game', '<div id="edGame"></div>')
     + sec('Pickups', 'pickups', '<div id="edPickups"></div>')
@@ -17387,6 +17531,7 @@ function buildEditorPanel(){
   if(typeof renderCampaignPanel==='function') renderCampaignPanel();
   if(typeof renderAudioZonesPanel==='function') renderAudioZonesPanel();
   if(typeof renderDeathZonesPanel==='function') renderDeathZonesPanel();
+  if(typeof renderGeneratePanel==='function') renderGeneratePanel();
   if(typeof renderJumpPadsPanel==='function') renderJumpPadsPanel();
   if(typeof renderFireZonesPanel==='function') renderFireZonesPanel();
   if(typeof renderCharRosterPanel==='function') renderCharRosterPanel();
