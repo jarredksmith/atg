@@ -13225,7 +13225,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 565 · 2026-06-19';
+const BUILD_VERSION = 'build 566 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -16660,6 +16660,32 @@ function showPropLoader(label){
   _propLoaderEl.style.display = 'flex';
 }
 function hidePropLoader(){ if(_propLoaderEl) _propLoaderEl.style.display = 'none'; }
+// build 566: searched models import at the artist's native scale, which varies wildly (a couch might arrive
+// 0.1 or 50 units). On add we measure the model's bounding box and uniformly scale it so its largest dimension
+// hits a sane default, then sit its base on the terrain (origins vary too). Uniform scale never distorts; the
+// editor scale fields stay editable, so this is a good starting point, not a lock. Future scene-gen passes a
+// per-category target via meta.fitTarget.
+const PROP_FIT_TARGET = 2;   // world units for the largest dimension of a freshly added model
+let _fitOnAdd = true; try{ const _f=localStorage.getItem('breach_fit_on_add'); if(_f!=null) _fitOnAdd = (_f!=='0'); }catch(e){}
+function _fitPropToSize(obj, target){
+  if(!obj) return false;
+  target = (target>0) ? target : PROP_FIT_TARGET;
+  obj.updateMatrixWorld(true);
+  let box = new THREE.Box3().setFromObject(obj);
+  if(box.isEmpty()) return false;
+  const sz = new THREE.Vector3(); box.getSize(sz);
+  const largest = Math.max(sz.x, sz.y, sz.z);
+  if(!(largest > 1e-4) || !isFinite(largest)) return false;   // nothing measurable -> leave as-is
+  obj.scale.multiplyScalar(target / largest);                 // uniform -> never distorts the model
+  obj.updateMatrixWorld(true);
+  box = new THREE.Box3().setFromObject(obj);                  // re-measure at the new scale
+  const gnd = (typeof terrainHeightAt==='function' ? terrainHeightAt(obj.position.x, obj.position.z) : 0);
+  obj.position.y += (gnd - box.min.y);                        // drop the base onto the ground (handles any origin)
+  obj.updateMatrixWorld(true);
+  obj.userData.footR = _propFootR(obj);
+  if(typeof refreshPropCollider==='function') refreshPropCollider(obj);
+  return true;
+}
 function addSceneProp(src, meta){
   meta = meta || {};
   pushUndoSnapshot();
@@ -16675,6 +16701,7 @@ function addSceneProp(src, meta){
   if(async){ showPropLoader(meta.name ? ('Loading \u201c'+meta.name+'\u201d\u2026') : 'Loading model\u2026'); _shownAt=performance.now(); _to=setTimeout(_finish, 60000); }   // safety: never stuck if a callback is missed
   spawnProp(src, [px, 0, pz, 0, 0, 0, 1], (obj)=>{
     if(meta.attribution) obj.userData.attribution = meta.attribution;   // credit (CC-BY models)
+    if(_fitOnAdd && meta.fit!==false && typeof isModelSrc==='function' && isModelSrc(src)) _fitPropToSize(obj, meta.fitTarget);   // build 566: normalize the model's scale + sit it on the ground
     editorActive='props'; editorTargets.props.idx = propModels.indexOf(obj); selProps=[obj]; renderEditorFields();
     if(meta.onAdded) meta.onAdded(obj);
     _finish();
@@ -18807,6 +18834,11 @@ function renderEditorFields(){
       pair('Animated models, when added:', newPropAnimMode,
         ()=>{ newPropAnimMode='loop'; renderEditorFields(); },
         ()=>{ newPropAnimMode='trigger'; renderEditorFields(); });
+      const fitL=document.createElement('label'); fitL.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:11px;margin:7px 0 2px;cursor:pointer;';
+      const fitCb=document.createElement('input'); fitCb.type='checkbox'; fitCb.checked=_fitOnAdd; fitCb.style.accentColor='var(--accent)';
+      fitCb.onchange=()=>{ _fitOnAdd=fitCb.checked; try{ localStorage.setItem('breach_fit_on_add', _fitOnAdd?'1':'0'); }catch(e){} };
+      const fitS=document.createElement('span'); fitS.innerHTML='<b>Fit to size on add</b> \u2014 scale new models to ~'+PROP_FIT_TARGET+'m &amp; sit on the floor';
+      fitL.appendChild(fitCb); fitL.appendChild(fitS); animHost.appendChild(fitL);
       const sel = propModels[tgt.idx];
       if(sel && sel.userData.animActions && sel.userData.animActions.length){
         const aHost = edFold(animHost, 'anim', 'Animation', false, 'Play a model\u2019s built-in animation clips');
