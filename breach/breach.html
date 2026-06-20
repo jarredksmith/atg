@@ -9517,29 +9517,32 @@ function _genPlaceExtract(spots, sx, sz){
 // the floor/wall textures + a light mood (reusing the build-562 Poly Haven pipeline) and a curated set of props
 // placed in sensible spots (desks on walls, plants in corners, tables in the open). The parser/zoner/planner
 // below are pure + deterministic (unit-tested); the executor that actually searches Poly Pizza is thin glue.
+// Catalog = size + placement-zone hints per category, plus a clean fallback search term. The PRIMARY search is
+// whatever the user typed (see _parseSceneSpec); these terms are only the broad fallback. n = default count.
 const SCENE_CATALOG = {
-  couch:    { terms:'sofa couch',        size:2.2, zone:'wall',   n:2 },
-  chair:    { terms:'armchair chair',    size:0.9, zone:'center', n:4 },
-  table:    { terms:'coffee table',      size:1.3, zone:'center', n:2 },
-  desk:     { terms:'reception desk',    size:2.2, zone:'wall',   n:1 },
-  counter:  { terms:'store counter',     size:2.0, zone:'wall',   n:1 },
-  plant:    { terms:'potted plant',      size:1.5, zone:'corner', n:4 },
-  shelf:    { terms:'shelving shelf',    size:1.9, zone:'wall',   n:3 },
-  bookshelf:{ terms:'bookshelf',         size:1.9, zone:'wall',   n:2 },
-  crate:    { terms:'wooden crate',      size:1.0, zone:'any',    n:5 },
-  barrel:   { terms:'barrel',            size:1.0, zone:'any',    n:4 },
-  locker:   { terms:'locker',            size:1.9, zone:'wall',   n:3 },
-  cabinet:  { terms:'cabinet',           size:1.6, zone:'wall',   n:2 },
-  bed:      { terms:'bed',               size:2.0, zone:'wall',   n:2 },
-  lamp:     { terms:'floor lamp',        size:1.7, zone:'corner', n:2 },
-  rug:      { terms:'rug',               size:2.6, zone:'center', n:1 },
-  fridge:   { terms:'refrigerator',      size:1.8, zone:'wall',   n:1 },
-  cart:     { terms:'shopping cart',     size:1.0, zone:'any',    n:2 },
-  register: { terms:'cash register',     size:0.6, zone:'wall',   n:1 },
-  tv:       { terms:'television',        size:1.2, zone:'wall',   n:1 },
-  sign:     { terms:'sign',              size:1.4, zone:'wall',   n:2 },
-  trashcan: { terms:'trash can',         size:0.9, zone:'corner', n:2 },
-  vending:  { terms:'vending machine',   size:1.9, zone:'wall',   n:2 }
+  couch:    { terms:'sofa',            size:2.2, zone:'wall',   n:2 },
+  chair:    { terms:'chair',           size:0.9, zone:'center', n:4 },
+  table:    { terms:'table',           size:1.3, zone:'center', n:2 },
+  desk:     { terms:'desk',            size:2.2, zone:'wall',   n:2 },
+  counter:  { terms:'counter',         size:2.0, zone:'wall',   n:1 },
+  plant:    { terms:'plant',           size:1.5, zone:'corner', n:4 },
+  shelf:    { terms:'shelf',           size:1.9, zone:'wall',   n:3 },
+  bookshelf:{ terms:'bookshelf',       size:1.9, zone:'wall',   n:2 },
+  crate:    { terms:'crate',           size:1.0, zone:'any',    n:5 },
+  barrel:   { terms:'barrel',          size:1.0, zone:'any',    n:4 },
+  locker:   { terms:'locker',          size:1.9, zone:'wall',   n:3 },
+  cabinet:  { terms:'cabinet',         size:1.6, zone:'wall',   n:2 },
+  bed:      { terms:'bed',             size:2.0, zone:'wall',   n:2 },
+  lamp:     { terms:'lamp',            size:1.7, zone:'corner', n:2 },
+  rug:      { terms:'rug',             size:2.6, zone:'center', n:1 },
+  fridge:   { terms:'refrigerator',    size:1.8, zone:'wall',   n:1 },
+  cart:     { terms:'shopping cart',   size:1.0, zone:'any',    n:2 },
+  register: { terms:'cash register',   size:0.6, zone:'wall',   n:1 },
+  tv:       { terms:'television',      size:1.2, zone:'wall',   n:1 },
+  sign:     { terms:'sign',            size:1.4, zone:'wall',   n:2 },
+  trashcan: { terms:'trash can',       size:0.9, zone:'corner', n:3 },
+  computer: { terms:'computer',        size:0.7, zone:'wall',   n:3 },
+  vending:  { terms:'vending machine', size:1.9, zone:'wall',   n:2 }
 };
 // word -> catalog category (plurals + common synonyms). First match wins per word.
 const SCENE_SYN = {
@@ -9562,6 +9565,7 @@ const SCENE_SYN = {
   cart:'cart', carts:'cart', trolley:'cart',
   register:'register', registers:'register', till:'register',
   tv:'tv', television:'tv', televisions:'tv', monitor:'tv', screen:'tv',
+  computer:'computer', computers:'computer', pc:'computer', desktop:'computer', laptop:'computer', keyboard:'computer',
   sign:'sign', signs:'sign', signage:'sign',
   trash:'trashcan', garbage:'trashcan', bin:'trashcan', dumpster:'trashcan',
   vending:'vending', machine:'vending'
@@ -9578,14 +9582,44 @@ const SCENE_THEMES = [
   { k:['lab','laboratory','clinic','hospital','clean'],                                            floor:'tiles',    wall:'plaster',  mood:'bright'}
 ];
 const SCENE_MOOD = { dim:{ color:0xffb070, intensity:1.8 }, warm:{ color:0xffdca8, intensity:3 }, cool:{ color:0xdfeaff, intensity:3 }, bright:{ color:0xffffff, intensity:4 } };
-// Pure parse: text -> { cats:[...], floor, wall, mood }. cats are unique catalog keys in first-seen order.
+const _SCENE_STOP = { a:1, an:1, the:1, some:1, of:1, and:1, with:1, in:1, on:1, to:1, lots:1, plenty:1, around:1, throughout:1, scattered:1, broken:1, old:1, big:1, small:1, large:1 };
+const _SCENE_NUMW = { one:1, two:2, three:3, four:4, five:5, six:6, couple:2, pair:2, few:3, several:4, many:6, bunch:5 };
+// crude singulariser so "trashcans"/"computers"/"shelves" match "trashcan"/"computer"/"shelf"
+function _stemWord(w){
+  if(w.length<=3) return w;
+  if(/ies$/.test(w)) return w.slice(0,-3)+'y';
+  if(/(sses|shes|ches|xes|zes)$/.test(w)) return w.slice(0,-2);
+  if(/ves$/.test(w)) return w.slice(0,-3)+'f';   // shelves -> shelf
+  if(/s$/.test(w) && !/ss$/.test(w)) return w.slice(0,-1);
+  return w;
+}
+// Open-vocabulary parse: text -> { items:[{cat,term,q2,size,zone,n}], floor, wall, mood }. The description's
+// item list (after "with/containing/..." if present, else the whole text) is split on commas + "and"; EACH chunk
+// becomes a search. Recognised words borrow the catalog's size/zone/count; anything else is still searched with
+// sane defaults (so "computers"/"trashcans" are never dropped). term = the user's words; q2 = a broad fallback.
 function _parseSceneSpec(text){
-  const words = String(text||'').toLowerCase().split(/[^a-z]+/).filter(Boolean);
-  const cats=[], seen={};
-  for(const w of words){ const c = SCENE_SYN[w]; if(c && SCENE_CATALOG[c] && !seen[c]){ seen[c]=1; cats.push(c); } }
+  const raw = String(text||'').toLowerCase();
   let floor=null, wall=null, mood=null;
-  for(const t of SCENE_THEMES){ if(t.k.some(k=>words.indexOf(k)>=0)){ floor=t.floor; wall=t.wall; mood=t.mood; break; } }
-  return { cats, floor, wall, mood };
+  for(const t of SCENE_THEMES){ if(t.k.some(k=>raw.indexOf(k)>=0)){ floor=t.floor; wall=t.wall; mood=t.mood; break; } }
+  let clause = raw;
+  const lead = raw.match(/\b(?:with|containing|featuring|full of|filled with|including|has|have)\b/);
+  if(lead) clause = raw.slice(lead.index + lead[0].length);
+  const chunks = clause.split(/,|\band\b|\bwith\b|\bplus\b|&|\//).map(s=>s.trim()).filter(Boolean);
+  const items=[], seen={};
+  for(const ch of chunks){
+    let toks = ch.split(/[^a-z0-9]+/).filter(Boolean);
+    let count=null;
+    if(toks.length){ const w0=toks[0]; if(/^\d+$/.test(w0)){ count=Math.max(1,Math.min(10,+w0)); toks=toks.slice(1); } else if(_SCENE_NUMW[w0]){ count=_SCENE_NUMW[w0]; toks=toks.slice(1); } }
+    toks = toks.filter(w=>!_SCENE_STOP[w]);
+    if(!toks.length) continue;
+    let cat=null; for(const w of toks){ const s=_stemWord(w); if(SCENE_SYN[s]){ cat=SCENE_SYN[s]; break; } if(SCENE_CATALOG[s]){ cat=s; break; } }
+    const spec = cat ? SCENE_CATALOG[cat] : null;
+    const term = toks.join(' ');                                  // PRIMARY query = the user's own words
+    const q2   = spec ? spec.terms : _stemWord(toks[toks.length-1]);   // fallback = catalog term, else the head noun
+    const key  = cat || term; if(seen[key]) continue; seen[key]=1;     // de-dupe
+    items.push({ cat:(cat||null), term, q2, size:(spec?spec.size:1.2), zone:(spec?spec.zone:'any'), n:(count!=null?count:(spec?spec.n:2)) });
+  }
+  return { items, floor, wall, mood };
 }
 // Pure zone of one cell from its 4 open-neighbour flags. center=open interior, edge=against one wall,
 // corner=two perpendicular walls, corridor=a 1-wide through-path (skip furniture), nook=dead-end-ish.
@@ -9596,22 +9630,20 @@ function _sceneCellZone(n, s, e, w){
   if(c===2) return ((n&&s)||(e&&w)) ? 'corridor' : 'corner';
   return 'nook';
 }
-// Pure plan: given catalog cats + zone spot pools {wall,corner,center}, assign each cat to spots in its preferred
-// zone, popping so nothing doubles up; 'any' + fallbacks pull from whatever pool still has room. Returns
-// placements [{cat, term, size, x, z, yaw}]; cap bounds the total.
-function _planFurnish(cats, pools, rnd, cap){
+// Pure plan: given parsed items + zone spot pools {wall,corner,center}, place each item in its preferred zone,
+// popping so nothing doubles up. Wall/corner items hug walls and never fall into the open centre; centre items
+// prefer the middle but can use edges. Returns placements carrying both search queries. cap bounds the total.
+function _planFurnish(items, pools, rnd, cap){
   cap = cap || 40; const out=[];
   const pop = z => (pools[z] && pools[z].length ? pools[z].pop() : null);
-  // build 569: zone-aware fallback. Wall/corner items hug walls and NEVER fall into the open centre (the old
-  // "floating desk"); centre items prefer the middle but can use edges; 'any' clutter fills edges then centre.
   const ORDER = { wall:['wall','corner'], corner:['corner','wall'], center:['center','wall','corner'], any:['wall','corner','center'] };
   const take = zone => { for(const z of (ORDER[zone]||[zone])){ const s=pop(z); if(s) return s; } return null; };
-  for(const cat of cats){
-    const spec = SCENE_CATALOG[cat]; if(!spec) continue;
-    for(let i=0;i<spec.n && out.length<cap;i++){
-      const sp = take(spec.zone);
+  for(const it of (items||[])){
+    if(!it || !it.term) continue;
+    for(let i=0;i<(it.n||1) && out.length<cap;i++){
+      const sp = take(it.zone||'any');
       if(!sp) break;   // no suitable spot left -> skip rather than drop it somewhere illogical
-      out.push({ cat, term:spec.terms, size:spec.size, x:sp.x, z:sp.z, yaw:(sp.yaw!=null?sp.yaw:(rnd?rnd()*Math.PI*2:0)), nx:(sp.nx||0), nz:(sp.nz||0) });
+      out.push({ term:it.term, q2:it.q2, size:(it.size||1.2), x:sp.x, z:sp.z, yaw:(sp.yaw!=null?sp.yaw:(rnd?rnd()*Math.PI*2:0)), nx:(sp.nx||0), nz:(sp.nz||0) });
     }
   }
   return out;
@@ -9642,11 +9674,17 @@ function _furnishExecute(placements, room){
   const next=()=>{
     if(i>=placements.length) return;
     const p=placements[i++];
-    const start=(srcUrl, attr, onFail)=>{ spawnProp(srcUrl, [p.x, 0, p.z, 0, p.yaw, 0, 1], (obj)=>{ if(obj){ if(attr) obj.userData.attribution=attr; _fitPropToSize(obj, p.size); _hugWall(obj, p.nx, p.nz, room); if(typeof renderModelCredits==='function') renderModelCredits(); } }, undefined, 'loop', null, ()=>{ if(onFail) onFail(); }); };
-    const ppFor=()=>{ if(!ppOk) return; ppSearch(p.term, (models)=>{ const m=(models||[]).find(x=>x&&x.glb); if(m) start(m.glb, m.attribution); }, ()=>{}); };
-    if(sfOk) sfSearch(p.term, (res)=>{ const m=(res||[]).find(x=>x&&x.uid); if(m) start('sketchfab:'+m.uid, m.attribution, ppFor); else ppFor(); }, ()=>ppFor());   // prefer Sketchfab; fall back to Poly Pizza on a miss or a failed download
-    else ppFor();
-    setTimeout(next, 140);   // stagger the NEXT search; model downloads proceed in parallel (the browser caps concurrency)
+    const queries = [p.term, p.q2].filter((q,idx,a)=> q && a.indexOf(q)===idx);   // user's words first, broad fallback second
+    const place=(srcUrl, attr, onFail)=>{ spawnProp(srcUrl, [p.x, 0, p.z, 0, p.yaw, 0, 1], (obj)=>{ if(obj){ if(attr) obj.userData.attribution=attr; _fitPropToSize(obj, p.size); _hugWall(obj, p.nx, p.nz, room); if(typeof renderModelCredits==='function') renderModelCredits(); } }, undefined, 'loop', null, ()=>{ if(onFail) onFail(); }); };
+    // try one query across both sources (Sketchfab preferred); on a miss/failure, advance to the next query
+    const trySrc=(q, hit, miss)=>{
+      const ppFor=()=>{ if(!ppOk){ miss(); return; } ppSearch(q, (m)=>{ const r=(m||[]).find(x=>x&&x.glb); if(r) hit(r.glb, r.attribution); else miss(); }, ()=>miss()); };
+      if(sfOk) sfSearch(q, (res)=>{ const r=(res||[]).find(x=>x&&x.uid); if(r) hit('sketchfab:'+r.uid, r.attribution); else ppFor(); }, ()=>ppFor());
+      else ppFor();
+    };
+    const run=(qi)=>{ if(qi>=queries.length) return; trySrc(queries[qi], (src,attr)=>place(src, attr, ()=>run(qi+1)), ()=>run(qi+1)); };
+    run(0);
+    setTimeout(next, 140);   // stagger the NEXT item; downloads proceed in parallel (the browser caps concurrency)
   };
   next();
 }
@@ -9793,7 +9831,7 @@ function generateOffice(opts){
   const sstep=Math.max(1, Math.floor(rooms.length/4));
   for(let i=0, n=0; i<rooms.length && n<5; i+=sstep, n++){ const [r,c]=rooms[i]; if(typeof buildSpawnMarker==='function') buildSpawnMarker({ mode:'hunt', t:[cx(c), cz(r)], face:0 }); }
   if(opts.tex!==false) _genApplyTextures(rnd, floorProp, wallProps, 4, span, spec.floor, spec.wall);   // build 567: description-driven textures (falls back to random when no theme matched)
-  if(spec.cats.length){ _genShuffle(rnd, zonePools.wall); _genShuffle(rnd, zonePools.corner); _genShuffle(rnd, zonePools.center); _furnishExecute(_planFurnish(spec.cats, zonePools, rnd), cell); }   // build 567/569: place curated props, hugged to walls
+  if(spec.items.length){ _genShuffle(rnd, zonePools.wall); _genShuffle(rnd, zonePools.corner); _genShuffle(rnd, zonePools.center); _furnishExecute(_planFurnish(spec.items, zonePools, rnd), cell); }   // build 567/569/570: place curated props (open-vocabulary), hugged to walls
   if(gameCfg && gameCfg.spawnRegion) gameCfg.spawnRegion.on=false;
   NAV.built=false;
   if(typeof refreshSpawnRegionMarker==='function') refreshSpawnRegionMarker();
@@ -13380,7 +13418,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 569 · 2026-06-19';
+const BUILD_VERSION = 'build 570 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
