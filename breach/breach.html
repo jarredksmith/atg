@@ -7185,6 +7185,12 @@ function applyPropColor(obj, hex){
   obj.userData.col = hex;
   eachPrimMesh(obj, o=>{ o.material.color.setHex(hex); o.material.needsUpdate=true; });   // tints the texture too (MeshStandard multiplies map by color)
 }
+// build 564: material edits apply to EVERY selected primitive (the whole multi-selection), not just the primary.
+// Returns the selected shape-primitives; falls back to the primary props target when nothing's multi-selected.
+function _matTargets(){
+  const list = (selProps && selProps.length) ? selProps : [ (editorTargets && editorTargets.props && typeof editorTargets.props.obj==='function' ? editorTargets.props.obj() : null) ];
+  return list.filter(o=>o && isShapePrimitive(o.userData.src));
+}
 
 // --- image texture + tiling ---
 function applyPropTexture(obj, url){
@@ -7264,7 +7270,7 @@ function texResolvePBR(id, hi, cb, errcb){   // -> { map, normal, rough } direct
     .catch(errcb);
 }
 function renderTexSearch(host, onPick){
-  onPick = onPick || ((maps)=>{ const sel=editorTargets.props.obj(); if(!sel || !isShapePrimitive(sel.userData.src)) return false; pushUndoSnapshot(); applyPropTexturePBR(sel, maps); const ti=document.getElementById('edTexInput'); if(ti) ti.value=maps.map||''; });
+  onPick = onPick || ((maps)=>{ const tg=_matTargets(); if(!tg.length) return false; pushUndoSnapshot(); for(const o of tg) applyPropTexturePBR(o, maps); const ti=document.getElementById('edTexInput'); if(ti) ti.value=maps.map||''; });
   host.innerHTML='';
   const head=document.createElement('div'); head.className='hint'; head.style.margin='6px 0 4px';
   head.innerHTML='<b>Search textures</b> \u2014 Poly Haven (CC0), tap one to apply it to this primitive.';
@@ -8475,6 +8481,7 @@ document.addEventListener('mousemove', e=>{
     if(_brushing){ _brushStroke(e); editorDragMoved = true; return; }    // painting the terrain
     if(gizmoDrag){ gizmoDragMove(e); editorDragMoved = true; return; }   // dragging an axis handle
     if(_altDupActive){ if(_altDup){ const gp = groundPointUnderPointer(e); if(gp){ _altDup.position.x = gp.x; _altDup.position.z = gp.z; } } editorDragMoved = true; return; }   // Alt-drag: move the fresh duplicate under the cursor
+    if(_marqueeOn){ _marqueeMove(e); editorDragMoved = true; return; }   // build 563: drawing the selection box
     if(editorDragPan && editorTopView){
       const wpp = (2*topZoom)/innerHeight;   // world units per pixel at current zoom
       topPanX -= e.movementX * wpp;
@@ -8516,9 +8523,48 @@ renderer.domElement.addEventListener('mousedown', e=>{
   if(terrainBrush.on && terrainPointUnderPointer(e)){ pushUndoSnapshot(); _brushStroke(e); _brushing = true; editorDragMoved = true; return; }   // sculpt instead of select/look
   if(tryGizmoGrab(e)){ editorDragMoved = true; return; }   // grabbing an axis handle (suppresses select)
   if(e.altKey){ const o=_pickPropAt(e); if(o){ e.preventDefault(); pushUndoSnapshot(); _dupPropForDrag(o); _altDupActive = true; editorDragMoved = true; return; } }   // Alt+drag = duplicate the prop under the cursor and drag the copy
-  if(editorTopView) editorDragPan = true; else editorDragLook = true;
+  if(editorTopView) _marqueeStart(e); else editorDragLook = true;   // build 563: top-view left-drag = marquee select (pan moved to right/middle-drag)
 });
-addEventListener('mouseup', e=>{ if(e.button===0){ if(_altDupActive){ _altDupActive = false; _altDup = null; const tg=editorTargets[editorActive]; if(tg && typeof tg.sync==='function') tg.sync(); if(typeof updateFieldDisplays==='function') updateFieldDisplays(); if(typeof renderEditorFields==='function') renderEditorFields(); } if(_brushing){ _brushing = false; editorDragMoved = true; } editorDragLook = false; editorDragPan = false; const _wg=gizmoDrag; gizmoDrag = null; if(_wg){ const tg=editorTargets[editorActive]; if(tg && typeof tg.sync==='function') tg.sync(); if(typeof updateFieldDisplays==='function') updateFieldDisplays(); } } });
+addEventListener('mouseup', e=>{ if(e.button===0){ if(_marqueeOn){ _marqueeFinish(e); } if(_altDupActive){ _altDupActive = false; _altDup = null; const tg=editorTargets[editorActive]; if(tg && typeof tg.sync==='function') tg.sync(); if(typeof updateFieldDisplays==='function') updateFieldDisplays(); if(typeof renderEditorFields==='function') renderEditorFields(); } if(_brushing){ _brushing = false; editorDragMoved = true; } editorDragLook = false; editorDragPan = false; const _wg=gizmoDrag; gizmoDrag = null; if(_wg){ const tg=editorTargets[editorActive]; if(tg && typeof tg.sync==='function') tg.sync(); if(typeof updateFieldDisplays==='function') updateFieldDisplays(); } } });
+
+// ---------- build 563: top-view marquee drag-select ----------
+// In top view, a left-drag on empty space draws a selection box and selects every prop whose center projects
+// inside it (Shift adds to the current selection). Pan moves to right/middle-drag in top view so left-drag is
+// free for the marquee. Fly mode is unchanged (left-drag still looks). Plays into bulk material edits next.
+let _marqueeOn=false, _marqueeX0=0, _marqueeY0=0, _marqueeEl=null;
+const _marqueeV = new THREE.Vector3();
+function _marqueeStart(e){
+  _marqueeOn=true; _marqueeX0=e.clientX; _marqueeY0=e.clientY; editorDragMoved=false;
+  if(!_marqueeEl){ _marqueeEl=document.createElement('div'); _marqueeEl.style.cssText='position:fixed;border:1.5px solid var(--accent,#38f5b5);background:rgba(56,245,181,0.12);pointer-events:none;z-index:9998;display:none;'; document.body.appendChild(_marqueeEl); }
+  _marqueeEl.style.display='block'; _marqueeEl.style.left=e.clientX+'px'; _marqueeEl.style.top=e.clientY+'px'; _marqueeEl.style.width='0px'; _marqueeEl.style.height='0px';
+}
+function _marqueeMove(e){
+  if(!_marqueeEl) return;
+  const x=Math.min(_marqueeX0,e.clientX), y=Math.min(_marqueeY0,e.clientY), w=Math.abs(e.clientX-_marqueeX0), h=Math.abs(e.clientY-_marqueeY0);
+  _marqueeEl.style.left=x+'px'; _marqueeEl.style.top=y+'px'; _marqueeEl.style.width=w+'px'; _marqueeEl.style.height=h+'px';
+}
+function _marqueeFinish(e){
+  _marqueeOn=false; if(_marqueeEl) _marqueeEl.style.display='none';
+  if(Math.abs(e.clientX-_marqueeX0)<=4 && Math.abs(e.clientY-_marqueeY0)<=4){ editorDragMoved=false; return; }   // negligible drag -> let the click handler treat it as a normal click
+  editorDragMoved = true;   // a real drag -> suppress the click-select that follows on mouseup
+  const r = renderer.domElement.getBoundingClientRect();
+  const x0=Math.min(_marqueeX0,e.clientX), x1=Math.max(_marqueeX0,e.clientX), y0=Math.min(_marqueeY0,e.clientY), y1=Math.max(_marqueeY0,e.clientY);
+  const cam = activeCam(); const hits=[];
+  for(const p of propModels){ if(!p) continue; _marqueeV.setFromMatrixPosition(p.matrixWorld); _marqueeV.project(cam);
+    const sx = r.left + (_marqueeV.x*0.5+0.5)*r.width, sy = r.top + (-_marqueeV.y*0.5+0.5)*r.height;
+    if(_marqueeV.z < 1 && sx>=x0 && sx<=x1 && sy>=y0 && sy<=y1) hits.push(p);
+  }
+  if(e.shiftKey){ for(const o of hits) if(selProps.indexOf(o)<0) selProps.push(o); }   // add to the current selection
+  else { selProps = hits.slice(); selLights = []; }                                     // fresh selection (empty box clears)
+  editorActive='props';
+  if(selProps.length) editorTargets.props.idx = propModels.indexOf(selProps[selProps.length-1]);
+  if(typeof syncModeToActive==='function') syncModeToActive();
+  if(typeof updateSelectionHighlight==='function') updateSelectionHighlight();
+  if(typeof renderEditorFields==='function') renderEditorFields();
+}
+// middle / right drag pans in top view (left-drag is the marquee now); suppress the context menu while editing in top view
+renderer.domElement.addEventListener('mousedown', e=>{ if(!editorOpen || (e.button!==1 && e.button!==2)) return; if(editorTopView){ editorDragPan=true; editorDragMoved=false; e.preventDefault(); } });
+renderer.domElement.addEventListener('contextmenu', e=>{ if(editorOpen && editorTopView) e.preventDefault(); });
 
 // ---------- Weapon (viewmodel) ----------
 // The `gun` group is what the render loop animates (sway, recoil, ADS). We load a hosted
@@ -13170,7 +13216,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 562 · 2026-06-19';
+const BUILD_VERSION = 'build 564 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -17508,7 +17554,7 @@ function buildEditorPanel(){
       + '<button id="edDock" title="Move panel to the other side">\u21c4</button>'
       + '<button id="edCollapse" title="Collapse panel">\u2304</button>'
     + '</div>'
-    + '<div class="hint">Click an object to select it. <b>Shift+click</b> props to multi-select. Use <b>Move / Rotate / Scale</b> + the handles, or type values. <b>Shift+D</b> duplicates (or <b>Alt+drag</b> a prop to clone it in place), <b>Delete</b> removes. Drag the left edge to resize. Press <b>P</b> to close.</div>'
+    + '<div class="hint">Click an object to select it. <b>Shift+click</b> props to multi-select. In <b>Top view</b>, <b>drag</b> empty space to marquee-select props (Shift adds); pan with <b>right/middle-drag</b>. Use <b>Move / Rotate / Scale</b> + the handles, or type values. <b>Shift+D</b> duplicates (or <b>Alt+drag</b> a prop to clone it in place), <b>Delete</b> removes. Drag the left edge to resize. Press <b>P</b> to close.</div>'
     + '<div class="row2" style="margin:0 0 8px"><button id="edPlay" style="background:var(--accent);color:#05070a;font-weight:700;border:none">▶ Play level</button><button id="edMenu" style="background:rgba(255,140,60,.14);color:#ffd9a8;font-weight:700;border:1px solid rgba(255,150,70,.55)">⌂ Main menu</button></div>'
     + '<div class="row2" id="edView" style="margin-bottom:10px"></div>'
     + '<div class="edModes" id="edModes"></div>'
@@ -19333,6 +19379,8 @@ function renderEditorFields(){
     const matSec = matHost.closest('.edSection'); if(matSec) matSec.style.display = matOn ? '' : 'none';   // shape primitive selected AND we're on a tab that shows Material
     if(matOn){
       const toHex = n => '#' + ('000000'+(n>>>0).toString(16)).slice(-6);
+      const _matN = (selProps && selProps.length) ? selProps.filter(o=>o&&isShapePrimitive(o.userData.src)).length : 1;
+      if(_matN>1){ const mn=document.createElement('div'); mn.className='hint'; mn.style.cssText='margin:0 0 6px;color:var(--accent);'; mn.innerHTML='<b>Editing '+_matN+' selected props</b> \u2014 changes apply to all.'; matHost.appendChild(mn); }
 
       // base color
       const cHead=document.createElement('div'); cHead.className='hint'; cHead.style.margin='0 0 3px'; cHead.innerHTML='<b>Color</b>';
@@ -19340,7 +19388,7 @@ function renderEditorFields(){
       const crow=document.createElement('div'); crow.style.cssText='display:flex;align-items:center;gap:8px;';
       const cpick=document.createElement('input'); cpick.type='color'; cpick.value=toHex(selObj.userData.col!=null?selObj.userData.col:PRIM_DEFAULT_COLOR);
       cpick.style.cssText='width:42px;height:26px;padding:0;border:1px solid rgba(56,245,181,0.3);border-radius:4px;background:#05080b;cursor:pointer;';
-      cpick.addEventListener('mousedown', ()=>pushUndoSnapshot()); cpick.oninput=()=>{ applyPropColor(selObj, parseInt(cpick.value.slice(1),16)); };
+      cpick.addEventListener('mousedown', ()=>pushUndoSnapshot()); cpick.oninput=()=>{ const hex=parseInt(cpick.value.slice(1),16); for(const o of _matTargets()) applyPropColor(o, hex); };
       const cnote=document.createElement('span'); cnote.className='hint'; cnote.textContent=selObj.userData.tex?'(tints the texture)':'';
       crow.appendChild(cpick); crow.appendChild(cnote); matHost.appendChild(crow);
 
@@ -19350,8 +19398,8 @@ function renderEditorFields(){
       const tinp=document.createElement('input'); tinp.type='text'; tinp.id='edTexInput'; tinp.value=selObj.userData.tex||''; tinp.placeholder='https://…/texture.jpg';
       matHost.appendChild(tinp);
       const trow=document.createElement('div'); trow.className='row2'; trow.style.marginTop='6px';
-      const applyB=document.createElement('button'); applyB.textContent='Apply texture'; applyB.onclick=()=>{ pushUndoSnapshot(); selObj.userData.texN=''; selObj.userData.texR=''; applyPropTexture(selObj, tinp.value.trim()); renderEditorFields(); };
-      const clearB=document.createElement('button'); clearB.textContent='Clear'; clearB.onclick=()=>{ pushUndoSnapshot(); tinp.value=''; applyPropTexture(selObj, ''); renderEditorFields(); };
+      const applyB=document.createElement('button'); applyB.textContent='Apply texture'; applyB.onclick=()=>{ pushUndoSnapshot(); const url=tinp.value.trim(); for(const o of _matTargets()){ o.userData.texN=''; o.userData.texR=''; applyPropTexture(o, url); } renderEditorFields(); };
+      const clearB=document.createElement('button'); clearB.textContent='Clear'; clearB.onclick=()=>{ pushUndoSnapshot(); tinp.value=''; for(const o of _matTargets()) applyPropTexture(o, ''); renderEditorFields(); };
       trow.appendChild(applyB); trow.appendChild(clearB); matHost.appendChild(trow);
       // tiling U/V
       const rep=selObj.userData.texRepeat||[1,1];
@@ -19359,8 +19407,8 @@ function renderEditorFields(){
       const rlbl=document.createElement('span'); rlbl.className='hint'; rlbl.textContent='Tile';
       const ru=document.createElement('input'); ru.type='number'; ru.step='0.001'; ru.min='0.001'; ru.value=rep[0]; ru.className='valnum'; ru.style.width='62px';
       const rv=document.createElement('input'); rv.type='number'; rv.step='0.001'; rv.min='0.001'; rv.value=rep[1]; rv.className='valnum'; rv.style.width='62px';
-      const setRep=()=>{ applyPropTexRepeat(selObj, Math.max(0.001,+ru.value||1), Math.max(0.001,+rv.value||1)); };
-      const commitRep=()=>{ applyPropTexRebind(selObj); };
+      const setRep=()=>{ const u=Math.max(0.001,+ru.value||1), v=Math.max(0.001,+rv.value||1); for(const o of _matTargets()) applyPropTexRepeat(o, u, v); };
+      const commitRep=()=>{ for(const o of _matTargets()) applyPropTexRebind(o); };
       ru.oninput=setRep; rv.oninput=setRep; ru.onchange=commitRep; rv.onchange=commitRep; ru.addEventListener('focus',()=>pushUndoSnapshot()); rv.addEventListener('focus',()=>pushUndoSnapshot());
       const x=document.createElement('span'); x.className='hint'; x.textContent='×';
       rrow.appendChild(rlbl); rrow.appendChild(ru); rrow.appendChild(x); rrow.appendChild(rv); matHost.appendChild(rrow);
@@ -19368,7 +19416,7 @@ function renderEditorFields(){
       const rotRow=document.createElement('div'); rotRow.style.cssText='display:flex;align-items:center;gap:8px;margin-top:6px;';
       const rotL=document.createElement('span'); rotL.className='hint'; rotL.textContent='Rotate°';
       const rotI=document.createElement('input'); rotI.type='number'; rotI.step='5'; rotI.value=selObj.userData.texRot||0; rotI.className='valnum'; rotI.style.width='62px';
-      rotI.oninput=()=>{ applyPropTexRot(selObj, +rotI.value||0); }; rotI.onchange=()=>{ applyPropTexRebind(selObj); }; rotI.addEventListener('focus',()=>pushUndoSnapshot());
+      rotI.oninput=()=>{ const d=+rotI.value||0; for(const o of _matTargets()) applyPropTexRot(o, d); }; rotI.onchange=()=>{ for(const o of _matTargets()) applyPropTexRebind(o); }; rotI.addEventListener('focus',()=>pushUndoSnapshot());
       rotRow.appendChild(rotL); rotRow.appendChild(rotI); matHost.appendChild(rotRow);
       const tsHost=document.createElement('div'); tsHost.style.marginTop='8px'; matHost.appendChild(tsHost); renderTexSearch(tsHost);
 
@@ -19386,10 +19434,10 @@ function renderEditorFields(){
       epick.style.cssText='width:42px;height:26px;padding:0;border:1px solid rgba(56,245,181,0.3);border-radius:4px;background:#05080b;cursor:pointer;';
       const ei=document.createElement('input'); ei.type='range'; ei.min='0'; ei.max='10'; ei.step='0.1'; ei.value=emit.i; ei.style.flex='1';
       const eival=document.createElement('input'); eival.type='number'; eival.step='0.1'; eival.value=emit.i; eival.className='valnum'; eival.style.width='52px';
-      const setEmit=()=>{ applyPropEmissive(selObj, parseInt(epick.value.slice(1),16), +ei.value); eival.value=(+ei.value).toFixed(1); };
+      const setEmit=()=>{ const c=parseInt(epick.value.slice(1),16), iv=+ei.value; for(const o of _matTargets()) applyPropEmissive(o, c, iv); eival.value=iv.toFixed(1); };
       epick.addEventListener('mousedown',()=>pushUndoSnapshot()); ei.addEventListener('mousedown',()=>pushUndoSnapshot()); epick.oninput=setEmit; ei.oninput=setEmit; eival.oninput=()=>{ ei.value=eival.value; setEmit(); };
       erow.appendChild(epick); erow.appendChild(ei); erow.appendChild(eival); matHost.appendChild(erow);
-      ecb.onchange=()=>{ pushUndoSnapshot(); if(ecb.checked){ applyPropEmissive(selObj, parseInt(epick.value.slice(1),16), +ei.value||4); } else { clearPropEmissive(selObj); } renderEditorFields(); };
+      ecb.onchange=()=>{ pushUndoSnapshot(); const c=parseInt(epick.value.slice(1),16), iv=+ei.value||4; for(const o of _matTargets()){ if(ecb.checked) applyPropEmissive(o, c, iv); else clearPropEmissive(o); } renderEditorFields(); };
 
       // surface finish: shininess (= inverse roughness) + metalness
       const sh = selObj.userData.shine || { r:PRIM_DEFAULT_ROUGH, m:PRIM_DEFAULT_METAL };
@@ -19406,8 +19454,8 @@ function renderEditorFields(){
         row.appendChild(sp); row.appendChild(rng); row.appendChild(num); matHost.appendChild(row);
       };
       // shininess shown 0 (matte) .. 1 (glossy); stored as roughness = 1 - shininess
-      slider('Shininess', (1 - sh.r), '#7cc6ff', (v)=>{ const cur=selObj.userData.shine||{ r:PRIM_DEFAULT_ROUGH, m:PRIM_DEFAULT_METAL }; applyPropShine(selObj, 1 - v, cur.m); });
-      slider('Metalness', sh.m, '#d6b35a', (v)=>{ const cur=selObj.userData.shine||{ r:PRIM_DEFAULT_ROUGH, m:PRIM_DEFAULT_METAL }; applyPropShine(selObj, cur.r, v); });
+      slider('Shininess', (1 - sh.r), '#7cc6ff', (v)=>{ for(const o of _matTargets()){ const cur=o.userData.shine||{ r:PRIM_DEFAULT_ROUGH, m:PRIM_DEFAULT_METAL }; applyPropShine(o, 1 - v, cur.m); } });
+      slider('Metalness', sh.m, '#d6b35a', (v)=>{ for(const o of _matTargets()){ const cur=o.userData.shine||{ r:PRIM_DEFAULT_ROUGH, m:PRIM_DEFAULT_METAL }; applyPropShine(o, cur.r, v); } });
       const sHint=document.createElement('div'); sHint.className='hint'; sHint.style.margin='2px 0 0';
       sHint.textContent='Shininess: 0 = flat/matte, 1 = glossy highlights. Metalness pushes toward a polished-metal look (best with some shininess).';
       matHost.appendChild(sHint);
