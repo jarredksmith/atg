@@ -9412,7 +9412,22 @@ function removeFireZone(i){ pushUndoSnapshot(); fireZones.splice(i,1); if(selFir
 // bots) spawn via randomSpawn(), which validates points against geometry, so they land in open corridors.
 // Seeded with a small PRNG so a given seed reproduces the same maze (each click rolls a fresh random seed).
 function _mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15, 1|a); t=t+Math.imul(t^t>>>7, 61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
-let _genCells=9, _lastMazeSeed=0, _genCover=true, _genLoot=true;
+let _genCells=9, _lastMazeSeed=0, _genCover=true, _genLoot=true, _genTex=true;
+const _GEN_FLOOR_TEX=['wood','tiles','concrete','carpet','marble'];
+const _GEN_WALL_TEX=['concrete','plaster','brick','painted','stone'];
+// build 562: after a layout is built, asynchronously pick a random Poly Haven (CC0) texture for the floor and
+// the walls and apply them. The floor is ONE plane textured as a single piece (seamless). Each wall box gets the
+// texture tiled to its own world size (consistent density across boxes); the remaining seams between separate
+// boxes are hidden by favoring non-directional materials. Walls use diffuse-only + a quantized repeat so many
+// boxes share a handful of GPU textures (memory). Seeded picks (captured up front) keep a given seed reproducible.
+function _genApplyTextures(rnd, floorProp, wallProps, tile, span){
+  if(typeof texSearch!=='function' || typeof texResolvePBR!=='function' || typeof applyPropTexturePBR!=='function') return;
+  if(typeof creditAsset==='function') creditAsset('Poly Haven \u2014 polyhaven.com (CC0)');
+  const fKw=_GEN_FLOOR_TEX[(rnd()*_GEN_FLOOR_TEX.length)|0], fPick=rnd();
+  const wKw=_GEN_WALL_TEX[(rnd()*_GEN_WALL_TEX.length)|0], wPick=rnd();
+  if(floorProp) texSearch(fKw, hits=>{ if(!hits||!hits.length) return; const h=hits[Math.min(hits.length-1,(fPick*hits.length)|0)]; texResolvePBR(h.id, false, pbr=>{ if(!floorProp||!pbr||!pbr.map) return; const rp=Math.max(1, Math.round(span/tile)); floorProp.userData.texRepeat=[rp,rp]; applyPropTexturePBR(floorProp, pbr); }, ()=>{}); }, ()=>{});
+  if(wallProps && wallProps.length) texSearch(wKw, hits=>{ if(!hits||!hits.length) return; const h=hits[Math.min(hits.length-1,(wPick*hits.length)|0)]; texResolvePBR(h.id, false, pbr=>{ if(!pbr||!pbr.map) return; for(const o of wallProps){ if(!o||!o.scale) continue; const longD=Math.max(o.scale.x,o.scale.z); const u=Math.max(1,Math.min(8,Math.round(longD/tile))), v=Math.max(1,Math.round(o.scale.y/tile)); o.userData.texRepeat=[u,v]; applyPropTexturePBR(o, { map:pbr.map }); } }, ()=>{}); }, ()=>{});
+}
 // build 560: shared helpers so both generators can scatter cover and seed gameplay (weapons/health/ammo/
 // powerups + an objective point). Everything is ordinary level data, so it serializes + syncs to multiplayer.
 function _genShuffle(rnd, a){ for(let i=a.length-1;i>0;i--){ const j=(rnd()*(i+1))|0; const t=a[i]; a[i]=a[j]; a[j]=t; } return a; }
@@ -9483,8 +9498,10 @@ function generateMaze(opts){
   wipeScene();   // fresh scene (clears placed props / lights / spawns; keeps world / terrain / sky / rules). pushes one undo snapshot, so Undo reverts the whole generate.
   const gndAt=(x,z)=> (typeof terrainHeightAt==='function'?terrainHeightAt(x,z):0);   // used for LIGHT heights (lights are placed at absolute world Y). Walls/cover pass t[1]=0 — the box origin is its base and finalizeProp lifts it onto the terrain (passing a height here would double-count it; +wallH/2 was the build-557/559 hover).
   const cx=(j)=> -half+(j+0.5)*cell, cz=(i)=> -half+(i+0.5)*cell;   // cell-center world X / Z
-  const hwall=(x,z)=> spawnProp('box', [x, 0, z, 0,0,0, cell+th, wallH, th]);   // wall running along X
-  const vwall=(x,z)=> spawnProp('box', [x, 0, z, 0,0,0, th, wallH, cell+th]);   // wall running along Z
+  const wallProps=[]; let floorProp=null;
+  const hwall=(x,z)=> spawnProp('box', [x, 0, z, 0,0,0, cell+th, wallH, th], o=>{ if(o) wallProps.push(o); });   // wall running along X
+  const vwall=(x,z)=> spawnProp('box', [x, 0, z, 0,0,0, th, wallH, cell+th], o=>{ if(o) wallProps.push(o); });   // wall running along Z
+  if(opts.tex!==false) spawnProp('box', [0, -0.47, 0, 0,0,0, span+cell, 0.5, span+cell], o=>{ floorProp=o; });   // build 562: a single floor plane (top ~at terrain) to texture as one seamless piece
   for(let j=0;j<C;j++){ hwall(cx(j), -half); hwall(cx(j), half); }   // outer N/S boundary
   for(let i=0;i<C;i++){ vwall(-half, cz(i)); vwall(half, cz(i)); }   // outer W/E boundary
   for(let i=0;i<C;i++) for(let j=0;j<C;j++){
@@ -9508,6 +9525,7 @@ function generateMaze(opts){
   // a few enemy spawns spread to the far corners + center (so wave / co-op modes have spawn points on the maze)
   for(const [i,j] of [[0,C-1],[C-1,0],[C-1,C-1],[(C/2)|0,(C/2)|0]]){ if(typeof buildSpawnMarker==='function') buildSpawnMarker({ mode:'hunt', t:[cx(j), cz(i)], face:0 }); }
   if(gameCfg && gameCfg.spawnRegion) gameCfg.spawnRegion.on=false;   // MP players spawn across the whole maze (randomSpawn validates against walls)
+  if(opts.tex!==false) _genApplyTextures(rnd, floorProp, wallProps, 4, span);   // build 562: random Poly Haven textures (async; applied to the floor + collected wall boxes)
   NAV.built=false;   // rebuild the nav grid for the new layout (incremental, on next play/overlay)
   if(typeof refreshSpawnRegionMarker==='function') refreshSpawnRegionMarker();
   if(typeof renderEditorFields==='function') renderEditorFields();
@@ -9551,10 +9569,12 @@ function generateOffice(opts){
   wipeScene();
   const gndAt=(x,z)=> (typeof terrainHeightAt==='function'?terrainHeightAt(x,z):0);   // for LIGHT heights only; walls/cover pass t[1]=0 and finalizeProp lifts the box base onto the terrain
   const cx=(c)=> -half+(c+0.5)*cell, cz=(r)=> -half+(r+0.5)*cell;
+  const wallProps=[]; let floorProp=null;
+  if(opts.tex!==false) spawnProp('box', [0, -0.47, 0, 0,0,0, span+cell, 0.5, span+cell], o=>{ floorProp=o; });   // build 562: single floor plane to texture seamlessly
   // emit walls, merging contiguous cells into longer boxes (fewer props): horizontal runs first, then vertical leftovers
   const used=[]; for(let i=0;i<G;i++) used.push(new Array(G).fill(false));
-  for(let r=0;r<G;r++){ let c=0; while(c<G){ if(wall[r][c] && !used[r][c]){ let k=c; while(k<G && wall[r][k] && !used[r][k]) k++; if(k-c>=2){ for(let x=c;x<k;x++) used[r][x]=true; const x0=cx(c)-cell/2, x1=cx(k-1)+cell/2, mx=(x0+x1)/2; spawnProp('box', [mx, 0, cz(r), 0,0,0, (x1-x0), wallH, cell]); c=k; } else c++; } else c++; } }
-  for(let c=0;c<G;c++){ let r=0; while(r<G){ if(wall[r][c] && !used[r][c]){ let k=r; while(k<G && wall[k][c] && !used[k][c]) k++; for(let y=r;y<k;y++) used[y][c]=true; const z0=cz(r)-cell/2, z1=cz(k-1)+cell/2, mz=(z0+z1)/2; spawnProp('box', [cx(c), 0, mz, 0,0,0, cell, wallH, (z1-z0)]); r=k; } else r++; } }
+  for(let r=0;r<G;r++){ let c=0; while(c<G){ if(wall[r][c] && !used[r][c]){ let k=c; while(k<G && wall[r][k] && !used[r][k]) k++; if(k-c>=2){ for(let x=c;x<k;x++) used[r][x]=true; const x0=cx(c)-cell/2, x1=cx(k-1)+cell/2, mx=(x0+x1)/2; spawnProp('box', [mx, 0, cz(r), 0,0,0, (x1-x0), wallH, cell], o=>{ if(o) wallProps.push(o); }); c=k; } else c++; } else c++; } }
+  for(let c=0;c<G;c++){ let r=0; while(r<G){ if(wall[r][c] && !used[r][c]){ let k=r; while(k<G && wall[k][c] && !used[k][c]) k++; for(let y=r;y<k;y++) used[y][c]=true; const z0=cz(r)-cell/2, z1=cz(k-1)+cell/2, mz=(z0+z1)/2; spawnProp('box', [cx(c), 0, mz, 0,0,0, cell, wallH, (z1-z0)], o=>{ if(o) wallProps.push(o); }); r=k; } else r++; } }
   // build 560: scatter cover (only in "roomy" cells, never narrow corridors) + seed gameplay across all floor cells
   const isFloor=(r,c)=> (r>=0&&c>=0&&r<G&&c<G&&!wall[r][c]);
   const sx=rooms.length?cx(rooms[0][1]):0, sz=rooms.length?cz(rooms[0][0]):0;
@@ -9570,6 +9590,7 @@ function generateOffice(opts){
   if(rooms.length){ const [r,c]=rooms[0]; playerSpawn.x=+cx(c).toFixed(2); playerSpawn.z=+cz(r).toFixed(2); playerSpawn.y=0; playerSpawn.yaw=Math.atan2(-cx(c), -cz(r)); if(typeof refreshPlayerSpawnMarker==='function') refreshPlayerSpawnMarker(); }
   const sstep=Math.max(1, Math.floor(rooms.length/4));
   for(let i=0, n=0; i<rooms.length && n<5; i+=sstep, n++){ const [r,c]=rooms[i]; if(typeof buildSpawnMarker==='function') buildSpawnMarker({ mode:'hunt', t:[cx(c), cz(r)], face:0 }); }
+  if(opts.tex!==false) _genApplyTextures(rnd, floorProp, wallProps, 4, span);   // build 562: random Poly Haven textures
   if(gameCfg && gameCfg.spawnRegion) gameCfg.spawnRegion.on=false;
   NAV.built=false;
   if(typeof refreshSpawnRegionMarker==='function') refreshSpawnRegionMarker();
@@ -9596,9 +9617,10 @@ function renderGeneratePanel(){
   const mkChk=(label,get,set)=>{ const l=document.createElement('label'); l.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:11px;margin:3px 0;cursor:pointer;'; const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=get(); cb.style.accentColor='var(--accent)'; cb.onchange=()=>set(cb.checked); const s=document.createElement('span'); s.innerHTML=label; l.appendChild(cb); l.appendChild(s); host.appendChild(l); };
   mkChk('<b>Scatter cover</b> \u2014 crates, low barriers, pillars', ()=>_genCover, v=>{ _genCover=v; });
   mkChk('<b>Seed weapons &amp; pickups</b> \u2014 guns, health, ammo, powerups + an extraction point', ()=>_genLoot, v=>{ _genLoot=v; });
+  mkChk('<b>Textured surfaces</b> \u2014 random Poly Haven floor + walls (CC0)', ()=>_genTex, v=>{ _genTex=v; });
   // generate
   const btn=document.createElement('button'); btn.textContent='\u2699 Generate '+(isMaze?'maze':'office'); btn.style.cssText='width:100%;background:var(--accent);color:#05070a;font-weight:700;border:none;padding:9px;border-radius:6px;margin:4px 0;cursor:pointer;';
-  btn.onclick=()=>{ const o={ cells:_genCells, cover:_genCover, loot:_genLoot }; if(isMaze) generateMaze(o); else generateOffice(o); };
+  btn.onclick=()=>{ const o={ cells:_genCells, cover:_genCover, loot:_genLoot, tex:_genTex }; if(isMaze) generateMaze(o); else generateOffice(o); };
   host.appendChild(btn);
   const seedLine=document.createElement('div'); seedLine.className='hint'; seedLine.style.cssText='font-size:10px;opacity:0.7;margin-top:4px;'; seedLine.textContent=_lastMazeSeed?('Last seed: '+_lastMazeSeed+' \u00b7 each click rolls a new one'):'Each click makes a new unique layout.'; host.appendChild(seedLine);
 }
@@ -13148,7 +13170,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 561 · 2026-06-19';
+const BUILD_VERSION = 'build 562 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
