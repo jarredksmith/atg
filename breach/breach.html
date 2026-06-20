@@ -9412,7 +9412,45 @@ function removeFireZone(i){ pushUndoSnapshot(); fireZones.splice(i,1); if(selFir
 // bots) spawn via randomSpawn(), which validates points against geometry, so they land in open corridors.
 // Seeded with a small PRNG so a given seed reproduces the same maze (each click rolls a fresh random seed).
 function _mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15, 1|a); t=t+Math.imul(t^t>>>7, 61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
-let _genCells=9, _lastMazeSeed=0;
+let _genCells=9, _lastMazeSeed=0, _genCover=true, _genLoot=true;
+// build 560: shared helpers so both generators can scatter cover and seed gameplay (weapons/health/ammo/
+// powerups + an objective point). Everything is ordinary level data, so it serializes + syncs to multiplayer.
+function _genShuffle(rnd, a){ for(let i=a.length-1;i>0;i--){ const j=(rnd()*(i+1))|0; const t=a[i]; a[i]=a[j]; a[j]=t; } return a; }
+// Cover: crates, low shoot-over barriers, and thin pillars (all boxes, one convention). clearAt-validated so a
+// piece never lands in a wall or on top of another, and the caller passes only "roomy" spots in tight layouts.
+function _genScatterCover(rnd, pool, gndAt, density){
+  const target=Math.min(40, Math.round(pool.length*density)); let placed=0;
+  while(placed<target && pool.length){
+    const s=pool.pop(); if(!s) break;
+    const jx=s[0]+(rnd()-0.5)*2.2, jz=s[1]+(rnd()-0.5)*2.2;
+    if(typeof clearAt==='function' && !clearAt(jx, jz, gndAt(jx,jz))) continue;   // open spot only (also dodges already-placed cover)
+    const t=rnd(), ry=rnd()*Math.PI, gy=gndAt(jx,jz);
+    if(t<0.45){ const w=1.6+rnd()*1.4, h=1.6+rnd()*1.2; spawnProp('box', [jx, gy+h/2, jz, 0,ry,0, w, h, w]); }                 // crate
+    else if(t<0.8){ const w=2.2+rnd()*1.8, h=1.0+rnd()*0.4, d=0.8+rnd()*0.5; spawnProp('box', [jx, gy+h/2, jz, 0,ry,0, w, h, d]); }   // low shoot-over cover
+    else { const w=0.8+rnd()*0.6, h=2.4+rnd()*1.4; spawnProp('box', [jx, gy+h/2, jz, 0,ry,0, w, h, w]); }                     // pillar
+    placed++;
+  }
+  return placed;
+}
+// Pickups: a spread of weapons + health + ammo + a few powerups. clearAt-validated so nothing seeds inside a
+// wall or on a cover prop (scatter cover BEFORE this so its colliders are in place).
+function _genSeedPickups(rnd, pool, gndAt){
+  const place=(kind)=>{ while(pool.length){ const s=pool.pop(); if(typeof clearAt==='function' && !clearAt(s[0],s[1],gndAt(s[0],s[1]))) continue; pickupSpots.push({ x:+s[0].toFixed(2), z:+s[1].toFixed(2), kind }); return true; } return false; };
+  const n=pool.length;
+  const weps=['rifle','smg','shotgun','sniper','launcher']; const nWep=Math.max(3, Math.min(weps.length, Math.round(n*0.10)));
+  for(let i=0;i<nWep;i++) place(weps[i]);
+  for(let i=0, h=Math.min(8, Math.max(2, Math.round(n*0.08))); i<h; i++) place('health');
+  for(let i=0, a=Math.min(8, Math.max(2, Math.round(n*0.08))); i<a; i++) place('ammo');
+  const pw=['damage','speed','shield']; for(let i=0, k=Math.min(3, Math.max(1, Math.round(n*0.05))); i<k; i++) place(pw[i%3]);
+  if(typeof refreshPickupMarkers==='function') refreshPickupMarkers();
+}
+// Objective: drop the extraction point in the spot farthest from the player start (only used in extract mode,
+// harmless otherwise) so a generated map is ready for objective play.
+function _genPlaceExtract(spots, sx, sz){
+  if(!spots || !spots.length) return; let best=spots[0], bd=-1;
+  for(const s of spots){ const d=(s[0]-sx)*(s[0]-sx)+(s[1]-sz)*(s[1]-sz); if(d>bd){ bd=d; best=s; } }
+  extractSpot={ x:+best[0].toFixed(2), z:+best[1].toFixed(2) }; if(typeof refreshExtractMarker==='function') refreshExtractMarker();
+}
 function generateMaze(opts){
   opts=opts||{};
   const C=Math.max(4, Math.min(16, (opts.cells|0) || 9));
@@ -9453,6 +9491,11 @@ function generateMaze(opts){
     if(i<C-1 && !openH[i][j]) hwall(cx(j), -half+(i+1)*cell);   // interior south wall of (i,j)
     if(j<C-1 && !openV[i][j]) vwall(-half+(j+1)*cell, cz(i));   // interior east wall of (i,j)
   }
+  // build 560: scatter cover + seed gameplay across the open cells (maze corridors are wide, so any cell is fine for sparse cover)
+  const sx=cx(0), sz=cz(0);   // player start cell (keep it clear)
+  const spots=[]; for(let i=0;i<C;i++) for(let j=0;j<C;j++){ if(i===0&&j===0) continue; const x=cx(j), z=cz(i); if((x-sx)*(x-sx)+(z-sz)*(z-sz) < (cell*1.4)*(cell*1.4)) continue; spots.push([x,z]); }
+  if(opts.cover!==false){ const cv=spots.slice(); _genShuffle(rnd, cv); _genScatterCover(rnd, cv, gndAt, 0.16); }
+  if(opts.loot!==false){ _genPlaceExtract(spots, sx, sz); const pk=spots.slice(); _genShuffle(rnd, pk); _genSeedPickups(rnd, pk, gndAt); }
   // budgeted warm point lights through the maze (engine caps the active set at 16; nearest-N culling handles any extra)
   const step=Math.max(2, Math.round(C/4)); let placed=0;
   for(let i=1;i<C && placed<14;i+=step) for(let j=1;j<C && placed<14;j+=step){
@@ -9512,6 +9555,13 @@ function generateOffice(opts){
   const used=[]; for(let i=0;i<G;i++) used.push(new Array(G).fill(false));
   for(let r=0;r<G;r++){ let c=0; while(c<G){ if(wall[r][c] && !used[r][c]){ let k=c; while(k<G && wall[r][k] && !used[r][k]) k++; if(k-c>=2){ for(let x=c;x<k;x++) used[r][x]=true; const x0=cx(c)-cell/2, x1=cx(k-1)+cell/2, mx=(x0+x1)/2; spawnProp('box', [mx, gndAt(mx,cz(r))+wallH/2, cz(r), 0,0,0, (x1-x0), wallH, cell]); c=k; } else c++; } else c++; } }
   for(let c=0;c<G;c++){ let r=0; while(r<G){ if(wall[r][c] && !used[r][c]){ let k=r; while(k<G && wall[k][c] && !used[k][c]) k++; for(let y=r;y<k;y++) used[y][c]=true; const z0=cz(r)-cell/2, z1=cz(k-1)+cell/2, mz=(z0+z1)/2; spawnProp('box', [cx(c), gndAt(cx(c),mz)+wallH/2, mz, 0,0,0, cell, wallH, (z1-z0)]); r=k; } else r++; } }
+  // build 560: scatter cover (only in "roomy" cells, never narrow corridors) + seed gameplay across all floor cells
+  const isFloor=(r,c)=> (r>=0&&c>=0&&r<G&&c<G&&!wall[r][c]);
+  const sx=rooms.length?cx(rooms[0][1]):0, sz=rooms.length?cz(rooms[0][0]):0;
+  const floorSpots=[], coverSpots=[];
+  for(let r=0;r<G;r++) for(let c=0;c<G;c++){ if(!isFloor(r,c)) continue; const x=cx(c), z=cz(r); if((x-sx)*(x-sx)+(z-sz)*(z-sz) < (cell*2.2)*(cell*2.2)) continue; floorSpots.push([x,z]); const nb=(isFloor(r-1,c)?1:0)+(isFloor(r+1,c)?1:0)+(isFloor(r,c-1)?1:0)+(isFloor(r,c+1)?1:0); if(nb>=3) coverSpots.push([x,z]); }   // roomy = 3+ open neighbours -> not a 1-wide hallway
+  if(opts.cover!==false){ _genShuffle(rnd, coverSpots); _genScatterCover(rnd, coverSpots, gndAt, 0.22); }
+  if(opts.loot!==false){ _genPlaceExtract(floorSpots, sx, sz); const pk=floorSpots.slice(); _genShuffle(rnd, pk); _genSeedPickups(rnd, pk, gndAt); }
   // one cool overhead light per room (office fluorescent feel), budgeted under the active-light cap
   let placed=0; const lstep=Math.max(1, Math.ceil(rooms.length/13));
   for(let i=0;i<rooms.length && placed<14;i+=lstep){ const [r,c]=rooms[i]; if(typeof buildLight==='function'){ buildLight({ type:'point', color:0xeaf2ff, intensity:7, distance:cell*5, t:[cx(c), gndAt(cx(c),cz(r))+wallH*0.82, cz(r)] }); placed++; } }
@@ -9542,9 +9592,13 @@ function renderGeneratePanel(){
   const num=document.createElement('span'); num.style.cssText='width:64px;color:#cfeee2;font-size:12px;'; const sizeLbl=()=> isMaze?(_genCells+'\u00d7'+_genCells):'~'+(_genCells*2+8)+' wide'; num.textContent=sizeLbl();
   rng.oninput=()=>{ _genCells=+rng.value; num.textContent=sizeLbl(); };
   row.appendChild(sp); row.appendChild(rng); row.appendChild(num); host.appendChild(row);
+  // content toggles
+  const mkChk=(label,get,set)=>{ const l=document.createElement('label'); l.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:11px;margin:3px 0;cursor:pointer;'; const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=get(); cb.style.accentColor='var(--accent)'; cb.onchange=()=>set(cb.checked); const s=document.createElement('span'); s.innerHTML=label; l.appendChild(cb); l.appendChild(s); host.appendChild(l); };
+  mkChk('<b>Scatter cover</b> \u2014 crates, low barriers, pillars', ()=>_genCover, v=>{ _genCover=v; });
+  mkChk('<b>Seed weapons &amp; pickups</b> \u2014 guns, health, ammo, powerups + an extraction point', ()=>_genLoot, v=>{ _genLoot=v; });
   // generate
   const btn=document.createElement('button'); btn.textContent='\u2699 Generate '+(isMaze?'maze':'office'); btn.style.cssText='width:100%;background:var(--accent);color:#05070a;font-weight:700;border:none;padding:9px;border-radius:6px;margin:4px 0;cursor:pointer;';
-  btn.onclick=()=>{ if(isMaze) generateMaze({ cells:_genCells }); else generateOffice({ cells:_genCells }); };
+  btn.onclick=()=>{ const o={ cells:_genCells, cover:_genCover, loot:_genLoot }; if(isMaze) generateMaze(o); else generateOffice(o); };
   host.appendChild(btn);
   const seedLine=document.createElement('div'); seedLine.className='hint'; seedLine.style.cssText='font-size:10px;opacity:0.7;margin-top:4px;'; seedLine.textContent=_lastMazeSeed?('Last seed: '+_lastMazeSeed+' \u00b7 each click rolls a new one'):'Each click makes a new unique layout.'; host.appendChild(seedLine);
 }
@@ -13094,7 +13148,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 559 · 2026-06-19';
+const BUILD_VERSION = 'build 560 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
