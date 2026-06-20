@@ -9458,7 +9458,7 @@ function removeFireZone(i){ pushUndoSnapshot(); fireZones.splice(i,1); if(selFir
 // bots) spawn via randomSpawn(), which validates points against geometry, so they land in open corridors.
 // Seeded with a small PRNG so a given seed reproduces the same maze (each click rolls a fresh random seed).
 function _mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15, 1|a); t=t+Math.imul(t^t>>>7, 61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
-let _genCells=9, _lastMazeSeed=0, _genCover=true, _genLoot=true, _genTex=true;
+let _genCells=9, _lastMazeSeed=0, _genCover=true, _genLoot=true, _genTex=true, _genDesc='';
 const _GEN_FLOOR_TEX=['wood','tiles','concrete','carpet','marble'];
 const _GEN_WALL_TEX=['concrete','plaster','brick','painted','stone'];
 // build 562: after a layout is built, asynchronously pick a random Poly Haven (CC0) texture for the floor and
@@ -9466,11 +9466,11 @@ const _GEN_WALL_TEX=['concrete','plaster','brick','painted','stone'];
 // texture tiled to its own world size (consistent density across boxes); the remaining seams between separate
 // boxes are hidden by favoring non-directional materials. Walls use diffuse-only + a quantized repeat so many
 // boxes share a handful of GPU textures (memory). Seeded picks (captured up front) keep a given seed reproducible.
-function _genApplyTextures(rnd, floorProp, wallProps, tile, span){
+function _genApplyTextures(rnd, floorProp, wallProps, tile, span, floorKw, wallKw){
   if(typeof texSearch!=='function' || typeof texResolvePBR!=='function' || typeof applyPropTexturePBR!=='function') return;
   if(typeof creditAsset==='function') creditAsset('Poly Haven \u2014 polyhaven.com (CC0)');
-  const fKw=_GEN_FLOOR_TEX[(rnd()*_GEN_FLOOR_TEX.length)|0], fPick=rnd();
-  const wKw=_GEN_WALL_TEX[(rnd()*_GEN_WALL_TEX.length)|0], wPick=rnd();
+  const fKw=floorKw||_GEN_FLOOR_TEX[(rnd()*_GEN_FLOOR_TEX.length)|0], fPick=rnd();
+  const wKw=wallKw||_GEN_WALL_TEX[(rnd()*_GEN_WALL_TEX.length)|0], wPick=rnd();
   if(floorProp) texSearch(fKw, hits=>{ if(!hits||!hits.length) return; const h=hits[Math.min(hits.length-1,(fPick*hits.length)|0)]; texResolvePBR(h.id, false, pbr=>{ if(!floorProp||!pbr||!pbr.map) return; const rp=Math.max(1, Math.round(span/tile)); floorProp.userData.texRepeat=[rp,rp]; applyPropTexturePBR(floorProp, pbr); }, ()=>{}); }, ()=>{});
   if(wallProps && wallProps.length) texSearch(wKw, hits=>{ if(!hits||!hits.length) return; const h=hits[Math.min(hits.length-1,(wPick*hits.length)|0)]; texResolvePBR(h.id, false, pbr=>{ if(!pbr||!pbr.map) return; for(const o of wallProps){ if(!o||!o.scale) continue; const longD=Math.max(o.scale.x,o.scale.z); const u=Math.max(1,Math.min(8,Math.round(longD/tile))), v=Math.max(1,Math.round(o.scale.y/tile)); o.userData.texRepeat=[u,v]; applyPropTexturePBR(o, { map:pbr.map }); } }, ()=>{}); }, ()=>{});
 }
@@ -9511,6 +9511,125 @@ function _genPlaceExtract(spots, sx, sz){
   if(!spots || !spots.length) return; let best=spots[0], bd=-1;
   for(const s of spots){ const d=(s[0]-sx)*(s[0]-sx)+(s[1]-sz)*(s[1]-sz); if(d>bd){ bd=d; best=s; } }
   extractSpot={ x:+best[0].toFixed(2), z:+best[1].toFixed(2) }; if(typeof refreshExtractMarker==='function') refreshExtractMarker();
+}
+// ===== build 567: scene-from-description engine =====
+// Turn a phrase like "a convenience store in a post-apocalyptic world" into a furnished layout: keywords pick
+// the floor/wall textures + a light mood (reusing the build-562 Poly Haven pipeline) and a curated set of props
+// placed in sensible spots (desks on walls, plants in corners, tables in the open). The parser/zoner/planner
+// below are pure + deterministic (unit-tested); the executor that actually searches Poly Pizza is thin glue.
+const SCENE_CATALOG = {
+  couch:    { terms:'sofa couch',        size:2.2, zone:'wall',   n:2 },
+  chair:    { terms:'armchair chair',    size:0.9, zone:'center', n:4 },
+  table:    { terms:'coffee table',      size:1.3, zone:'center', n:2 },
+  desk:     { terms:'reception desk',    size:2.2, zone:'wall',   n:1 },
+  counter:  { terms:'store counter',     size:2.0, zone:'wall',   n:1 },
+  plant:    { terms:'potted plant',      size:1.5, zone:'corner', n:4 },
+  shelf:    { terms:'shelving shelf',    size:1.9, zone:'wall',   n:3 },
+  bookshelf:{ terms:'bookshelf',         size:1.9, zone:'wall',   n:2 },
+  crate:    { terms:'wooden crate',      size:1.0, zone:'any',    n:5 },
+  barrel:   { terms:'barrel',            size:1.0, zone:'any',    n:4 },
+  locker:   { terms:'locker',            size:1.9, zone:'wall',   n:3 },
+  cabinet:  { terms:'cabinet',           size:1.6, zone:'wall',   n:2 },
+  bed:      { terms:'bed',               size:2.0, zone:'wall',   n:2 },
+  lamp:     { terms:'floor lamp',        size:1.7, zone:'corner', n:2 },
+  rug:      { terms:'rug',               size:2.6, zone:'center', n:1 },
+  fridge:   { terms:'refrigerator',      size:1.8, zone:'wall',   n:1 },
+  cart:     { terms:'shopping cart',     size:1.0, zone:'any',    n:2 },
+  register: { terms:'cash register',     size:0.6, zone:'wall',   n:1 },
+  tv:       { terms:'television',        size:1.2, zone:'wall',   n:1 },
+  sign:     { terms:'sign',              size:1.4, zone:'wall',   n:2 },
+  trashcan: { terms:'trash can',         size:0.9, zone:'corner', n:2 },
+  vending:  { terms:'vending machine',   size:1.9, zone:'wall',   n:2 }
+};
+// word -> catalog category (plurals + common synonyms). First match wins per word.
+const SCENE_SYN = {
+  sofa:'couch', sofas:'couch', couch:'couch', couches:'couch', settee:'couch',
+  chair:'chair', chairs:'chair', armchair:'chair', seat:'chair', seating:'chair', stool:'chair',
+  table:'table', tables:'table',
+  desk:'desk', desks:'desk', reception:'desk', registration:'desk',
+  counter:'counter', counters:'counter', checkout:'counter',
+  plant:'plant', plants:'plant', tree:'plant', trees:'plant', greenery:'plant', fern:'plant',
+  shelf:'shelf', shelves:'shelf', shelving:'shelf', rack:'shelf', racks:'shelf',
+  bookshelf:'bookshelf', bookshelves:'bookshelf', bookcase:'bookshelf',
+  crate:'crate', crates:'crate', box:'crate', boxes:'crate',
+  barrel:'barrel', barrels:'barrel', drum:'barrel', drums:'barrel',
+  locker:'locker', lockers:'locker',
+  cabinet:'cabinet', cabinets:'cabinet', dresser:'cabinet',
+  bed:'bed', beds:'bed', cot:'bed',
+  lamp:'lamp', lamps:'lamp',
+  rug:'rug', rugs:'rug', carpet:'rug',
+  fridge:'fridge', refrigerator:'fridge', cooler:'fridge', freezer:'fridge',
+  cart:'cart', carts:'cart', trolley:'cart',
+  register:'register', registers:'register', till:'register',
+  tv:'tv', television:'tv', televisions:'tv', monitor:'tv', screen:'tv',
+  sign:'sign', signs:'sign', signage:'sign',
+  trash:'trashcan', garbage:'trashcan', bin:'trashcan', dumpster:'trashcan',
+  vending:'vending', machine:'vending'
+};
+// theme word -> floor/wall texture search term + light mood. First match wins.
+const SCENE_THEMES = [
+  { k:['apocalyptic','apocalypse','ruined','abandoned','derelict','wasteland','postapocalyptic'], floor:'concrete', wall:'rust',     mood:'dim'  },
+  { k:['hotel','lobby','luxury','ballroom','suite','elegant'],                                     floor:'marble',   wall:'plaster',  mood:'warm' },
+  { k:['office','corporate','cubicle','workplace'],                                                floor:'carpet',   wall:'plaster',  mood:'cool' },
+  { k:['store','shop','convenience','supermarket','market','retail'],                              floor:'tiles',    wall:'concrete', mood:'bright'},
+  { k:['warehouse','factory','industrial','workshop','garage'],                                    floor:'concrete', wall:'concrete', mood:'cool' },
+  { k:['cabin','rustic','wood','wooden','lodge'],                                                  floor:'wood',     wall:'wood',     mood:'warm' },
+  { k:['bunker','vault','prison','cell','dungeon'],                                                floor:'concrete', wall:'painted',  mood:'dim'  },
+  { k:['lab','laboratory','clinic','hospital','clean'],                                            floor:'tiles',    wall:'plaster',  mood:'bright'}
+];
+const SCENE_MOOD = { dim:{ color:0xffb070, intensity:1.8 }, warm:{ color:0xffdca8, intensity:3 }, cool:{ color:0xdfeaff, intensity:3 }, bright:{ color:0xffffff, intensity:4 } };
+// Pure parse: text -> { cats:[...], floor, wall, mood }. cats are unique catalog keys in first-seen order.
+function _parseSceneSpec(text){
+  const words = String(text||'').toLowerCase().split(/[^a-z]+/).filter(Boolean);
+  const cats=[], seen={};
+  for(const w of words){ const c = SCENE_SYN[w]; if(c && SCENE_CATALOG[c] && !seen[c]){ seen[c]=1; cats.push(c); } }
+  let floor=null, wall=null, mood=null;
+  for(const t of SCENE_THEMES){ if(t.k.some(k=>words.indexOf(k)>=0)){ floor=t.floor; wall=t.wall; mood=t.mood; break; } }
+  return { cats, floor, wall, mood };
+}
+// Pure zone of one cell from its 4 open-neighbour flags. center=open interior, edge=against one wall,
+// corner=two perpendicular walls, corridor=a 1-wide through-path (skip furniture), nook=dead-end-ish.
+function _sceneCellZone(n, s, e, w){
+  const c = (n?1:0)+(s?1:0)+(e?1:0)+(w?1:0);
+  if(c>=4) return 'center';
+  if(c===3) return 'edge';
+  if(c===2) return ((n&&s)||(e&&w)) ? 'corridor' : 'corner';
+  return 'nook';
+}
+// Pure plan: given catalog cats + zone spot pools {wall,corner,center}, assign each cat to spots in its preferred
+// zone, popping so nothing doubles up; 'any' + fallbacks pull from whatever pool still has room. Returns
+// placements [{cat, term, size, x, z, yaw}]; cap bounds the total.
+function _planFurnish(cats, pools, rnd, cap){
+  cap = cap || 40; const out=[];
+  const pop  = z => (pools[z] && pools[z].length ? pools[z].pop() : null);
+  const take = z => z==='any' ? (pop('center')||pop('wall')||pop('corner')) : pop(z);
+  for(const cat of cats){
+    const spec = SCENE_CATALOG[cat]; if(!spec) continue;
+    for(let i=0;i<spec.n && out.length<cap;i++){
+      let sp = take(spec.zone);
+      if(!sp) sp = pop('center')||pop('wall')||pop('corner');   // preferred zone empty -> any remaining spot
+      if(!sp) break;
+      out.push({ cat, term:spec.terms, size:spec.size, x:sp.x, z:sp.z, yaw:(sp.yaw!=null?sp.yaw:(rnd?rnd()*Math.PI*2:0)) });
+    }
+  }
+  return out;
+}
+// Async glue (not unit-tested — network): for each planned placement, search Poly Pizza, drop the first usable
+// result in at its planned spot, fit to the category's real-world size, ground it, credit it. Gentle stagger.
+function _furnishExecute(placements){
+  if(!placements || !placements.length) return;
+  if(typeof ppSearch!=='function' || (typeof ppGetKey==='function' && !ppGetKey())){ if(typeof toast==='function') toast('Add a Poly Pizza API key (Models tab) to furnish from a description'); return; }
+  let i=0;
+  const next=()=>{
+    if(i>=placements.length) return;
+    const p=placements[i++];
+    ppSearch(p.term, (models)=>{
+      const m = (models||[]).find(x=>x && x.glb);
+      if(m) spawnProp(m.glb, [p.x, 0, p.z, 0, p.yaw, 0, 1], (obj)=>{ if(!obj) return; if(m.attribution) obj.userData.attribution=m.attribution; _fitPropToSize(obj, p.size); if(typeof renderModelCredits==='function') renderModelCredits(); }, undefined, 'loop', null, ()=>{});
+      setTimeout(next, 120);
+    }, ()=>{ setTimeout(next, 120); });
+  };
+  next();
 }
 function generateMaze(opts){
   opts=opts||{};
@@ -9593,6 +9712,8 @@ let _genType='maze';   // build 558: which auto-generate layout the panel button
 // reachable; corridors punch through the thin walls between rooms, which is where the doorways come from.
 function generateOffice(opts){
   opts=opts||{};
+  const spec = _parseSceneSpec(opts.desc||'');   // build 567: keywords -> textures + light mood + a furniture plan
+  const lm = (spec.mood && SCENE_MOOD[spec.mood]) ? SCENE_MOOD[spec.mood] : null;
   const size=Math.max(5, Math.min(14, (opts.cells|0) || 9));
   const G=Math.max(16, Math.min(40, size*2 + 8));     // floorplan grid (finer than the maze: a room spans several cells)
   const seed=(opts.seed!=null)?(opts.seed>>>0):((Math.random()*0xffffffff)>>>0);
@@ -9634,18 +9755,26 @@ function generateOffice(opts){
   const isFloor=(r,c)=> (r>=0&&c>=0&&r<G&&c<G&&!wall[r][c]);
   const sx=rooms.length?cx(rooms[0][1]):0, sz=rooms.length?cz(rooms[0][0]):0;
   const floorSpots=[], coverSpots=[];
-  for(let r=0;r<G;r++) for(let c=0;c<G;c++){ if(!isFloor(r,c)) continue; const x=cx(c), z=cz(r); if((x-sx)*(x-sx)+(z-sz)*(z-sz) < (cell*2.2)*(cell*2.2)) continue; floorSpots.push([x,z]); const nb=(isFloor(r-1,c)?1:0)+(isFloor(r+1,c)?1:0)+(isFloor(r,c-1)?1:0)+(isFloor(r,c+1)?1:0); if(nb>=3) coverSpots.push([x,z]); }   // roomy = 3+ open neighbours -> not a 1-wide hallway
+  const zonePools={ wall:[], corner:[], center:[] };   // build 567: spots for furniture, by where they sit in a room
+  for(let r=0;r<G;r++) for(let c=0;c<G;c++){ if(!isFloor(r,c)) continue; const x=cx(c), z=cz(r); if((x-sx)*(x-sx)+(z-sz)*(z-sz) < (cell*2.2)*(cell*2.2)) continue; floorSpots.push([x,z]);
+    const n=isFloor(r-1,c), s2=isFloor(r+1,c), e=isFloor(r,c+1), w=isFloor(r,c-1);
+    if((n?1:0)+(s2?1:0)+(e?1:0)+(w?1:0)>=3) coverSpots.push([x,z]);   // roomy = 3+ open neighbours -> not a 1-wide hallway
+    const zone=_sceneCellZone(n,s2,e,w);
+    if(zone!=='corridor'){ const ox=(e?1:0)-(w?1:0), oz=(s2?1:0)-(n?1:0); const spot={ x:+x.toFixed(2), z:+z.toFixed(2), yaw:((ox||oz)?Math.atan2(ox,oz):0) };
+      if(zone==='center') zonePools.center.push(spot); else if(zone==='edge') zonePools.wall.push(spot); else zonePools.corner.push(spot); }
+  }
   if(opts.cover!==false){ _genShuffle(rnd, coverSpots); _genScatterCover(rnd, coverSpots, gndAt, 0.22); }
   if(opts.loot!==false){ _genPlaceExtract(floorSpots, sx, sz); const pk=floorSpots.slice(); _genShuffle(rnd, pk); _genSeedPickups(rnd, pk, gndAt); }
   // one cool overhead light per room (office fluorescent feel), budgeted under the active-light cap
   let placed=0; const lstep=Math.max(1, Math.ceil(rooms.length/13));
-  for(let i=0;i<rooms.length && placed<14;i+=lstep){ const [r,c]=rooms[i]; if(typeof buildLight==='function'){ buildLight({ type:'point', color:0xeaf2ff, intensity:3, distance:cell*5, t:[cx(c), gndAt(cx(c),cz(r))+wallH*0.82, cz(r)] }); placed++; } }
+  for(let i=0;i<rooms.length && placed<14;i+=lstep){ const [r,c]=rooms[i]; if(typeof buildLight==='function'){ buildLight({ type:'point', color:(lm?lm.color:0xeaf2ff), intensity:(lm?lm.intensity:3), distance:cell*5, t:[cx(c), gndAt(cx(c),cz(r))+wallH*0.82, cz(r)] }); placed++; } }
   if(typeof buildLight==='function') buildLight({ type:'point', color:0xfff0d8, intensity:2.5, distance:span*0.7, t:[0, gndAt(0,0)+wallH*1.7, 0] });   // soft global fill
   // player start in the first room; a few enemy spawns spread across rooms (wave / co-op support)
   if(rooms.length){ const [r,c]=rooms[0]; playerSpawn.x=+cx(c).toFixed(2); playerSpawn.z=+cz(r).toFixed(2); playerSpawn.y=0; playerSpawn.yaw=Math.atan2(-cx(c), -cz(r)); if(typeof refreshPlayerSpawnMarker==='function') refreshPlayerSpawnMarker(); }
   const sstep=Math.max(1, Math.floor(rooms.length/4));
   for(let i=0, n=0; i<rooms.length && n<5; i+=sstep, n++){ const [r,c]=rooms[i]; if(typeof buildSpawnMarker==='function') buildSpawnMarker({ mode:'hunt', t:[cx(c), cz(r)], face:0 }); }
-  if(opts.tex!==false) _genApplyTextures(rnd, floorProp, wallProps, 4, span);   // build 562: random Poly Haven textures
+  if(opts.tex!==false) _genApplyTextures(rnd, floorProp, wallProps, 4, span, spec.floor, spec.wall);   // build 567: description-driven textures (falls back to random when no theme matched)
+  if(spec.cats.length){ _genShuffle(rnd, zonePools.wall); _genShuffle(rnd, zonePools.corner); _genShuffle(rnd, zonePools.center); _furnishExecute(_planFurnish(spec.cats, zonePools, rnd)); }   // build 567: place curated, sized props from the description
   if(gameCfg && gameCfg.spawnRegion) gameCfg.spawnRegion.on=false;
   NAV.built=false;
   if(typeof refreshSpawnRegionMarker==='function') refreshSpawnRegionMarker();
@@ -9668,6 +9797,13 @@ function renderGeneratePanel(){
   const num=document.createElement('span'); num.style.cssText='width:64px;color:#cfeee2;font-size:12px;'; const sizeLbl=()=> isMaze?(_genCells+'\u00d7'+_genCells):'~'+(_genCells*2+8)+' wide'; num.textContent=sizeLbl();
   rng.oninput=()=>{ _genCells=+rng.value; num.textContent=sizeLbl(); };
   row.appendChild(sp); row.appendChild(rng); row.appendChild(num); host.appendChild(row);
+  // build 567: scene description (office only — furniture wants rooms). Themes textures + places curated props.
+  if(!isMaze){
+    const dl=document.createElement('div'); dl.className='hint'; dl.style.margin='6px 0 2px'; dl.innerHTML='<b>Describe the scene</b> \u2014 optional (themes the textures + furnishes rooms)';
+    const dt=document.createElement('textarea'); dt.value=_genDesc; dt.placeholder='e.g. a hotel lobby with couches, plants, a reception desk'; dt.rows=2;
+    dt.style.cssText='width:100%;box-sizing:border-box;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:5px 7px;font-size:12px;resize:vertical;'; dt.oninput=()=>{ _genDesc=dt.value; };
+    host.appendChild(dl); host.appendChild(dt);
+  }
   // content toggles
   const mkChk=(label,get,set)=>{ const l=document.createElement('label'); l.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:11px;margin:3px 0;cursor:pointer;'; const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=get(); cb.style.accentColor='var(--accent)'; cb.onchange=()=>set(cb.checked); const s=document.createElement('span'); s.innerHTML=label; l.appendChild(cb); l.appendChild(s); host.appendChild(l); };
   mkChk('<b>Scatter cover</b> \u2014 crates, low barriers, pillars', ()=>_genCover, v=>{ _genCover=v; });
@@ -9675,7 +9811,7 @@ function renderGeneratePanel(){
   mkChk('<b>Textured surfaces</b> \u2014 random Poly Haven floor + walls (CC0)', ()=>_genTex, v=>{ _genTex=v; });
   // generate
   const btn=document.createElement('button'); btn.textContent='\u2699 Generate '+(isMaze?'maze':'office'); btn.style.cssText='width:100%;background:var(--accent);color:#05070a;font-weight:700;border:none;padding:9px;border-radius:6px;margin:4px 0;cursor:pointer;';
-  btn.onclick=()=>{ const o={ cells:_genCells, cover:_genCover, loot:_genLoot, tex:_genTex }; if(isMaze) generateMaze(o); else generateOffice(o); };
+  btn.onclick=()=>{ const o={ cells:_genCells, cover:_genCover, loot:_genLoot, tex:_genTex }; if(isMaze) generateMaze(o); else generateOffice(Object.assign(o,{ desc:_genDesc })); };
   host.appendChild(btn);
   const seedLine=document.createElement('div'); seedLine.className='hint'; seedLine.style.cssText='font-size:10px;opacity:0.7;margin-top:4px;'; seedLine.textContent=_lastMazeSeed?('Last seed: '+_lastMazeSeed+' \u00b7 each click rolls a new one'):'Each click makes a new unique layout.'; host.appendChild(seedLine);
 }
@@ -13225,7 +13361,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 566 · 2026-06-19';
+const BUILD_VERSION = 'build 567 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
