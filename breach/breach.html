@@ -7771,7 +7771,7 @@ function buildLight(opts){
     new THREE.SphereGeometry(0.45, 12, 12),
     new THREE.MeshBasicMaterial({ color: mcol, wireframe: true, transparent: true, opacity: 0.85 })
   );
-  marker.visible = false;   // shown only while the editor is open (toggleEditor handles it)
+  marker.visible = !!(typeof editorOpen!=='undefined' && editorOpen);   // visible while the editor is open, so lights added/generated mid-session are immediately selectable (toggleEditor flips them with the editor)
   g.add(marker);
   g.userData.light = light;
   g.userData.marker = marker;
@@ -9545,15 +9545,24 @@ function generateMaze(opts){
   const gndAt=(x,z)=> (typeof terrainHeightAt==='function'?terrainHeightAt(x,z):0);   // used for LIGHT heights (lights are placed at absolute world Y). Walls/cover pass t[1]=0 — the box origin is its base and finalizeProp lifts it onto the terrain (passing a height here would double-count it; +wallH/2 was the build-557/559 hover).
   const cx=(j)=> -half+(j+0.5)*cell, cz=(i)=> -half+(i+0.5)*cell;   // cell-center world X / Z
   const wallProps=[]; let floorProp=null;
-  const hwall=(x,z)=> spawnProp('box', [x, 0, z, 0,0,0, cell+th, wallH, th], o=>{ if(o) wallProps.push(o); });   // wall running along X
-  const vwall=(x,z)=> spawnProp('box', [x, 0, z, 0,0,0, th, wallH, cell+th], o=>{ if(o) wallProps.push(o); });   // wall running along Z
+  const VOFF=0.05;   // build 565: verticals a hair taller so coplanar tops where walls meet don't z-fight (flashing seams)
+  const hwall=(x,z,L)=> spawnProp('box', [x, 0, z, 0,0,0, L, wallH, th], o=>{ if(o) wallProps.push(o); });        // wall running along X
+  const vwall=(x,z,L)=> spawnProp('box', [x, 0, z, 0,0,0, th, wallH+VOFF, L], o=>{ if(o) wallProps.push(o); });   // wall running along Z
   if(opts.tex!==false) spawnProp('box', [0, -0.47, 0, 0,0,0, span+cell, 0.5, span+cell], o=>{ floorProp=o; });   // build 562: a single floor plane (top ~at terrain) to texture as one seamless piece
-  for(let j=0;j<C;j++){ hwall(cx(j), -half); hwall(cx(j), half); }   // outer N/S boundary
-  for(let i=0;i<C;i++){ vwall(-half, cz(i)); vwall(half, cz(i)); }   // outer W/E boundary
+  // build 565: merge collinear wall segments into single boxes. The old per-cell-edge boxes overlapped their
+  // neighbours by `th`, and the overlapping coplanar faces z-fought (the flashing seams). One box per run = no
+  // overlap (and far fewer props). Build a segment grid on the C+1 horizontal + C+1 vertical grid lines, then
+  // greedily merge each line's runs. The +th on each run still laps the corners so junctions stay gap-free.
+  const hSeg=[], vSeg=[];
+  for(let line=0; line<=C; line++){ hSeg.push(new Array(C).fill(false)); vSeg.push(new Array(C).fill(false)); }
+  for(let j=0;j<C;j++){ hSeg[0][j]=true; hSeg[C][j]=true; }   // outer N/S boundary
+  for(let i=0;i<C;i++){ vSeg[0][i]=true; vSeg[C][i]=true; }   // outer W/E boundary
   for(let i=0;i<C;i++) for(let j=0;j<C;j++){
-    if(i<C-1 && !openH[i][j]) hwall(cx(j), -half+(i+1)*cell);   // interior south wall of (i,j)
-    if(j<C-1 && !openV[i][j]) vwall(-half+(j+1)*cell, cz(i));   // interior east wall of (i,j)
+    if(i<C-1 && !openH[i][j]) hSeg[i+1][j]=true;   // interior south wall of (i,j) sits on horizontal line i+1
+    if(j<C-1 && !openV[i][j]) vSeg[j+1][i]=true;   // interior east wall of (i,j) sits on vertical line j+1
   }
+  for(let line=0; line<=C; line++){ let j=0; while(j<C){ if(hSeg[line][j]){ let k=j; while(k<C && hSeg[line][k]) k++; const x0=-half+j*cell, x1=-half+k*cell; hwall((x0+x1)/2, -half+line*cell, (x1-x0)+th); j=k; } else j++; } }
+  for(let line=0; line<=C; line++){ let i=0; while(i<C){ if(vSeg[line][i]){ let k=i; while(k<C && vSeg[line][k]) k++; const z0=-half+i*cell, z1=-half+k*cell; vwall(-half+line*cell, (z0+z1)/2, (z1-z0)+th); i=k; } else i++; } }
   // build 560: scatter cover + seed gameplay across the open cells (maze corridors are wide, so any cell is fine for sparse cover)
   const sx=cx(0), sz=cz(0);   // player start cell (keep it clear)
   const spots=[]; for(let i=0;i<C;i++) for(let j=0;j<C;j++){ if(i===0&&j===0) continue; const x=cx(j), z=cz(i); if((x-sx)*(x-sx)+(z-sz)*(z-sz) < (cell*1.4)*(cell*1.4)) continue; spots.push([x,z]); }
@@ -9562,9 +9571,9 @@ function generateMaze(opts){
   // budgeted warm point lights through the maze (engine caps the active set at 16; nearest-N culling handles any extra)
   const step=Math.max(2, Math.round(C/4)); let placed=0;
   for(let i=1;i<C && placed<14;i+=step) for(let j=1;j<C && placed<14;j+=step){
-    if(typeof buildLight==='function'){ buildLight({ type:'point', color:0xffdca8, intensity:9, distance:cell*2.4, t:[cx(j), gndAt(cx(j),cz(i))+wallH*0.78, cz(i)] }); placed++; }
+    if(typeof buildLight==='function'){ buildLight({ type:'point', color:0xffdca8, intensity:3, distance:cell*2.4, t:[cx(j), gndAt(cx(j),cz(i))+wallH*0.78, cz(i)] }); placed++; }
   }
-  if(typeof buildLight==='function') buildLight({ type:'point', color:0xbfe0ff, intensity:6, distance:span*0.8, t:[0, gndAt(0,0)+wallH*1.6, 0] });   // cool key light over center
+  if(typeof buildLight==='function') buildLight({ type:'point', color:0xbfe0ff, intensity:2.5, distance:span*0.8, t:[0, gndAt(0,0)+wallH*1.6, 0] });   // cool key light over center
   // player start in a corner cell, facing the maze
   playerSpawn.x=+cx(0).toFixed(2); playerSpawn.z=+cz(0).toFixed(2); playerSpawn.y=0; playerSpawn.yaw=Math.atan2(-cx(0), -cz(0));
   if(typeof refreshPlayerSpawnMarker==='function') refreshPlayerSpawnMarker();
@@ -9620,7 +9629,7 @@ function generateOffice(opts){
   // emit walls, merging contiguous cells into longer boxes (fewer props): horizontal runs first, then vertical leftovers
   const used=[]; for(let i=0;i<G;i++) used.push(new Array(G).fill(false));
   for(let r=0;r<G;r++){ let c=0; while(c<G){ if(wall[r][c] && !used[r][c]){ let k=c; while(k<G && wall[r][k] && !used[r][k]) k++; if(k-c>=2){ for(let x=c;x<k;x++) used[r][x]=true; const x0=cx(c)-cell/2, x1=cx(k-1)+cell/2, mx=(x0+x1)/2; spawnProp('box', [mx, 0, cz(r), 0,0,0, (x1-x0), wallH, cell], o=>{ if(o) wallProps.push(o); }); c=k; } else c++; } else c++; } }
-  for(let c=0;c<G;c++){ let r=0; while(r<G){ if(wall[r][c] && !used[r][c]){ let k=r; while(k<G && wall[k][c] && !used[k][c]) k++; for(let y=r;y<k;y++) used[y][c]=true; const z0=cz(r)-cell/2, z1=cz(k-1)+cell/2, mz=(z0+z1)/2; spawnProp('box', [cx(c), 0, mz, 0,0,0, cell, wallH, (z1-z0)], o=>{ if(o) wallProps.push(o); }); r=k; } else r++; } }
+  for(let c=0;c<G;c++){ let r=0; while(r<G){ if(wall[r][c] && !used[r][c]){ let k=r; while(k<G && wall[k][c] && !used[k][c]) k++; for(let y=r;y<k;y++) used[y][c]=true; const z0=cz(r)-cell/2, z1=cz(k-1)+cell/2, mz=(z0+z1)/2; spawnProp('box', [cx(c), 0, mz, 0,0,0, cell, wallH+0.05, (z1-z0)], o=>{ if(o) wallProps.push(o); }); r=k; } else r++; } }   // build 565: vertical runs a hair taller -> coplanar tops at L/T junctions don't z-fight
   // build 560: scatter cover (only in "roomy" cells, never narrow corridors) + seed gameplay across all floor cells
   const isFloor=(r,c)=> (r>=0&&c>=0&&r<G&&c<G&&!wall[r][c]);
   const sx=rooms.length?cx(rooms[0][1]):0, sz=rooms.length?cz(rooms[0][0]):0;
@@ -9630,8 +9639,8 @@ function generateOffice(opts){
   if(opts.loot!==false){ _genPlaceExtract(floorSpots, sx, sz); const pk=floorSpots.slice(); _genShuffle(rnd, pk); _genSeedPickups(rnd, pk, gndAt); }
   // one cool overhead light per room (office fluorescent feel), budgeted under the active-light cap
   let placed=0; const lstep=Math.max(1, Math.ceil(rooms.length/13));
-  for(let i=0;i<rooms.length && placed<14;i+=lstep){ const [r,c]=rooms[i]; if(typeof buildLight==='function'){ buildLight({ type:'point', color:0xeaf2ff, intensity:7, distance:cell*5, t:[cx(c), gndAt(cx(c),cz(r))+wallH*0.82, cz(r)] }); placed++; } }
-  if(typeof buildLight==='function') buildLight({ type:'point', color:0xfff0d8, intensity:5, distance:span*0.7, t:[0, gndAt(0,0)+wallH*1.7, 0] });   // soft global fill
+  for(let i=0;i<rooms.length && placed<14;i+=lstep){ const [r,c]=rooms[i]; if(typeof buildLight==='function'){ buildLight({ type:'point', color:0xeaf2ff, intensity:3, distance:cell*5, t:[cx(c), gndAt(cx(c),cz(r))+wallH*0.82, cz(r)] }); placed++; } }
+  if(typeof buildLight==='function') buildLight({ type:'point', color:0xfff0d8, intensity:2.5, distance:span*0.7, t:[0, gndAt(0,0)+wallH*1.7, 0] });   // soft global fill
   // player start in the first room; a few enemy spawns spread across rooms (wave / co-op support)
   if(rooms.length){ const [r,c]=rooms[0]; playerSpawn.x=+cx(c).toFixed(2); playerSpawn.z=+cz(r).toFixed(2); playerSpawn.y=0; playerSpawn.yaw=Math.atan2(-cx(c), -cz(r)); if(typeof refreshPlayerSpawnMarker==='function') refreshPlayerSpawnMarker(); }
   const sstep=Math.max(1, Math.floor(rooms.length/4));
@@ -13216,7 +13225,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 564 · 2026-06-19';
+const BUILD_VERSION = 'build 565 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
