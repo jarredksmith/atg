@@ -13779,6 +13779,9 @@ function renderLoadout(){
   if(!_loadoutEl) return;
   const wk=_loadoutWep, lo=_attLoadout[wk]||{}; const c=[];
   const _devOn = (()=>{ try{ return localStorage.getItem('breach_dev')==='1'; }catch(e){ return false; } })();
+  _loadoutEl.style.background = _devOn ? 'rgba(4,8,10,.32)' : 'rgba(4,8,10,.74)';   // dev: see the gun behind while tuning mounts
+  _loadoutEl.style.justifyContent = _devOn ? 'flex-start' : 'center';
+  _loadoutEl.style.paddingLeft = _devOn ? '20px' : '0';
   c.push('<div style="background:#0b141a;border:1px solid #2a3a42;border-radius:12px;max-width:560px;width:92%;max-height:88vh;overflow:auto;padding:18px 20px;font-family:inherit;">');
   c.push('<div style="display:flex;justify-content:space-between;align-items:center;"><div style="font-family:var(--display-font);font-size:22px;color:#ffd166;letter-spacing:2px;">WEAPON LOADOUT</div><div style="display:flex;align-items:center;gap:10px;"><div style="color:#ffd166;font-weight:700;">\u25c6'+credits+'</div>'+(_devOn?'<button id="devGive" title="testing only" style="padding:3px 8px;border-radius:5px;border:1px solid #6a5a2a;background:#221d10;color:#ffd166;font-size:11px;cursor:pointer;">+1000 test</button>':'')+'</div></div>');
   c.push('<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 4px;">');
@@ -13797,6 +13800,17 @@ function renderLoadout(){
         +'<div style="flex:1;"><div style="color:#e8fff6;font-size:13px;font-weight:600;">'+a.name+'</div><div style="color:#7fa99c;font-size:11px;">'+a.desc+'</div></div>'
         +'<div style="font-size:12px;font-weight:700;color:'+tc+';">'+tag+'</div></div>');
     }
+    if(_devOn && lo[slot]){ const mm=getMount(wk, slot);
+      c.push('<div style="margin:-2px 0 9px;padding:6px 8px;border:1px dashed #3a4a52;border-radius:6px;background:#0c1418;">');
+      c.push('<div style="font-size:9px;color:#7fa99c;letter-spacing:1px;margin-bottom:3px;">MOUNT \u00b7 '+ATTACHMENTS[lo[slot]].name+'  (offset from muzzle, saves with the level)</div>');
+      for(const ax of [['x','X',-0.6,0.6,0.005],['y','Y',-0.6,0.6,0.005],['z','Z',-0.8,0.8,0.005],['s','Scale',0.2,3,0.05]]){ const val=(mm[ax[0]]!=null?mm[ax[0]]:(ax[0]==='s'?1:0));
+        c.push('<div style="display:flex;align-items:center;gap:6px;margin:2px 0;"><span style="width:40px;font-size:10px;color:#9fe6cf;">'+ax[1]+'</span>'
+          +'<input type="range" data-ms="'+slot+'" data-ma="'+ax[0]+'" min="'+ax[2]+'" max="'+ax[3]+'" step="'+ax[4]+'" value="'+val+'" style="flex:1;">'
+          +'<span data-mv="'+slot+'-'+ax[0]+'" style="width:46px;font-size:10px;color:#7fa99c;text-align:right;">'+(+val).toFixed(3)+'</span></div>');
+      }
+      c.push('<button data-mreset="'+slot+'" style="margin-top:3px;padding:3px 8px;font-size:10px;border-radius:5px;border:1px solid #2a3a42;background:#16242b;color:#9fe6cf;cursor:pointer;">Reset to default</button>');
+      c.push('</div>');
+    }
   }
   c.push('<button id="loadoutClose" style="width:100%;margin-top:10px;padding:8px;border-radius:7px;border:1px solid #2a3a42;background:#16242b;color:#9fe6cf;cursor:pointer;">Close</button></div>');
   _loadoutEl.innerHTML=c.join('');
@@ -13804,12 +13818,18 @@ function renderLoadout(){
   _loadoutEl.querySelectorAll('[data-att]').forEach(el=>el.onclick=()=>{ const id=el.dataset.att; if(!_ownedAtt[id]){ if(!buyAttachment(id)) return; } equipAttachment(_loadoutWep, id); renderLoadout(); });
   const cb=_loadoutEl.querySelector('#loadoutClose'); if(cb) cb.onclick=closeLoadout;
   const dg=_loadoutEl.querySelector('#devGive'); if(dg) dg.onclick=()=>{ if(typeof giveCredits==='function') giveCredits(1000); };
+  _loadoutEl.querySelectorAll('input[data-ms]').forEach(el=>el.oninput=()=>{ const slot=el.dataset.ms, ax=el.dataset.ma, v=parseFloat(el.value); const mm=getMount(_loadoutWep, slot); mm[ax]=v; const lbl=_loadoutEl.querySelector('[data-mv="'+slot+'-'+ax+'"]'); if(lbl) lbl.textContent=v.toFixed(3); if(typeof rebuildAttMounts==='function') rebuildAttMounts(_loadoutWep); });
+  _loadoutEl.querySelectorAll('[data-mreset]').forEach(el=>el.onclick=()=>{ const slot=el.dataset.mreset; if(mountByWep[_loadoutWep]) mountByWep[_loadoutWep][slot]=Object.assign({}, _MOUNT_DEFAULT[slot]); if(typeof rebuildAttMounts==='function') rebuildAttMounts(_loadoutWep); renderLoadout(); });
 }
 // build 588: testing helpers for the attachment economy. From the browser console:
 //   giveCredits(5000)  -> add credits instantly (updates the HUD + the open loadout screen)
 //   devMode(true)      -> reveal a "+1000 test" button inside the Weapon-loadout screen (persists; hidden from players)
 window.giveCredits = function(n){ n = (Number.isFinite(+n) && +n!==0) ? +n : 1000; credits = Math.max(0, credits + n); if(typeof updateHUD==='function') updateHUD(); if(_loadoutEl && _loadoutEl.style.display!=='none' && typeof renderLoadout==='function') renderLoadout(); return credits; };
 window.devMode = function(on){ const v = (on!==false); try{ if(v) localStorage.setItem('breach_dev','1'); else localStorage.removeItem('breach_dev'); }catch(e){} if(_loadoutEl && _loadoutEl.style.display!=='none' && typeof renderLoadout==='function') renderLoadout(); return v; };
+// build 589: unlimited ammo for testing. infiniteAmmo(true) keeps every weapon's reserve topped each frame, so
+// reloads always succeed and you never run dry (mag size + reload still behave normally so add-ons stay testable).
+let _infAmmo = false;
+window.infiniteAmmo = function(on){ _infAmmo = (on!==false); if(_infAmmo){ for(const k in WEAPONS){ const w=WEAPONS[k]; if(w && w.reserveMax!=null) w.reserve=w.reserveMax; } if(typeof updateHUD==='function') updateHUD(); } return _infAmmo; };
 
 // ---------- Bullets / tracers ----------
 const tracers = [];
@@ -13992,7 +14012,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 588 · 2026-06-19';
+const BUILD_VERSION = 'build 590 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -16416,6 +16436,7 @@ function loop(){
     if(v!==_pbShow){ _pbShow=v; const pb=document.getElementById('pauseBtn'); if(pb) pb.style.display = v?'flex':'none'; } }
   if(hitStop > 0){ hitStop -= rawDt; dt = rawDt * 0.12; }   // impact freeze: slow the sim briefly (real-time countdown)
   if(typeof updateLaser==='function') updateLaser();   // build 585: laser sight dot/beam (hides itself when inactive)
+  if(_infAmmo){ for(const k in WEAPONS){ const w=WEAPONS[k]; if(w && w.reserveMax!=null && w.reserve<w.reserveMax) w.reserve=w.reserveMax; } }   // build 589: unlimited ammo (testing)
   if(_levelLoaderActive){ pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }   // hold the world frozen behind the level loading screen until assets finish loading — checked BEFORE the cutscene so the intro cinematic can't advance while loading
   if(_cineActive){ updateCinematic(rawDt); if(mixers.length){ for(const m of mixers) m.update(rawDt); } if(typeof updateXAnim==='function') updateXAnim(rawDt); renderScene(scene,camera); return; }   // keep GLB clips AND mechanism/waypoint motion (doors, platforms, elevators) alive on camera   // keep prop/GLB animations alive on camera (raw time — no hitstop during a cutscene)   // intro/preview flythrough owns the camera; freeze the sim
   if(_interActive){ pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }   // campaign transition card owns the screen; hold the won level frozen behind it
