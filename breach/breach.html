@@ -8808,6 +8808,7 @@ function applyWepView(model, key){
 // Show the given weapon's model (loading it on first use); hide the others and the placeholder.
 function showWeaponModel(key){
   for(const k in gunModelByWep){ if(gunModelByWep[k]) gunModelByWep[k].visible = (k===key); }
+  if(typeof rebuildAttMounts==='function') rebuildAttMounts(key);   // build 586: show this weapon's mounted attachments
   const existing = gunModelByWep[key];
   if(existing){
     if(gunPlaceholder) gunPlaceholder.visible = false;
@@ -8953,6 +8954,55 @@ function _resolveAtt(weaponKey, loadout, catalog){   // pure: aggregate equipped
     if(m.magMul) magMul*=m.magMul; if(m.spreadMul) spreadMul*=m.spreadMul; if(m.zoomMul) zoomMul*=m.zoomMul; if(m.laser) laser=true; }
   return { magMul, spreadMul, zoomMul, laser };
 }
+// build 586: cosmetic mounting. Simple procedural meshes per attachment, parented to the viewmodel and anchored
+// off the authored muzzle point (so the muzzle-slot device lands exactly right; others use per-slot offsets the
+// author can tune). _attMountTransform is pure (unit-tested). Mounts rebuild on weapon switch / equip / muzzle move.
+const _MOUNT_DEFAULT = {
+  optic:    { x:0,    y:0.10,  z:0.30,  s:1 },
+  muzzle:   { x:0,    y:0,     z:-0.10, s:1 },
+  magazine: { x:0,    y:-0.14, z:0.42,  s:1 },
+  tactical: { x:0.05, y:-0.08, z:0.05,  s:1 },
+};
+let mountByWep = {};
+try{ if(savedLevel && savedLevel.mountWep && typeof savedLevel.mountWep==='object') mountByWep=savedLevel.mountWep; }catch(e){}
+function getMount(wep, slot){ mountByWep[wep]=mountByWep[wep]||{}; if(!mountByWep[wep][slot]) mountByWep[wep][slot]=Object.assign({}, _MOUNT_DEFAULT[slot]||{x:0,y:0,z:0,s:1}); return mountByWep[wep][slot]; }
+function _attMountTransform(muzzle, mount){   // pure: gun-space position from the muzzle point + per-slot offset
+  return { x:(muzzle.x||0)+(mount.x||0), y:(muzzle.y||0)+(mount.y||0), z:(muzzle.z||0)+(mount.z||0), s:(mount.s||1) };
+}
+function _buildAttMesh(id){
+  const a=ATTACHMENTS[id]; if(!a || typeof THREE==='undefined') return null;
+  const dark=new THREE.MeshStandardMaterial({ color:0x161b20, roughness:0.55, metalness:0.5 });
+  const g=new THREE.Group();
+  if(a.slot==='optic'){ const len=(id==='scope2x')?0.22:0.12, rad=(id==='scope2x')?0.05:0.055;
+    const tube=new THREE.Mesh(new THREE.CylinderGeometry(rad,rad,len,12), dark); tube.rotation.x=Math.PI/2; g.add(tube);
+    const lens=new THREE.Mesh(new THREE.CylinderGeometry(rad*0.8,rad*0.8,0.012,12), new THREE.MeshStandardMaterial({ color:0x2a5a7a, emissive:0x1a4466, emissiveIntensity:0.7, roughness:0.2, metalness:0.3 })); lens.rotation.x=Math.PI/2; lens.position.z=-len/2; g.add(lens);
+    const base=new THREE.Mesh(new THREE.BoxGeometry(0.04,0.045,len*0.7), dark); base.position.y=-rad-0.012; g.add(base);
+  } else if(a.slot==='muzzle'){ const len=(id==='suppressor')?0.18:0.09, rad=0.036;
+    const cyl=new THREE.Mesh(new THREE.CylinderGeometry(rad,rad,len,12), dark); cyl.rotation.x=Math.PI/2; cyl.position.z=-len/2; g.add(cyl);
+  } else if(a.slot==='magazine'){
+    if(id==='drum'){ const d=new THREE.Mesh(new THREE.CylinderGeometry(0.08,0.08,0.05,18), dark); d.rotation.z=Math.PI/2; g.add(d); }
+    else { const m=new THREE.Mesh(new THREE.BoxGeometry(0.05,0.16,0.07), dark); g.add(m); }
+  } else {   // tactical
+    if(id==='laser'){ const box=new THREE.Mesh(new THREE.BoxGeometry(0.045,0.045,0.09), dark); g.add(box);
+      const tip=new THREE.Mesh(new THREE.SphereGeometry(0.013,8,6), new THREE.MeshBasicMaterial({ color:0xff2233 })); tip.position.z=-0.05; g.add(tip); }
+    else { const grip=new THREE.Mesh(new THREE.BoxGeometry(0.038,0.1,0.045), dark); g.add(grip); }
+  }
+  return g;
+}
+let _attMountGroup=null;
+function rebuildAttMounts(wep){
+  try{
+    if(typeof gun==='undefined' || !gun || typeof vmMuzzle==='undefined') return;
+    if(!_attMountGroup){ _attMountGroup=new THREE.Group(); gun.add(_attMountGroup); }
+    while(_attMountGroup.children.length){ const c=_attMountGroup.children.pop(); _attMountGroup.remove(c); try{ c.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); }catch(e){} }
+    const lo=_attLoadout[wep]||{}, mz=vmMuzzle.position;
+    for(const slot of ATT_SLOTS){ const id=lo[slot]; if(!id) continue; const mesh=_buildAttMesh(id); if(!mesh) continue;
+      const t=_attMountTransform(mz, getMount(wep, slot));
+      mesh.position.set(t.x, t.y, t.z); mesh.scale.setScalar(t.s);
+      _attMountGroup.add(mesh);
+    }
+  }catch(e){ if(typeof console!=='undefined') console.warn('attachment mounts skipped:', e&&e.message); }
+}
 function applyAttachments(){   // recompute live stats from base + equipped (idempotent)
   for(const k in WEAPONS){ const base=_attBase[k]; if(!base) continue; const r=_resolveAtt(k);
     const newMag=Math.max(1, Math.round(base.magSize*r.magMul));
@@ -8962,6 +9012,7 @@ function applyAttachments(){   // recompute live stats from base + equipped (ide
     _attZoom[k]=r.zoomMul;
   }
   if(_attAimReady && typeof applyWeaponAim==='function' && typeof curWep!=='undefined') applyWeaponAim(curWep);
+  if(typeof curWep!=='undefined') rebuildAttMounts(curWep);   // build 586: refresh mounted attachment meshes
   if(_attAimReady && typeof updateHUD==='function') updateHUD();
 }
 function _attZoomMul(key){ return _attZoom[key]||1; }
@@ -13934,7 +13985,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 585 · 2026-06-19';
+const BUILD_VERSION = 'build 586 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -16998,6 +17049,7 @@ const editorTargets = {
     syncFromWeapon(){ const v=wepView(curWep); this.state.px=v.px; this.state.py=v.py; this.state.pz=v.pz; this.state.rx=v.rx; this.state.ry=v.ry; this.state.rz=v.rz; this.state.s=v.s; this.state.mzx=(v.mzx!=null?v.mzx:MUZZLE_DEFAULT.x); this.state.mzy=(v.mzy!=null?v.mzy:MUZZLE_DEFAULT.y); this.state.mzz=(v.mzz!=null?v.mzz:MUZZLE_DEFAULT.z); },
     apply(){ const o=this.obj(), s=this.state;
       vmMuzzle.position.set(s.mzx, s.mzy, s.mzz);   // muzzle/tracer/flash origin (no model needed)
+      if(typeof rebuildAttMounts==='function') rebuildAttMounts(curWep);   // build 586: mounts are muzzle-relative — re-snap them
       WEAPONS[curWep].view = { px:s.px, py:s.py, pz:s.pz, rx:s.rx, ry:s.ry, rz:s.rz, s:s.s, mzx:s.mzx, mzy:s.mzy, mzz:s.mzz };
       if(!o) return;
       o.position.set(s.px,s.py,s.pz); o.scale.setScalar(s.s);
@@ -17649,6 +17701,7 @@ function serializeLevel(){
     weapons: Object.keys(WEAPONS).reduce((acc,k)=>{ const w=WEAPONS[k]; if(w.model || w.view || w.clips) acc[k]={ model:w.model||'', view:w.view||null, clips:w.clips||null }; return acc; }, {}),
     aim:     { state: Object.assign({}, editorTargets.aim.state) },
     aimWep:  JSON.parse(JSON.stringify(aimByWep)),
+    mountWep: (typeof mountByWep!=='undefined') ? JSON.parse(JSON.stringify(mountByWep)) : {},
     station: { url: stationModelUrl, state: Object.assign({}, editorTargets.station.state) },
     player:  { url: playerModelCfg.url, thumb: playerModelCfg.thumb||'', state: Object.assign({}, editorTargets.player.state), clips: Object.assign({}, playerModelCfg.clips), clipSpeed: Object.assign({}, playerModelCfg.clipSpeed||{}), clipHold: Object.assign({}, playerModelCfg.clipHold||{}), clipInPlace: Object.assign({}, playerModelCfg.clipInPlace||{}) },
     world:   Object.assign({}, worldCfg),
