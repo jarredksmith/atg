@@ -13797,9 +13797,6 @@ function renderLoadout(){
   if(!_loadoutEl) return;
   const wk=_loadoutWep, lo=_attLoadout[wk]||{}; const c=[];
   const _devOn = (()=>{ try{ return localStorage.getItem('breach_dev')==='1'; }catch(e){ return false; } })();
-  _loadoutEl.style.background = _devOn ? 'rgba(4,8,10,.32)' : 'rgba(4,8,10,.74)';   // dev: see the gun behind while tuning mounts
-  _loadoutEl.style.justifyContent = _devOn ? 'flex-start' : 'center';
-  _loadoutEl.style.paddingLeft = _devOn ? '20px' : '0';
   c.push('<div style="background:#0b141a;border:1px solid #2a3a42;border-radius:12px;max-width:560px;width:92%;max-height:88vh;overflow:auto;padding:18px 20px;font-family:inherit;">');
   c.push('<div style="display:flex;justify-content:space-between;align-items:center;"><div style="font-family:var(--display-font);font-size:22px;color:#ffd166;letter-spacing:2px;">WEAPON LOADOUT</div><div style="display:flex;align-items:center;gap:10px;"><div style="color:#ffd166;font-weight:700;">\u25c6'+credits+'</div>'+(_devOn?'<button id="devGive" title="testing only" style="padding:3px 8px;border-radius:5px;border:1px solid #6a5a2a;background:#221d10;color:#ffd166;font-size:11px;cursor:pointer;">+1000 test</button>':'')+'</div></div>');
   c.push('<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 4px;">');
@@ -13818,18 +13815,6 @@ function renderLoadout(){
         +'<div style="flex:1;"><div style="color:#e8fff6;font-size:13px;font-weight:600;">'+a.name+'</div><div style="color:#7fa99c;font-size:11px;">'+a.desc+'</div></div>'
         +'<div style="font-size:12px;font-weight:700;color:'+tc+';">'+tag+'</div></div>');
     }
-    if(_devOn && lo[slot]){ const mm=getMount(wk, slot); const _aid=lo[slot];
-      c.push('<div style="margin:-2px 0 9px;padding:6px 8px;border:1px dashed #3a4a52;border-radius:6px;background:#0c1418;">');
-      c.push('<div style="font-size:9px;color:#7fa99c;letter-spacing:1px;margin-bottom:3px;">MOUNT \u00b7 '+ATTACHMENTS[_aid].name+'  (offset from muzzle, saves with the level)</div>');
-      c.push('<div style="display:flex;gap:5px;margin:2px 0 5px;"><input type="text" data-amurl="'+_aid+'" value="'+String(attModels[_aid]||'').replace(/"/g,'&quot;')+'" placeholder="custom model URL (.glb) \u2014 blank = built-in shape" style="flex:1;min-width:0;font-size:10px;padding:3px 5px;background:#0a1116;border:1px solid #2a3a42;border-radius:4px;color:#cfeee2;"><button data-amset="'+_aid+'" style="padding:3px 8px;font-size:10px;border-radius:4px;border:1px solid #3a6a52;background:#13251c;color:#9fe6cf;cursor:pointer;">Set</button><button data-amclear="'+_aid+'" style="padding:3px 7px;font-size:10px;border-radius:4px;border:1px solid #2a3a42;background:#16242b;color:#7fa99c;cursor:pointer;">Clear</button></div>');
-      for(const ax of [['x','X',-0.6,0.6,0.005],['y','Y',-0.6,0.6,0.005],['z','Z',-0.8,0.8,0.005],['rx','Rot X',-180,180,1],['ry','Rot Y',-180,180,1],['rz','Rot Z',-180,180,1],['s','Scale',0.05,5,0.05]]){ const val=(mm[ax[0]]!=null?mm[ax[0]]:(ax[0]==='s'?1:0));
-        c.push('<div style="display:flex;align-items:center;gap:6px;margin:2px 0;"><span style="width:40px;font-size:10px;color:#9fe6cf;">'+ax[1]+'</span>'
-          +'<input type="range" data-ms="'+slot+'" data-ma="'+ax[0]+'" min="'+ax[2]+'" max="'+ax[3]+'" step="'+ax[4]+'" value="'+val+'" style="flex:1;">'
-          +'<span data-mv="'+slot+'-'+ax[0]+'" style="width:46px;font-size:10px;color:#7fa99c;text-align:right;">'+(+val).toFixed(ax[0]==='s'?2:(ax[0][0]==='r'?0:3))+'</span></div>');
-      }
-      c.push('<button data-mreset="'+slot+'" style="margin-top:3px;padding:3px 8px;font-size:10px;border-radius:5px;border:1px solid #2a3a42;background:#16242b;color:#9fe6cf;cursor:pointer;">Reset to default</button>');
-      c.push('</div>');
-    }
   }
   c.push('<button id="loadoutClose" style="width:100%;margin-top:10px;padding:8px;border-radius:7px;border:1px solid #2a3a42;background:#16242b;color:#9fe6cf;cursor:pointer;">Close</button></div>');
   _loadoutEl.innerHTML=c.join('');
@@ -13837,10 +13822,6 @@ function renderLoadout(){
   _loadoutEl.querySelectorAll('[data-att]').forEach(el=>el.onclick=()=>{ const id=el.dataset.att; if(!_ownedAtt[id]){ if(!buyAttachment(id)) return; } equipAttachment(_loadoutWep, id); renderLoadout(); });
   const cb=_loadoutEl.querySelector('#loadoutClose'); if(cb) cb.onclick=closeLoadout;
   const dg=_loadoutEl.querySelector('#devGive'); if(dg) dg.onclick=()=>{ if(typeof giveCredits==='function') giveCredits(1000); };
-  _loadoutEl.querySelectorAll('input[data-ms]').forEach(el=>el.oninput=()=>{ const slot=el.dataset.ms, ax=el.dataset.ma, v=parseFloat(el.value); const mm=getMount(_loadoutWep, slot); mm[ax]=v; const lbl=_loadoutEl.querySelector('[data-mv="'+slot+'-'+ax+'"]'); if(lbl) lbl.textContent=v.toFixed(3); if(typeof rebuildAttMounts==='function') rebuildAttMounts(_loadoutWep); });
-  _loadoutEl.querySelectorAll('[data-mreset]').forEach(el=>el.onclick=()=>{ const slot=el.dataset.mreset; if(mountByWep[_loadoutWep]) mountByWep[_loadoutWep][slot]=Object.assign({}, _MOUNT_DEFAULT[slot]); if(typeof rebuildAttMounts==='function') rebuildAttMounts(_loadoutWep); renderLoadout(); });
-  _loadoutEl.querySelectorAll('[data-amset]').forEach(el=>el.onclick=()=>{ const id=el.dataset.amset; const inp=_loadoutEl.querySelector('[data-amurl="'+id+'"]'); const u=(inp&&inp.value||'').trim(); if(u) attModels[id]=u; else delete attModels[id]; if(typeof rebuildAttMounts==='function') rebuildAttMounts(_loadoutWep); });
-  _loadoutEl.querySelectorAll('[data-amclear]').forEach(el=>el.onclick=()=>{ const id=el.dataset.amclear; delete attModels[id]; if(typeof rebuildAttMounts==='function') rebuildAttMounts(_loadoutWep); renderLoadout(); });
 }
 // build 588: testing helpers for the attachment economy. From the browser console:
 //   giveCredits(5000)  -> add credits instantly (updates the HUD + the open loadout screen)
@@ -14033,7 +14014,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 591 · 2026-06-19';
+const BUILD_VERSION = 'build 592 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -18698,6 +18679,48 @@ function renderLevelIssues(){
     d.style.cssText='font-size:11px;color:#ffd9a8;border-left:2px solid rgba(255,180,90,0.6);padding:2px 0 2px 7px;margin:0 0 3px;';
     d.textContent=msg; host.appendChild(d); }
 }
+// build 592: attachment authoring lives in the Weapons tab (under the gun framing). Per weapon, per slot:
+// pick the attachment (mounts it live for preview), point it at a custom .glb, and tune its mount offset/rotation/scale.
+// Mount offsets + model urls save with the level; picking also equips it in this build (author = player).
+function renderAttachAuthoring(host, wep){
+  if(typeof ATT_SLOTS==='undefined' || !WEAPONS[wep] || WEAPONS[wep].melee) return;
+  const box=document.createElement('div'); box.style.cssText='margin-top:10px;border-top:1px solid #243038;padding-top:8px;';
+  const h=document.createElement('div'); h.textContent='ATTACHMENTS \u2014 '+WEAPONS[wep].name; h.style.cssText='font-size:10px;letter-spacing:1.5px;color:#7fa99c;margin-bottom:6px;'; box.appendChild(h);
+  const lo=_attLoadout[wep]||{};
+  const numFmt=(k,v)=> (+v).toFixed(k==='s'?2:(k[0]==='r'?0:3));
+  for(const slot of ATT_SLOTS){
+    const slotWrap=document.createElement('div'); slotWrap.style.cssText='margin-bottom:8px;';
+    const row=document.createElement('div'); row.style.cssText='display:flex;align-items:center;gap:6px;margin-bottom:3px;';
+    const lbl=document.createElement('span'); lbl.textContent=slot; lbl.style.cssText='width:64px;font-size:11px;color:#9fe6cf;text-transform:capitalize;';
+    const sel=document.createElement('select'); sel.style.cssText='flex:1;font-size:11px;padding:2px 4px;background:#0a1116;border:1px solid #2a3a42;border-radius:4px;color:#cfeee2;';
+    const none=document.createElement('option'); none.value=''; none.textContent='(none)'; sel.appendChild(none);
+    for(const id in ATTACHMENTS){ if(ATTACHMENTS[id].slot!==slot) continue; const o=document.createElement('option'); o.value=id; o.textContent=ATTACHMENTS[id].name; sel.appendChild(o); }
+    sel.value = lo[slot]||'';
+    sel.onchange=()=>{ const id=sel.value; _attLoadout[wep]=_attLoadout[wep]||{}; if(id){ _ownedAtt[id]=true; _attLoadout[wep][slot]=id; } else { delete _attLoadout[wep][slot]; } if(typeof applyAttachments==='function') applyAttachments(); if(typeof _saveAtt==='function') _saveAtt(); renderEditorFields(); };
+    row.appendChild(lbl); row.appendChild(sel); slotWrap.appendChild(row);
+    const id=lo[slot];
+    if(id){
+      const murl=document.createElement('div'); murl.style.cssText='display:flex;gap:5px;margin:3px 0 4px 0;';
+      const inp=document.createElement('input'); inp.type='text'; inp.value=String(attModels[id]||''); inp.placeholder='custom model .glb (blank = built-in shape)'; inp.style.cssText='flex:1;min-width:0;font-size:10px;padding:3px 5px;background:#0a1116;border:1px solid #2a3a42;border-radius:4px;color:#cfeee2;';
+      const setb=document.createElement('button'); setb.textContent='Set'; setb.style.cssText='font-size:10px;padding:2px 8px;'; setb.onclick=()=>{ const u=inp.value.trim(); if(u) attModels[id]=u; else delete attModels[id]; if(typeof rebuildAttMounts==='function') rebuildAttMounts(wep); };
+      const clrb=document.createElement('button'); clrb.textContent='Clear'; clrb.style.cssText='font-size:10px;padding:2px 7px;'; clrb.onclick=()=>{ delete attModels[id]; inp.value=''; if(typeof rebuildAttMounts==='function') rebuildAttMounts(wep); };
+      murl.appendChild(inp); murl.appendChild(setb); murl.appendChild(clrb); slotWrap.appendChild(murl);
+      const mm=getMount(wep, slot);
+      for(const ax of [['x','X',-0.6,0.6,0.005],['y','Y',-0.6,0.6,0.005],['z','Z',-0.8,0.8,0.005],['rx','Rot X',-180,180,1],['ry','Rot Y',-180,180,1],['rz','Rot Z',-180,180,1],['s','Scale',0.05,5,0.05]]){
+        const fr=document.createElement('div'); fr.style.cssText='display:flex;align-items:center;gap:6px;margin:2px 0;';
+        const fl=document.createElement('span'); fl.textContent=ax[1]; fl.style.cssText='width:48px;font-size:10px;color:#9fe6cf;';
+        const rg=document.createElement('input'); rg.type='range'; rg.min=ax[2]; rg.max=ax[3]; rg.step=ax[4]; rg.value=(mm[ax[0]]!=null?mm[ax[0]]:(ax[0]==='s'?1:0)); rg.style.flex='1';
+        const vv=document.createElement('span'); vv.textContent=numFmt(ax[0], rg.value); vv.style.cssText='width:46px;font-size:10px;color:#7fa99c;text-align:right;';
+        rg.oninput=()=>{ const v=parseFloat(rg.value); const m=getMount(wep,slot); m[ax[0]]=v; vv.textContent=numFmt(ax[0], v); if(typeof rebuildAttMounts==='function') rebuildAttMounts(wep); };
+        fr.appendChild(fl); fr.appendChild(rg); fr.appendChild(vv); slotWrap.appendChild(fr);
+      }
+      const rb=document.createElement('button'); rb.textContent='Reset position'; rb.style.cssText='font-size:10px;padding:2px 8px;margin-top:2px;'; rb.onclick=()=>{ if(mountByWep[wep]) mountByWep[wep][slot]=Object.assign({}, _MOUNT_DEFAULT[slot]); if(typeof rebuildAttMounts==='function') rebuildAttMounts(wep); renderEditorFields(); };
+      slotWrap.appendChild(rb);
+    }
+    box.appendChild(slotWrap);
+  }
+  host.appendChild(box);
+}
 function renderEditorFields(){
   if(!editorEl) return;
   // The wholesale rebuild below resets the panel's scroll position on every change; restore it once
@@ -20482,6 +20505,7 @@ function renderEditorFields(){
     wrap.appendChild(lab); wrap.appendChild(rng);
     host.appendChild(wrap);
   }
+  if(editorActive==='gun' && typeof renderAttachAuthoring==='function') renderAttachAuthoring(host, curWep);   // build 592: per-weapon attachment slots, mounts + models live in the Weapons tab
   // Snap-to-ground: drop the selected prop so its lowest point rests on the surface beneath it.
   if(tgt===editorTargets.props && tgt.fields && tgt.fields.length && tgt.obj && tgt.obj()){
     const snapBtn=document.createElement('button'); snapBtn.textContent='\u2b07 Snap bottom to ground'; snapBtn.style.cssText='width:100%;margin-top:6px;';
