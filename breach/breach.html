@@ -13778,8 +13778,9 @@ function closeLoadout(){ if(_loadoutEl) _loadoutEl.style.display='none'; }
 function renderLoadout(){
   if(!_loadoutEl) return;
   const wk=_loadoutWep, lo=_attLoadout[wk]||{}; const c=[];
+  const _devOn = (()=>{ try{ return localStorage.getItem('breach_dev')==='1'; }catch(e){ return false; } })();
   c.push('<div style="background:#0b141a;border:1px solid #2a3a42;border-radius:12px;max-width:560px;width:92%;max-height:88vh;overflow:auto;padding:18px 20px;font-family:inherit;">');
-  c.push('<div style="display:flex;justify-content:space-between;align-items:center;"><div style="font-family:var(--display-font);font-size:22px;color:#ffd166;letter-spacing:2px;">WEAPON LOADOUT</div><div style="color:#ffd166;font-weight:700;">\u25c6'+credits+'</div></div>');
+  c.push('<div style="display:flex;justify-content:space-between;align-items:center;"><div style="font-family:var(--display-font);font-size:22px;color:#ffd166;letter-spacing:2px;">WEAPON LOADOUT</div><div style="display:flex;align-items:center;gap:10px;"><div style="color:#ffd166;font-weight:700;">\u25c6'+credits+'</div>'+(_devOn?'<button id="devGive" title="testing only" style="padding:3px 8px;border-radius:5px;border:1px solid #6a5a2a;background:#221d10;color:#ffd166;font-size:11px;cursor:pointer;">+1000 test</button>':'')+'</div></div>');
   c.push('<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 4px;">');
   for(const k of owned){ if(WEAPONS[k]&&WEAPONS[k].melee) continue; const on=(k===wk);
     c.push('<button data-wep="'+k+'" style="padding:5px 11px;border-radius:6px;cursor:pointer;border:1px solid '+(on?'var(--accent)':'#2a3a42')+';background:'+(on?'#16302a':'#0c1418')+';color:'+(on?'#bff3df':'#9fe6cf')+';font-size:12px;">'+WEAPONS[k].name+'</button>'); }
@@ -13802,7 +13803,13 @@ function renderLoadout(){
   _loadoutEl.querySelectorAll('[data-wep]').forEach(el=>el.onclick=()=>{ _loadoutWep=el.dataset.wep; renderLoadout(); });
   _loadoutEl.querySelectorAll('[data-att]').forEach(el=>el.onclick=()=>{ const id=el.dataset.att; if(!_ownedAtt[id]){ if(!buyAttachment(id)) return; } equipAttachment(_loadoutWep, id); renderLoadout(); });
   const cb=_loadoutEl.querySelector('#loadoutClose'); if(cb) cb.onclick=closeLoadout;
+  const dg=_loadoutEl.querySelector('#devGive'); if(dg) dg.onclick=()=>{ if(typeof giveCredits==='function') giveCredits(1000); };
 }
+// build 588: testing helpers for the attachment economy. From the browser console:
+//   giveCredits(5000)  -> add credits instantly (updates the HUD + the open loadout screen)
+//   devMode(true)      -> reveal a "+1000 test" button inside the Weapon-loadout screen (persists; hidden from players)
+window.giveCredits = function(n){ n = (Number.isFinite(+n) && +n!==0) ? +n : 1000; credits = Math.max(0, credits + n); if(typeof updateHUD==='function') updateHUD(); if(_loadoutEl && _loadoutEl.style.display!=='none' && typeof renderLoadout==='function') renderLoadout(); return credits; };
+window.devMode = function(on){ const v = (on!==false); try{ if(v) localStorage.setItem('breach_dev','1'); else localStorage.removeItem('breach_dev'); }catch(e){} if(_loadoutEl && _loadoutEl.style.display!=='none' && typeof renderLoadout==='function') renderLoadout(); return v; };
 
 // ---------- Bullets / tracers ----------
 const tracers = [];
@@ -13985,7 +13992,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 587 · 2026-06-19';
+const BUILD_VERSION = 'build 588 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
