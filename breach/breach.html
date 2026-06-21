@@ -14111,7 +14111,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 597 · 2026-06-19';
+const BUILD_VERSION = 'build 598 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -16276,13 +16276,13 @@ function updatePerfHud(){
 // start ('spawn') or its travel direction ('path'), letterboxed with the HUD hidden. Any input skips it.
 // Disabled / no path => deploy behaves exactly as before. Editor 'Preview' reuses the same engine.
 let cineCfg = { on:false, path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn', audio:'', shots2:[] };
-function _resShot(s){ return { path:Array.isArray(s.path)?s.path.map(q=> q.length>=6 ? [+q[0]||0,+q[1]||0,+q[2]||0,+q[3]||0,+q[4]||0,+q[5]||0] : [+q[0]||0,+q[1]||0,+q[2]||0]):[], lensFrom:+s.lensFrom||35, lensTo:+s.lensTo||+s.lensFrom||35, focusOn:!!s.focusOn, focusFrom:+s.focusFrom||8, focusTo:+s.focusTo||+s.focusFrom||8, dur:+s.dur||6, look:(s.look==='path')?'path':'spawn' }; }
+function _resShot(s){ return { path:Array.isArray(s.path)?s.path.map(q=> q.length>=6 ? [+q[0]||0,+q[1]||0,+q[2]||0,+q[3]||0,+q[4]||0,+q[5]||0] : [+q[0]||0,+q[1]||0,+q[2]||0]):[], lensFrom:+s.lensFrom||35, lensTo:+s.lensTo||+s.lensFrom||35, focusOn:!!s.focusOn, focusFrom:+s.focusFrom||8, focusTo:+s.focusTo||+s.focusFrom||8, dur:+s.dur||6, look:(s.look==='path')?'path':'spawn', interp:(s.interp==='smooth')?'smooth':'linear' }; }
 function _applyCine(lc){
-  if(lc){ cineCfg.on=!!lc.on; cineCfg.path=Array.isArray(lc.path)?lc.path.map(q=> q.length>=6 ? [+q[0]||0,+q[1]||0,+q[2]||0,+q[3]||0,+q[4]||0,+q[5]||0] : [+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lensFrom=+lc.lensFrom||+lc.lens||35; cineCfg.lensTo=+lc.lensTo||+lc.lens||cineCfg.lensFrom; cineCfg.focusOn=!!lc.focusOn; cineCfg.focusFrom=+lc.focusFrom||8; cineCfg.focusTo=+lc.focusTo||cineCfg.focusFrom; cineCfg.dur=+lc.dur||6; cineCfg.look=(lc.look==='path')?'path':'spawn'; cineCfg.audio=(typeof lc.audio==='string')?lc.audio:'';
+  if(lc){ cineCfg.on=!!lc.on; cineCfg.path=Array.isArray(lc.path)?lc.path.map(q=> q.length>=6 ? [+q[0]||0,+q[1]||0,+q[2]||0,+q[3]||0,+q[4]||0,+q[5]||0] : [+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lensFrom=+lc.lensFrom||+lc.lens||35; cineCfg.lensTo=+lc.lensTo||+lc.lens||cineCfg.lensFrom; cineCfg.focusOn=!!lc.focusOn; cineCfg.focusFrom=+lc.focusFrom||8; cineCfg.focusTo=+lc.focusTo||cineCfg.focusFrom; cineCfg.dur=+lc.dur||6; cineCfg.look=(lc.look==='path')?'path':'spawn'; cineCfg.interp=(lc.interp==='smooth')?'smooth':'linear'; cineCfg.audio=(typeof lc.audio==='string')?lc.audio:'';
     cineCfg.shots2 = Array.isArray(lc.shots2) ? lc.shots2.map(_resShot) : [];
     cineCfg.name = (typeof lc.name==='string' && lc.name) ? lc.name : 'Intro';
     cineCfg.others = Array.isArray(lc.others) ? lc.others.map(o=>{ const c=_resShot(o); c.name=(typeof o.name==='string'&&o.name)?o.name:'Cutscene'; c.audio=(typeof o.audio==='string')?o.audio:''; c.shots2=Array.isArray(o.shots2)?o.shots2.map(_resShot):[]; return c; }) : []; }
-  else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; cineCfg.audio=''; cineCfg.shots2=[]; cineCfg.name='Intro'; cineCfg.others=[]; }
+  else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; cineCfg.interp='linear'; cineCfg.audio=''; cineCfg.shots2=[]; cineCfg.name='Intro'; cineCfg.others=[]; }
 }
 _applyCine(savedLevel && savedLevel.cine);   // restore a saved cinematic on page reload (boot path doesn't go through restoreLevel)
 // Multi-shot cutscenes (build 350): cineCfg's flat fields ARE shot 1; extra shots live in cineCfg.shots2.
@@ -16296,9 +16296,9 @@ function _curCutscene(){ const a=allCutscenes(); if(_cineCSel>=a.length) _cineCS
 function cutsceneByName(n){ const a=allCutscenes(); if(!n) return a[0]; for(const c of a){ if((c===cineCfg ? (c.name||'Intro') : c.name)===n) return c; } return null; }
 function cineShotsOf(cc){ if(!Array.isArray(cc.shots2)) cc.shots2=[]; return [cc, ...cc.shots2]; }
 function _ccHasData(cc){ return !!(cc && cineShotsOf(cc).some(s=>s.path && s.path.length>=1)); }
-function _newCutscene(){ const n=allCutscenes().length+1; return { name:'Cutscene '+n, path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn', audio:'', shots2:[] }; }
+function _newCutscene(){ const n=allCutscenes().length+1; return { name:'Cutscene '+n, path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn', interp:'linear', audio:'', shots2:[] }; }
 function cineAllShots(){ return cineShotsOf(_curCutscene()); }   // shots of the EDITOR-selected cutscene
-function _newCineShot(){ return { path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn' }; }
+function _newCineShot(){ return { path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn', interp:'linear' }; }
 let _cineActive=false, _cineT=0, _cineData=null, _cineReturn=null, _cineEditorPreview=false, _cinePreviewGroup=null, _cineIntroPending=false, _cineShots=null, _cineShotIdx=0;   // intro deferred until the level loader reveals
 let _interActive=false, _interTimer=null, _interKeyGo=null;   // campaign transition card (declared here so the render loop's freeze-check precedes it without a TDZ)
 let _cineAvatar=null;   // the local player's body, shown during a cutscene AND while authoring one in the editor
@@ -16373,9 +16373,17 @@ function _startCineAudio(){
     try{ const g=actx.createGain(); g.gain.value=1; g.connect(masterBus); const src=actx.createBufferSource(); src.buffer=buf; src.connect(g); src.start(); _cineAudioSrc=src; _cineAudioGain=g; }catch(e){}
   });
 }
+// Catmull-Rom smoothing for cinematic camera moves (build 598). Densifies the waypoints into a fine polyline so
+// the existing arc-length sampler still drives constant-speed motion — just along a curve instead of straight legs.
+function _catmullPt(p0,p1,p2,p3,s){ const s2=s*s, s3=s2*s; const f=(a,b,c,e)=>0.5*((2*b)+(-a+c)*s+(2*a-5*b+4*c-e)*s2+(-a+3*b-3*c+e)*s3); return [f(p0[0],p1[0],p2[0],p3[0]), f(p0[1],p1[1],p2[1],p3[1]), f(p0[2],p1[2],p2[2],p3[2])]; }
+function _cineSmoothPoly(path, perSeg){ const n=path.length; if(n<3) return path.map(q=>[q[0],q[1],q[2]]); perSeg=perSeg||16; const out=[];
+  for(let i=0;i<n-1;i++){ const p0=path[Math.max(0,i-1)], p1=path[i], p2=path[i+1], p3=path[Math.min(n-1,i+2)]; for(let j=0;j<perSeg;j++) out.push(_catmullPt(p0,p1,p2,p3, j/perSeg)); }
+  out.push([path[n-1][0],path[n-1][1],path[n-1][2]]); return out; }
+function _cineSamplePoly(shot){ const path=(shot&&shot.path)||[]; return (shot && shot.interp==='smooth' && path.length>=3) ? _cineSmoothPoly(path,16) : path.map(q=>[q[0],q[1],q[2]]); }
 function _normCineShot(s){
   const path=s.path.map(q=>q.slice());
-  const out={ path, lensFrom:+s.lensFrom||35, lensTo:+s.lensTo||(+s.lensFrom||35), focusOn:!!s.focusOn, focusFrom:+s.focusFrom||8, focusTo:+s.focusTo||(+s.focusFrom||8), dur:Math.max(0.2,+s.dur||6), look:(s.look==='path'?'path':'spawn') };
+  const out={ path, lensFrom:+s.lensFrom||35, lensTo:+s.lensTo||(+s.lensFrom||35), focusOn:!!s.focusOn, focusFrom:+s.focusFrom||8, focusTo:+s.focusTo||(+s.focusFrom||8), dur:Math.max(0.2,+s.dur||6), look:(s.look==='path'?'path':'spawn'), interp:(s.interp==='smooth'?'smooth':'linear') };
+  out._poly = (typeof _cineSamplePoly==='function') ? _cineSamplePoly(out) : out.path.map(q=>[q[0],q[1],q[2]]);   // the polyline the camera actually rides (curve when smooth)
   if(path.some(q=>q.length>=6)){   // per-waypoint look targets (build 353): interpolate camera aim between them
     const sy=terrainHeightAt(playerSpawn.x,playerSpawn.z)+EYE;
     out.lookPts = path.map((q,i)=>{
@@ -16422,15 +16430,15 @@ function updateCinematic(dt){
   if(_cineAvatar && _cineAvatar.userData.mixer) _cineAvatar.userData.mixer.update(dt);
   _cineT += dt;
   let t=Math.min(1, _cineT/d.dur); const te=t*t*(3-2*t);   // ease in/out
-  const path=d.path;
-  if(path.length>=2){ const pp=pointAlongPath(path, te, false); _cineV0.set(pp[0],pp[1],pp[2]); }
+  const path=d.path; const poly=d._poly||path;   // poly == path when linear, densified curve when smooth
+  if(path.length>=2){ const pp=pointAlongPath(poly, te, false); _cineV0.set(pp[0],pp[1],pp[2]); }
   else { _cineV0.set(path[0][0], path[0][1], path[0][2]); }
   camera.position.copy(_cineV0);
   if(d.lookPts && d.lookPts.length>=2){ const a=pointAlongPath(d.lookPts, te, false); _cineTgt.set(a[0],a[1],a[2]); }
   else if(d.lookPts && d.lookPts.length===1){ _cineTgt.set(d.lookPts[0][0], d.lookPts[0][1], d.lookPts[0][2]); }
-  else if(d.look==='path' && path.length>=2){ const a=pointAlongPath(path, Math.min(1,te+0.02), false); _cineTgt.set(a[0],a[1],a[2]);
+  else if(d.look==='path' && path.length>=2){ const a=pointAlongPath(poly, Math.min(1,te+0.02), false); _cineTgt.set(a[0],a[1],a[2]);
     if(_cineTgt.distanceToSquared(_cineV0)<1e-4){   // at the very end the look-ahead sample lands on the camera itself
-      const b=pointAlongPath(path, Math.max(0,te-0.02), false);   // keep the travel heading by extrapolating from just behind
+      const b=pointAlongPath(poly, Math.max(0,te-0.02), false);   // keep the travel heading by extrapolating from just behind
       _cineTgt.set(_cineV0.x*2-b[0], _cineV0.y*2-b[1], _cineV0.z*2-b[2]);
       if(_cineTgt.distanceToSquared(_cineV0)<1e-4) _cineTgt.set(playerSpawn.x, terrainHeightAt(playerSpawn.x,playerSpawn.z)+EYE, playerSpawn.z);   // degenerate single-point path only
     } }
@@ -16483,7 +16491,8 @@ function refreshCinePreview(){
     if(_cinePreviewGroup){ scene.remove(_cinePreviewGroup); _cinePreviewGroup.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); _cinePreviewGroup=null; }
     if(!editorOpen || !(cineAllShots()[Math.min(_cineShotSel, cineAllShots().length-1)].path) || !(cineAllShots()[Math.min(_cineShotSel, cineAllShots().length-1)].path).length) return;
     const g=new THREE.Group();
-    const pts=(cineAllShots()[Math.min(_cineShotSel, cineAllShots().length-1)].path).map(q=>new THREE.Vector3(q[0],q[1],q[2]));
+    const _curShot=cineAllShots()[Math.min(_cineShotSel, cineAllShots().length-1)];
+    const pts=_cineSamplePoly(_curShot).map(q=>new THREE.Vector3(q[0],q[1],q[2]));   // curve when smooth, raw legs when linear
     if(pts.length>=2){ const line=new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(_dashPts(pts,0.7,0.45)), new THREE.LineBasicMaterial({ color:0xffcf6b, transparent:true, opacity:0.95, depthTest:false })); line.renderOrder=998; g.add(line); }
     if(pts.length>=1 && typeof playerSpawn!=='undefined'){ const aim=new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(_dashPts([pts[pts.length-1], new THREE.Vector3(playerSpawn.x, EYE, playerSpawn.z)],0.5,0.6)), new THREE.LineBasicMaterial({ color:0x4aa3ff, transparent:true, opacity:0.5, depthTest:false })); aim.renderOrder=998; g.add(aim); }
     { const shot=cineAllShots()[Math.min(_cineShotSel, cineAllShots().length-1)], sp=shot.path;
@@ -17862,7 +17871,7 @@ function serializeLevel(){
     extract: extractSpot ? { x: +extractSpot.x.toFixed(3), z: +extractSpot.z.toFixed(3) } : null,
     grenade: { model: GRENADE.model, scale: GRENADE.scale, radius: GRENADE.radius, damage: GRENADE.damage, fuse: GRENADE.fuse, throwForce: GRENADE.throwForce },
     audio:   { musicUrl: (audioSettings.musicUrl||''), sounds: _sanitizeSounds(audioSettings.sounds) },   // music track + custom SFX travel with the level (volumes/mute stay per-device)
-    cine:    { on: cineCfg.on, path: cineCfg.path.map(q=>q.slice()), lensFrom: cineCfg.lensFrom, lensTo: cineCfg.lensTo, focusOn: cineCfg.focusOn, focusFrom: cineCfg.focusFrom, focusTo: cineCfg.focusTo, dur: cineCfg.dur, look: cineCfg.look, audio: cineCfg.audio||'' , shots2: (cineCfg.shots2||[]).map(s=>({ path:(s.path||[]).map(q=>q.slice()), lensFrom:s.lensFrom, lensTo:s.lensTo, focusOn:s.focusOn, focusFrom:s.focusFrom, focusTo:s.focusTo, dur:s.dur, look:s.look })), name: cineCfg.name||'Intro', others: (cineCfg.others||[]).map(o=>({ name:o.name, audio:o.audio||'', path:(o.path||[]).map(q=>q.slice()), lensFrom:o.lensFrom, lensTo:o.lensTo, focusOn:o.focusOn, focusFrom:o.focusFrom, focusTo:o.focusTo, dur:o.dur, look:o.look, shots2:(o.shots2||[]).map(s=>({ path:(s.path||[]).map(q=>q.slice()), lensFrom:s.lensFrom, lensTo:s.lensTo, focusOn:s.focusOn, focusFrom:s.focusFrom, focusTo:s.focusTo, dur:s.dur, look:s.look })) })) },
+    cine:    { on: cineCfg.on, path: cineCfg.path.map(q=>q.slice()), lensFrom: cineCfg.lensFrom, lensTo: cineCfg.lensTo, focusOn: cineCfg.focusOn, focusFrom: cineCfg.focusFrom, focusTo: cineCfg.focusTo, dur: cineCfg.dur, look: cineCfg.look, interp: cineCfg.interp, audio: cineCfg.audio||'' , shots2: (cineCfg.shots2||[]).map(s=>({ path:(s.path||[]).map(q=>q.slice()), lensFrom:s.lensFrom, lensTo:s.lensTo, focusOn:s.focusOn, focusFrom:s.focusFrom, focusTo:s.focusTo, dur:s.dur, look:s.look, interp:s.interp })), name: cineCfg.name||'Intro', others: (cineCfg.others||[]).map(o=>({ name:o.name, audio:o.audio||'', path:(o.path||[]).map(q=>q.slice()), lensFrom:o.lensFrom, lensTo:o.lensTo, focusOn:o.focusOn, focusFrom:o.focusFrom, focusTo:o.focusTo, dur:o.dur, look:o.look, interp:o.interp, shots2:(o.shots2||[]).map(s=>({ path:(s.path||[]).map(q=>q.slice()), lensFrom:s.lensFrom, lensTo:s.lensTo, focusOn:s.focusOn, focusFrom:s.focusFrom, focusTo:s.focusTo, dur:s.dur, look:s.look, interp:s.interp })) })) },
   };
 }
 // ---- Autosave: persist as you work so a browser close never loses progress ----
@@ -19093,6 +19102,8 @@ function renderEditorFields(){
       }
       crow('Duration', CS.dur, 1, 120, 0.5, 's', v=>{ CS.dur=v; });   // long takes allowed; chain shots for cuts
       { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent='Framing'; sp.style.minWidth='56px'; const sel=document.createElement('select'); sel.style.cssText='flex:1;font-size:11px;'; [['spawn','Aim at player start'],['path','Look along path']].forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(CS.look===o[0]) op.selected=true; sel.appendChild(op); }); sel.onchange=()=>{ CS.look=sel.value; }; r.appendChild(sp); r.appendChild(sel); b.appendChild(r); }
+      { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent='Path'; sp.style.minWidth='56px'; const sel=document.createElement('select'); sel.style.cssText='flex:1;font-size:11px;'; [['linear','Linear (straight legs)'],['smooth','Smooth (curved)']].forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if((CS.interp||'linear')===o[0]) op.selected=true; sel.appendChild(op); }); sel.onchange=()=>{ pushUndoSnapshot(); CS.interp=sel.value; if(typeof refreshCinePreview==='function') refreshCinePreview(); }; r.appendChild(sp); r.appendChild(sel); b.appendChild(r);
+        const ph=document.createElement('div'); ph.className='hint'; ph.style.cssText='margin:0 0 4px;font-size:10px;'; ph.textContent='Smooth needs 3+ waypoints; it curves the camera through them at constant speed.'; b.appendChild(ph); }
       { const r=document.createElement('label'); r.style.cssText='display:flex;flex-direction:column;gap:3px;font-size:11px;color:#9fe6cf;margin:6px 0 2px;';
         const sp=document.createElement('span'); sp.innerHTML='<b>Cutscene audio</b> (plays at the start, separate from world audio)';
         const inp=document.createElement('input'); inp.type='text'; inp.value=CC.audio||''; inp.placeholder='https://…/intro.mp3 or .ogg/.wav'; inp.style.cssText='width:100%;box-sizing:border-box;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:5px 7px;font-size:11px;';
