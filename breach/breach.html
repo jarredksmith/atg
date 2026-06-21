@@ -8193,7 +8193,7 @@ const player = {
 };
 const EYE = 1.7;            // standing camera height above the surface the player stands on
 // ---- World movement settings (editable in the editor's World panel; saved with the level) ----
-const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, launchPower:1, sun:0.9, sunColor:0x9fd8ff, sky:0.55, skyColor:0x4a6c7a, ambient:0, arena:70, floorColor:0x141c22, floorRough:0.95, floorMetal:0.1, floorTex:'', floorTexN:'', floorTexR:'', floorTile:0, floorTileU:0, floorTileV:0, floorRot:0, wallColor:0x1a242b, wallRough:0.8, wallMetal:0.2, wallTex:'', wallTexN:'', wallTexR:'', wallTile:0, wallTileU:0, wallTileV:0, wallRot:0, sky_hdri:'', skyBright:1, skyRot:0, wallsVisible:true, fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4, postBloom:0.65, postMotion:0.62, postVig:0.42, postGrain:0.05, postSat:1.08, postCon:1.05, postThresh:0.62, terrain:null };
+const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, launchPower:1, sun:0.9, sunColor:0x9fd8ff, sky:0.55, skyColor:0x4a6c7a, ambient:0, arena:70, floorColor:0x141c22, floorRough:0.95, floorMetal:0.1, floorTex:'', floorTexN:'', floorTexR:'', floorTile:0, floorTileU:0, floorTileV:0, floorRot:0, wallColor:0x1a242b, wallRough:0.8, wallMetal:0.2, wallTex:'', wallTexN:'', wallTexR:'', wallTile:0, wallTileU:0, wallTileV:0, wallRot:0, sky_hdri:'', skyBright:1, skyRot:0, wallsVisible:true, fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4, pickupBase:true, pickupAnim:true, postBloom:0.65, postMotion:0.62, postVig:0.42, postGrain:0.05, postSat:1.08, postCon:1.05, postThresh:0.62, terrain:null };
 let worldCfg = Object.assign({}, DEFAULT_WORLD, (savedLevel && savedLevel.world) || {});
 
 // Apply (or clear) a tiling texture on a shared material. Stores the current url on the material under
@@ -8452,6 +8452,10 @@ function applyWorldCfg(){
     _postSat    = Math.max(0,   Math.min(2,    worldCfg.postSat    == null ? DEFAULT_WORLD.postSat    : +worldCfg.postSat));
     _postCon    = Math.max(0.5, Math.min(2,    worldCfg.postCon    == null ? DEFAULT_WORLD.postCon    : +worldCfg.postCon));
     _postThresh = Math.max(0,   Math.min(1,    worldCfg.postThresh == null ? DEFAULT_WORLD.postThresh : +worldCfg.postThresh));
+    // build 595: pickup look (base disc + bounce/rotate). _animatePickup reads these live; refresh editor markers now.
+    if(worldCfg.pickupBase==null) worldCfg.pickupBase = DEFAULT_WORLD.pickupBase;
+    if(worldCfg.pickupAnim==null) worldCfg.pickupAnim = DEFAULT_WORLD.pickupAnim;
+    try{ for(const m of pickupMarkers){ if(m && m.userData && m.userData.pad) m.userData.pad.visible=(worldCfg.pickupBase!==false); } }catch(e){}   // markers may not exist yet at first boot apply
   }
   // HDRI / equirectangular sky
   if(typeof applySkyHdri==='function'){ try{ applySkyHdri(worldCfg.sky_hdri||''); }catch(e){ console.warn('sky apply failed', e); } }
@@ -10705,7 +10709,7 @@ function buildPowerupMesh(kind){
   const k = POWERUP_KINDS[kind] || POWERUP_KINDS.health;
   const g = new THREE.Group();
   const pad = new THREE.Mesh(new THREE.CylinderGeometry(1.15,1.15,0.12,20), new THREE.MeshStandardMaterial({ color:k.c, emissive:k.c, emissiveIntensity:0.6, transparent:true, opacity:0.55, roughness:0.4 }));
-  pad.position.y=0.06; g.add(pad);
+  pad.position.y=0.06; g.add(pad); g.userData.pad=pad; pad.visible=(typeof worldCfg==='undefined' || worldCfg.pickupBase!==false);   // build 595: base disc is toggleable
   const pm = pickupModels[kind];
   if(pm && pm.url){
     // a scaled custom GLB instead of the default icon (bobs/spins via g.userData.icon)
@@ -10731,7 +10735,9 @@ function buildPowerupMesh(kind){
   }
   return g;
 }
-function _animatePickup(g, dt){ const ic=g.userData.icon; if(ic){ ic.rotation.y += dt*1.8; ic.position.y = 1.25 + Math.sin(performance.now()*0.003)*0.12; } }
+function _animatePickup(g, dt){ if(g.userData.pad && typeof worldCfg!=='undefined') g.userData.pad.visible=(worldCfg.pickupBase!==false); const ic=g.userData.icon; if(!ic) return;
+  if(typeof worldCfg!=='undefined' && worldCfg.pickupAnim===false){ ic.rotation.y=0; ic.position.y=1.25; return; }   // build 595: animation toggled off -> hold still
+  ic.rotation.y += dt*1.8; ic.position.y = 1.25 + Math.sin(performance.now()*0.003)*0.12; }
 // Layout scaled to the current arena: a health pad at center + the three buffs on a ring.
 function powerupLayout(){
   const r = Math.max(14, ARENA*0.55);
@@ -14090,7 +14096,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 594 · 2026-06-19';
+const BUILD_VERSION = 'build 595 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -19362,6 +19368,13 @@ function renderEditorFields(){
       const poCb=document.createElement('input'); poCb.type='checkbox'; poCb.checked=pickupsOn; poCb.style.cssText='width:15px;height:15px;accent-color:var(--accent);cursor:pointer;';
       poCb.onchange=()=>{ pushUndoSnapshot(); pickupsOn=poCb.checked; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers(); renderEditorFields(); };
       const poSp=document.createElement('span'); poSp.textContent='Spawn pickups'; poLab.appendChild(poCb); poLab.appendChild(poSp); pkHost.appendChild(poLab); }
+    { const styleTog=(label, key, tip)=>{ const lab=document.createElement('label'); lab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 4px;cursor:pointer;'; lab.title=tip||'';
+        const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=(worldCfg[key]!==false); cb.style.cssText='width:15px;height:15px;accent-color:var(--accent);cursor:pointer;flex:none;';
+        cb.onchange=()=>{ pushUndoSnapshot(); worldCfg[key]=cb.checked; if(typeof applyWorldCfg==='function') applyWorldCfg(); if(typeof refreshPickupMarkers==='function') refreshPickupMarkers(); };
+        const sp=document.createElement('span'); sp.textContent=label; lab.appendChild(cb); lab.appendChild(sp); pkHost.appendChild(lab); };
+      styleTog('Base disc under pickups','pickupBase','Show the glowing circle beneath each floating pickup');
+      styleTog('Bounce & rotate animation','pickupAnim','Spin and bob the floating pickup item');
+      hint(pkHost,'','0 0 6px').textContent='Affects every floating pickup (health / ammo / weapon / custom). Coins and keys have their own look.'; }
     if(!pickupsOn){ hint(pkHost,'','2px 0 6px').textContent='Pickups are off \u2014 no health/buff diamonds spawn (placed spots below are kept for when you turn this back on).'; }
     { const krow=document.createElement('div'); krow.className='row2'; krow.style.flexWrap='wrap';
       const KINDS=PICKUP_KIND_OPTS;
