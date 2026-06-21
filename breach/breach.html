@@ -9301,7 +9301,7 @@ function spawnEnemy(spawn){
   // wave/marker x,z can land inside a rock -> the enemy is trapped on the wrong side and can't path out, and
   // a fixed Y=1.4 leaves it under an elevated floor. Snap to the real surface; if the body is buried, spiral
   // out to the nearest clear column, then fall back to a fresh random spawn, so it starts standing in the open.
-  { const _surfAt=(x,z)=>{ const s=(typeof surfaceTopAt==='function')?surfaceTopAt(x,z):-Infinity; const t=(typeof terrainHeightAt==='function')?terrainHeightAt(x,z):0; return (s>-Infinity)?Math.max(s,t):t; };
+  { const _surfAt=(x,z)=> _spawnFloorAt(x,z);
     let _fy=(_spawnY!=null)?_spawnY:_surfAt(px,pz);
     if(typeof clearAt==='function' && !clearAt(px,pz,_fy)){
       let _found=null;
@@ -11090,7 +11090,7 @@ function randomSpawn(){
   for(const id in NET.players){ const rp=NET.players[id]; if(rp) others.push([rp.posEye.x, rp.posEye.z]); }
   // Surface height at a column (the elevated arena floor, a prop top, or terrain) — so spawns validate and place
   // ON the floor that's actually there, not at world-Y 0 (which is buried inside an elevated arena).
-  const surfAt = (x,z)=>{ const s=(typeof surfaceTopAt==='function')?surfaceTopAt(x,z):-Infinity; const t=(typeof terrainHeightAt==='function')?terrainHeightAt(x,z):0; return (s>-Infinity)?Math.max(s,t):t; };
+  const surfAt = (x,z)=> _spawnFloorAt(x,z);
   let best=null, bestScore=-1;
   for(let tries=0; tries<64; tries++){
     let x, z;
@@ -14185,7 +14185,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 616 · 2026-06-19';
+const BUILD_VERSION = 'build 617 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -16196,7 +16196,24 @@ function surfaceTopAt(x, z){
   }
   return top;
 }
-// Highest surface DIRECTLY BELOW a prop's base (terrain or another prop), ignoring the prop itself. Used by the
+// Build 617: like surfaceTopAt but only counts surfaces AT OR BELOW ceilY. A roof/ceiling primitive placed over a
+// maze or building sits above the player, so it must not become the spawn floor — enemies belong in the course.
+function surfaceTopUnder(x, z, ceilY){
+  _downOrigin.set(x, 300, z); _downRay.set(_downOrigin, _downDir); _downRay.far = 600;
+  let top = -Infinity;
+  const hits = _downRay.intersectObjects(_surfCull(x,z), true);
+  for(const h of hits){ if(h.point.y <= ceilY && h.point.y > top) top = h.point.y; }
+  if(dynamicProps.length){ const list = heldProp ? dynamicProps.filter(o=>o!==heldProp) : dynamicProps; const dh = _downRay.intersectObjects(list, true); for(const h of dh){ if(h.point.y <= ceilY && h.point.y > top) top = h.point.y; } }
+  return top;
+}
+// The floor under the play space at (x,z): highest surface at/below the player's head, else terrain. Used for
+// enemy spawning so a roof above a maze/office is skipped and enemies land on the course floor with the player.
+function _spawnFloorAt(x, z){
+  const ceil = ((typeof player!=='undefined' && player) ? player.pos.y : 0) + 2.5;   // just above a standing player; below a walkable roof
+  const s = surfaceTopUnder(x, z, ceil);
+  const t = (typeof terrainHeightAt==='function') ? terrainHeightAt(x, z) : 0;
+  return (s>-Infinity) ? Math.max(s, t) : t;
+}
 // editor's "snap to ground" so a prop drops onto whatever is under it. Returns terrain height if nothing else.
 function surfaceTopBelow(obj){
   const box = new THREE.Box3().setFromObject(obj);
