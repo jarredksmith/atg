@@ -300,22 +300,24 @@
     line-height: .9;
   }
   #overlay .sub { color:#7fa99c; letter-spacing: 4px; margin-top: 10px; font-size: 14px; }
-  #startBtn {
+  #startBtn, #replayBtn {
     margin-top: 28px; pointer-events:auto; cursor: pointer;
     font-family:var(--ui-font); font-size: 18px; font-weight:700; letter-spacing: 3px;
     color:#05070a; background:var(--accent); border:none; padding: 16px 46px;
     clip-path: polygon(0 0,100% 0,100% 70%,90% 100%,0 100%);
     transition: transform .1s, box-shadow .2s; text-transform: uppercase;
   }
-  #startBtn:hover { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(var(--accent-rgb),.4); }
+  #startBtn:hover, #replayBtn:hover { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(var(--accent-rgb),.4); }
   .menuBtns { margin-top: 16px; display:flex; gap:10px; justify-content:center; align-items:center; flex-wrap:wrap; }
-  .secBtn {
+  .secBtn, #chalBtn {
     pointer-events:auto; cursor:pointer;
     font-family:var(--ui-font); font-size:13px; font-weight:600; letter-spacing:2px;
     color:#9fe6cf; background:rgba(8,18,18,.5); border:1px solid #2a6e5c; padding:10px 22px;
     border-radius:7px; transition: border-color .2s, color .2s, background .2s; text-transform:uppercase;
   }
-  .secBtn:hover { border-color:var(--accent); color:#eafff7; background:rgba(var(--accent-rgb),.10); }
+  .secBtn:hover, #chalBtn:hover { border-color:var(--accent); color:#eafff7; background:rgba(var(--accent-rgb),.10); }
+  #chalBtn { margin-top:10px; display:inline-flex; align-items:center; justify-content:center; gap:8px; }
+  #chalBtn .eico { width:16px; height:16px; }
   .menuBtns.menuSub { margin-top: 10px; gap: 8px; }
   .secBtn.ghost { font-size:12px; padding:7px 16px; color:#7fb3a3; border-color:#1f4d42; background:rgba(8,18,18,.32); letter-spacing:1.5px; }
   .secBtn.ghost:hover { border-color:var(--accent); color:#eafff7; background:rgba(var(--accent-rgb),.08); }
@@ -14121,7 +14123,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 602 · 2026-06-19';
+const BUILD_VERSION = 'build 603 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
