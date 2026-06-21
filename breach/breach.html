@@ -14123,7 +14123,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 603 · 2026-06-19';
+const BUILD_VERSION = 'build 604 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -16290,13 +16290,13 @@ function updatePerfHud(){
 // start ('spawn') or its travel direction ('path'), letterboxed with the HUD hidden. Any input skips it.
 // Disabled / no path => deploy behaves exactly as before. Editor 'Preview' reuses the same engine.
 let cineCfg = { on:false, path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn', audio:'', shots2:[] };
-function _resShot(s){ return { path:Array.isArray(s.path)?s.path.map(q=> q.length>=6 ? [+q[0]||0,+q[1]||0,+q[2]||0,+q[3]||0,+q[4]||0,+q[5]||0] : [+q[0]||0,+q[1]||0,+q[2]||0]):[], lensFrom:+s.lensFrom||35, lensTo:+s.lensTo||+s.lensFrom||35, focusOn:!!s.focusOn, focusFrom:+s.focusFrom||8, focusTo:+s.focusTo||+s.focusFrom||8, dur:+s.dur||6, look:(s.look==='path')?'path':'spawn', interp:(s.interp==='smooth')?'smooth':'linear' }; }
+function _resShot(s){ return { path:Array.isArray(s.path)?s.path.map(q=> q.length>=6 ? [+q[0]||0,+q[1]||0,+q[2]||0,+q[3]||0,+q[4]||0,+q[5]||0] : [+q[0]||0,+q[1]||0,+q[2]||0]):[], lensFrom:+s.lensFrom||35, lensTo:+s.lensTo||+s.lensFrom||35, focusOn:!!s.focusOn, focusFrom:+s.focusFrom||8, focusTo:+s.focusTo||+s.focusFrom||8, dur:+s.dur||6, look:(s.look==='path')?'path':'spawn', interp:(s.interp==='smooth')?'smooth':'linear', dofRange:+s.dofRange||14, dofStrength:(s.dofStrength!=null?+s.dofStrength:1.4), dofStrengthTo:(s.dofStrengthTo!=null?+s.dofStrengthTo:(s.dofStrength!=null?+s.dofStrength:1.4)) }; }
 function _applyCine(lc){
-  if(lc){ cineCfg.on=!!lc.on; cineCfg.path=Array.isArray(lc.path)?lc.path.map(q=> q.length>=6 ? [+q[0]||0,+q[1]||0,+q[2]||0,+q[3]||0,+q[4]||0,+q[5]||0] : [+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lensFrom=+lc.lensFrom||+lc.lens||35; cineCfg.lensTo=+lc.lensTo||+lc.lens||cineCfg.lensFrom; cineCfg.focusOn=!!lc.focusOn; cineCfg.focusFrom=+lc.focusFrom||8; cineCfg.focusTo=+lc.focusTo||cineCfg.focusFrom; cineCfg.dur=+lc.dur||6; cineCfg.look=(lc.look==='path')?'path':'spawn'; cineCfg.interp=(lc.interp==='smooth')?'smooth':'linear'; cineCfg.audio=(typeof lc.audio==='string')?lc.audio:'';
+  if(lc){ cineCfg.on=!!lc.on; cineCfg.path=Array.isArray(lc.path)?lc.path.map(q=> q.length>=6 ? [+q[0]||0,+q[1]||0,+q[2]||0,+q[3]||0,+q[4]||0,+q[5]||0] : [+q[0]||0,+q[1]||0,+q[2]||0]):[]; cineCfg.lensFrom=+lc.lensFrom||+lc.lens||35; cineCfg.lensTo=+lc.lensTo||+lc.lens||cineCfg.lensFrom; cineCfg.focusOn=!!lc.focusOn; cineCfg.focusFrom=+lc.focusFrom||8; cineCfg.focusTo=+lc.focusTo||cineCfg.focusFrom; cineCfg.dur=+lc.dur||6; cineCfg.look=(lc.look==='path')?'path':'spawn'; cineCfg.interp=(lc.interp==='smooth')?'smooth':'linear'; cineCfg.dofRange=+lc.dofRange||14; cineCfg.dofStrength=(lc.dofStrength!=null?+lc.dofStrength:1.4); cineCfg.dofStrengthTo=(lc.dofStrengthTo!=null?+lc.dofStrengthTo:cineCfg.dofStrength); cineCfg.audio=(typeof lc.audio==='string')?lc.audio:'';
     cineCfg.shots2 = Array.isArray(lc.shots2) ? lc.shots2.map(_resShot) : [];
     cineCfg.name = (typeof lc.name==='string' && lc.name) ? lc.name : 'Intro';
     cineCfg.others = Array.isArray(lc.others) ? lc.others.map(o=>{ const c=_resShot(o); c.name=(typeof o.name==='string'&&o.name)?o.name:'Cutscene'; c.audio=(typeof o.audio==='string')?o.audio:''; c.shots2=Array.isArray(o.shots2)?o.shots2.map(_resShot):[]; return c; }) : []; }
-  else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; cineCfg.interp='linear'; cineCfg.audio=''; cineCfg.shots2=[]; cineCfg.name='Intro'; cineCfg.others=[]; }
+  else { cineCfg.on=false; cineCfg.path=[]; cineCfg.lensFrom=35; cineCfg.lensTo=35; cineCfg.focusOn=false; cineCfg.focusFrom=8; cineCfg.focusTo=8; cineCfg.dur=6; cineCfg.look='spawn'; cineCfg.interp='linear'; cineCfg.dofRange=14; cineCfg.dofStrength=1.4; cineCfg.dofStrengthTo=1.4; cineCfg.audio=''; cineCfg.shots2=[]; cineCfg.name='Intro'; cineCfg.others=[]; }
 }
 _applyCine(savedLevel && savedLevel.cine);   // restore a saved cinematic on page reload (boot path doesn't go through restoreLevel)
 // Multi-shot cutscenes (build 350): cineCfg's flat fields ARE shot 1; extra shots live in cineCfg.shots2.
@@ -16310,9 +16310,9 @@ function _curCutscene(){ const a=allCutscenes(); if(_cineCSel>=a.length) _cineCS
 function cutsceneByName(n){ const a=allCutscenes(); if(!n) return a[0]; for(const c of a){ if((c===cineCfg ? (c.name||'Intro') : c.name)===n) return c; } return null; }
 function cineShotsOf(cc){ if(!Array.isArray(cc.shots2)) cc.shots2=[]; return [cc, ...cc.shots2]; }
 function _ccHasData(cc){ return !!(cc && cineShotsOf(cc).some(s=>s.path && s.path.length>=1)); }
-function _newCutscene(){ const n=allCutscenes().length+1; return { name:'Cutscene '+n, path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn', interp:'linear', audio:'', shots2:[] }; }
+function _newCutscene(){ const n=allCutscenes().length+1; return { name:'Cutscene '+n, path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn', interp:'linear', dofRange:14, dofStrength:1.4, dofStrengthTo:1.4, audio:'', shots2:[] }; }
 function cineAllShots(){ return cineShotsOf(_curCutscene()); }   // shots of the EDITOR-selected cutscene
-function _newCineShot(){ return { path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn', interp:'linear' }; }
+function _newCineShot(){ return { path:[], lensFrom:35, lensTo:35, focusOn:false, focusFrom:8, focusTo:8, dur:6, look:'spawn', interp:'linear', dofRange:14, dofStrength:1.4, dofStrengthTo:1.4 }; }
 let _cineActive=false, _cineT=0, _cineData=null, _cineReturn=null, _cineEditorPreview=false, _cinePreviewGroup=null, _cineIntroPending=false, _cineShots=null, _cineShotIdx=0;   // intro deferred until the level loader reveals
 let _interActive=false, _interTimer=null, _interKeyGo=null;   // campaign transition card (declared here so the render loop's freeze-check precedes it without a TDZ)
 let _cineAvatar=null;   // the local player's body, shown during a cutscene AND while authoring one in the editor
@@ -16396,7 +16396,7 @@ function _cineSmoothPoly(path, perSeg){ const n=path.length; if(n<3) return path
 function _cineSamplePoly(shot){ const path=(shot&&shot.path)||[]; return (shot && shot.interp==='smooth' && path.length>=3) ? _cineSmoothPoly(path,16) : path.map(q=>[q[0],q[1],q[2]]); }
 function _normCineShot(s){
   const path=s.path.map(q=>q.slice());
-  const out={ path, lensFrom:+s.lensFrom||35, lensTo:+s.lensTo||(+s.lensFrom||35), focusOn:!!s.focusOn, focusFrom:+s.focusFrom||8, focusTo:+s.focusTo||(+s.focusFrom||8), dur:Math.max(0.2,+s.dur||6), look:(s.look==='path'?'path':'spawn'), interp:(s.interp==='smooth'?'smooth':'linear') };
+  const out={ path, lensFrom:+s.lensFrom||35, lensTo:+s.lensTo||(+s.lensFrom||35), focusOn:!!s.focusOn, focusFrom:+s.focusFrom||8, focusTo:+s.focusTo||(+s.focusFrom||8), dur:Math.max(0.2,+s.dur||6), look:(s.look==='path'?'path':'spawn'), interp:(s.interp==='smooth'?'smooth':'linear'), dofRange:+s.dofRange||14, dofStrength:(s.dofStrength!=null?+s.dofStrength:1.4), dofStrengthTo:(s.dofStrengthTo!=null?+s.dofStrengthTo:(s.dofStrength!=null?+s.dofStrength:1.4)) };
   out._poly = (typeof _cineSamplePoly==='function') ? _cineSamplePoly(out) : out.path.map(q=>[q[0],q[1],q[2]]);   // the polyline the camera actually rides (curve when smooth)
   if(path.some(q=>q.length>=6)){   // per-waypoint look targets (build 353): interpolate camera aim between them
     const sy=terrainHeightAt(playerSpawn.x,playerSpawn.z)+EYE;
@@ -16415,7 +16415,7 @@ function startCinematic(data, editorPreview){
   _cineShotIdx = 0; _cineData = _cineShots[0];
   _cineAudioUrl = (typeof data.audio==='string') ? data.audio : cineCfg.audio;   // each cutscene carries its own track
   _cineActive=true; _cineT=0; _cineEditorPreview=!!editorPreview;
-  _cineReturn={ x:camera.position.x, y:camera.position.y, z:camera.position.z, q:camera.quaternion.clone(), fov:camera.fov, dofEn:dofEnabled, dofF:dofFocus };
+  _cineReturn={ x:camera.position.x, y:camera.position.y, z:camera.position.z, q:camera.quaternion.clone(), fov:camera.fov, dofEn:dofEnabled, dofF:dofFocus, dofR:dofRange, dofS:dofStrength };
   if(_cineData.focusOn && !IS_COARSE) dofEnabled=true;   // rack focus needs DoF (skipped on mobile where DoF is off)
   if(_cinePreviewGroup) _cinePreviewGroup.visible=false;   // hide the authoring path during the shot
   if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false;
@@ -16434,7 +16434,7 @@ function endCinematic(){
   _cineActive=false; _cineShowBars(false); document.body.classList.remove('cine');
   _hideCineAvatar();
   _stopCineAudio();
-  if(_cineReturn){ camera.fov=_cineReturn.fov; camera.updateProjectionMatrix(); dofEnabled=_cineReturn.dofEn; dofFocus=_cineReturn.dofF; if(_cineEditorPreview){ camera.position.set(_cineReturn.x,_cineReturn.y,_cineReturn.z); camera.quaternion.copy(_cineReturn.q); } }
+  if(_cineReturn){ camera.fov=_cineReturn.fov; camera.updateProjectionMatrix(); dofEnabled=_cineReturn.dofEn; dofFocus=_cineReturn.dofF; if(_cineReturn.dofR!=null) dofRange=_cineReturn.dofR; if(_cineReturn.dofS!=null) dofStrength=_cineReturn.dofS; if(_cineEditorPreview){ camera.position.set(_cineReturn.x,_cineReturn.y,_cineReturn.z); camera.quaternion.copy(_cineReturn.q); } }
   _cineReturn=null; _cineData=null; _cineEditorPreview=false;
   if(typeof clearMovementInput==='function') clearMovementInput();
   if(typeof refreshCinePreview==='function') refreshCinePreview();
@@ -16460,7 +16460,9 @@ function updateCinematic(dt){
   camera.lookAt(_cineTgt);
   const lens = d.lensFrom + (d.lensTo - d.lensFrom)*te;          // zoom keyframe: focal-length ramp over the shot
   camera.fov=lensToFov(lens); camera.updateProjectionMatrix();
-  if(d.focusOn && !IS_COARSE){ dofEnabled=true; dofFocus = d.focusFrom + (d.focusTo - d.focusFrom)*te; }   // rack focus: focus-distance ramp
+  if(d.focusOn && !IS_COARSE){ dofEnabled=true; dofFocus = d.focusFrom + (d.focusTo - d.focusFrom)*te;   // rack focus: focus-distance ramp
+    if(d.dofRange!=null) dofRange = d.dofRange;   // the shot owns its in-focus band + blur, independent of world DoF
+    if(d.dofStrength!=null){ const sTo=(d.dofStrengthTo!=null?d.dofStrengthTo:d.dofStrength); dofStrength = d.dofStrength + (sTo - d.dofStrength)*te; } }
   if(_cineT>=d.dur){
     if(_cineShots && _cineShotIdx < _cineShots.length-1){ _cineShotIdx++; _cineData=_cineShots[_cineShotIdx]; _cineT=0; }   // hard cut: next frame snaps to the new shot's first point/lens
     else endCinematic();
@@ -17900,7 +17902,7 @@ function serializeLevel(){
     extract: extractSpot ? { x: +extractSpot.x.toFixed(3), z: +extractSpot.z.toFixed(3) } : null,
     grenade: { model: GRENADE.model, scale: GRENADE.scale, radius: GRENADE.radius, damage: GRENADE.damage, fuse: GRENADE.fuse, throwForce: GRENADE.throwForce },
     audio:   { musicUrl: (audioSettings.musicUrl||''), sounds: _sanitizeSounds(audioSettings.sounds) },   // music track + custom SFX travel with the level (volumes/mute stay per-device)
-    cine:    { on: cineCfg.on, path: cineCfg.path.map(q=>q.slice()), lensFrom: cineCfg.lensFrom, lensTo: cineCfg.lensTo, focusOn: cineCfg.focusOn, focusFrom: cineCfg.focusFrom, focusTo: cineCfg.focusTo, dur: cineCfg.dur, look: cineCfg.look, interp: cineCfg.interp, audio: cineCfg.audio||'' , shots2: (cineCfg.shots2||[]).map(s=>({ path:(s.path||[]).map(q=>q.slice()), lensFrom:s.lensFrom, lensTo:s.lensTo, focusOn:s.focusOn, focusFrom:s.focusFrom, focusTo:s.focusTo, dur:s.dur, look:s.look, interp:s.interp })), name: cineCfg.name||'Intro', others: (cineCfg.others||[]).map(o=>({ name:o.name, audio:o.audio||'', path:(o.path||[]).map(q=>q.slice()), lensFrom:o.lensFrom, lensTo:o.lensTo, focusOn:o.focusOn, focusFrom:o.focusFrom, focusTo:o.focusTo, dur:o.dur, look:o.look, interp:o.interp, shots2:(o.shots2||[]).map(s=>({ path:(s.path||[]).map(q=>q.slice()), lensFrom:s.lensFrom, lensTo:s.lensTo, focusOn:s.focusOn, focusFrom:s.focusFrom, focusTo:s.focusTo, dur:s.dur, look:s.look, interp:s.interp })) })) },
+    cine:    { on: cineCfg.on, path: cineCfg.path.map(q=>q.slice()), lensFrom: cineCfg.lensFrom, lensTo: cineCfg.lensTo, focusOn: cineCfg.focusOn, focusFrom: cineCfg.focusFrom, focusTo: cineCfg.focusTo, dur: cineCfg.dur, look: cineCfg.look, interp: cineCfg.interp, dofRange: cineCfg.dofRange, dofStrength: cineCfg.dofStrength, dofStrengthTo: cineCfg.dofStrengthTo, audio: cineCfg.audio||'' , shots2: (cineCfg.shots2||[]).map(s=>({ path:(s.path||[]).map(q=>q.slice()), lensFrom:s.lensFrom, lensTo:s.lensTo, focusOn:s.focusOn, focusFrom:s.focusFrom, focusTo:s.focusTo, dur:s.dur, look:s.look, interp:s.interp, dofRange:s.dofRange, dofStrength:s.dofStrength, dofStrengthTo:s.dofStrengthTo })), name: cineCfg.name||'Intro', others: (cineCfg.others||[]).map(o=>({ name:o.name, audio:o.audio||'', path:(o.path||[]).map(q=>q.slice()), lensFrom:o.lensFrom, lensTo:o.lensTo, focusOn:o.focusOn, focusFrom:o.focusFrom, focusTo:o.focusTo, dur:o.dur, look:o.look, interp:o.interp, dofRange:o.dofRange, dofStrength:o.dofStrength, dofStrengthTo:o.dofStrengthTo, shots2:(o.shots2||[]).map(s=>({ path:(s.path||[]).map(q=>q.slice()), lensFrom:s.lensFrom, lensTo:s.lensTo, focusOn:s.focusOn, focusFrom:s.focusFrom, focusTo:s.focusTo, dur:s.dur, look:s.look, interp:s.interp, dofRange:s.dofRange, dofStrength:s.dofStrength, dofStrengthTo:s.dofStrengthTo })) })) },
   };
 }
 // ---- Autosave: persist as you work so a browser close never loses progress ----
@@ -19151,7 +19153,10 @@ function renderEditorFields(){
       if(CS.focusOn){
         crow('Focus start', CS.focusFrom, 1, 120, 1, 'm', v=>{ CS.focusFrom=v; if(typeof refreshCinePreview==='function') refreshCinePreview(); });
         crow('Focus end', CS.focusTo, 1, 120, 1, 'm', v=>{ CS.focusTo=v; if(typeof refreshCinePreview==='function') refreshCinePreview(); });
-        hint(b,'Focus distance pulls from start to end over the shot. The cyan disc is sharp at the start, the orange disc at the end. Needs depth of field, which is off on mobile.','0 0 4px');
+        crow('Blur start', (CS.dofStrength!=null?CS.dofStrength:1.4), 0, 4, 0.05, '\u00d7', v=>{ CS.dofStrength=v; });
+        crow('Blur end', (CS.dofStrengthTo!=null?CS.dofStrengthTo:(CS.dofStrength!=null?CS.dofStrength:1.4)), 0, 4, 0.05, '\u00d7', v=>{ CS.dofStrengthTo=v; });
+        crow('Focus band', (CS.dofRange!=null?CS.dofRange:14), 1, 60, 1, 'm', v=>{ CS.dofRange=v; });
+        hint(b,'This shot carries its <b>own</b> depth of field \u2014 separate from the world. Focus distance and blur each pull from start to end over the shot; Focus band is how deep the sharp zone is. The cyan disc is sharp at the start, the orange disc at the end. Preview to see it; DoF is off on mobile.','0 0 4px');
       }
       crow('Duration', CS.dur, 1, 120, 0.5, 's', v=>{ CS.dur=v; });   // long takes allowed; chain shots for cuts
       { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent='Framing'; sp.style.minWidth='56px'; const sel=document.createElement('select'); sel.style.cssText='flex:1;font-size:11px;'; [['spawn','Aim at player start'],['path','Look along path']].forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(CS.look===o[0]) op.selected=true; sel.appendChild(op); }); sel.onchange=()=>{ CS.look=sel.value; }; r.appendChild(sp); r.appendChild(sel); b.appendChild(r); }
