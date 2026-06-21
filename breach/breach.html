@@ -14111,7 +14111,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 599 · 2026-06-19';
+const BUILD_VERSION = 'build 600 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -16512,6 +16512,21 @@ function refreshCinePreview(){
           const ar=new THREE.ArrowHelper(dir, p, 2.6, custom?0xffcf6b:0x7dd4ff, 0.9, 0.45);   // gold = authored look, blue = Look mode
           ar.line.material.depthTest=false; ar.cone.material.depthTest=false; ar.line.renderOrder=999; ar.cone.renderOrder=999;
           g.add(ar); } }); }
+    // DoF focus planes (build 600): translucent discs at the focus distance, facing the camera — cyan at the
+    // shot's start (focusFrom), orange at its end (focusTo). The camera's aim at that waypoint sets the ray.
+    if(_curShot.focusOn){ const fp=_curShot.path||[];
+      const focusDisc=(idx, dist, col)=>{ const q=fp[idx]; if(!q) return; const p=new THREE.Vector3(q[0],q[1],q[2]); let dir;
+        if(q.length>=6){ dir=new THREE.Vector3(q[3],q[4],q[5]).sub(p); }
+        else if(_curShot.look==='path' && fp.length>=2){ const nq=(idx<fp.length-1)?fp[idx+1]:fp[idx-1]; dir=new THREE.Vector3(nq[0],nq[1],nq[2]).sub(p); if(idx===fp.length-1) dir.negate(); }
+        else { dir=new THREE.Vector3(playerSpawn.x, terrainHeightAt(playerSpawn.x,playerSpawn.z)+EYE, playerSpawn.z).sub(p); }
+        if(dir.lengthSq()<1e-6) return; dir.normalize();
+        const center=p.clone().addScaledVector(dir, Math.max(0.1,dist));
+        const disc=new THREE.Mesh(new THREE.CircleGeometry(1.7,28), new THREE.MeshBasicMaterial({ color:col, transparent:true, opacity:0.16, side:THREE.DoubleSide, depthWrite:false, depthTest:false })); disc.position.copy(center); disc.lookAt(p); disc.renderOrder=997; g.add(disc);
+        const ring=new THREE.Mesh(new THREE.RingGeometry(1.6,1.85,28), new THREE.MeshBasicMaterial({ color:col, transparent:true, opacity:0.75, side:THREE.DoubleSide, depthWrite:false, depthTest:false })); ring.position.copy(center); ring.lookAt(p); ring.renderOrder=998; g.add(ring);
+        const ln=new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(_dashPts([p, center],0.5,0.35)), new THREE.LineBasicMaterial({ color:col, transparent:true, opacity:0.55, depthTest:false })); ln.renderOrder=997; g.add(ln); };
+      focusDisc(0, _curShot.focusFrom, 0x4ad8ff);                                   // focus at shot start
+      if((fp.length||0)>=2) focusDisc(fp.length-1, _curShot.focusTo, 0xff9a3a);     // focus at shot end
+    }
     scene.add(g); _cinePreviewGroup=g;
   }catch(e){ /* path preview is cosmetic; never let it break the editor */ }
 }
@@ -19095,12 +19110,12 @@ function renderEditorFields(){
       hint(b,'Different start/end lens = a zoom across the shot (e.g. 35 to 85 pushes in).','0 0 4px');
       { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:4px 0 2px;cursor:pointer;';
         const c=document.createElement('input'); c.type='checkbox'; c.checked=!!CS.focusOn; c.style.cssText='width:15px;height:15px;accent-color:var(--accent);cursor:pointer;';
-        c.onchange=()=>{ pushUndoSnapshot(); CS.focusOn=c.checked; renderEditorFields(); };
+        c.onchange=()=>{ pushUndoSnapshot(); CS.focusOn=c.checked; if(typeof refreshCinePreview==='function') refreshCinePreview(); renderEditorFields(); };
         const sp=document.createElement('span'); sp.innerHTML='<b>Rack focus</b> (depth of field)'; r.appendChild(c); r.appendChild(sp); b.appendChild(r); }
       if(CS.focusOn){
-        crow('Focus start', CS.focusFrom, 1, 120, 1, 'm', v=>{ CS.focusFrom=v; });
-        crow('Focus end', CS.focusTo, 1, 120, 1, 'm', v=>{ CS.focusTo=v; });
-        hint(b,'Focus distance pulls from start to end over the shot. Needs depth of field, which is off on mobile.','0 0 4px');
+        crow('Focus start', CS.focusFrom, 1, 120, 1, 'm', v=>{ CS.focusFrom=v; if(typeof refreshCinePreview==='function') refreshCinePreview(); });
+        crow('Focus end', CS.focusTo, 1, 120, 1, 'm', v=>{ CS.focusTo=v; if(typeof refreshCinePreview==='function') refreshCinePreview(); });
+        hint(b,'Focus distance pulls from start to end over the shot. The cyan disc is sharp at the start, the orange disc at the end. Needs depth of field, which is off on mobile.','0 0 4px');
       }
       crow('Duration', CS.dur, 1, 120, 0.5, 's', v=>{ CS.dur=v; });   // long takes allowed; chain shots for cuts
       { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:8px;font-size:11px;color:#9fe6cf;margin:4px 0;'; const sp=document.createElement('span'); sp.textContent='Framing'; sp.style.minWidth='56px'; const sel=document.createElement('select'); sel.style.cssText='flex:1;font-size:11px;'; [['spawn','Aim at player start'],['path','Look along path']].forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(CS.look===o[0]) op.selected=true; sel.appendChild(op); }); sel.onchange=()=>{ CS.look=sel.value; }; r.appendChild(sp); r.appendChild(sel); b.appendChild(r); }
