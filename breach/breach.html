@@ -9511,7 +9511,7 @@ let _puId = 1;
 // Editor-placed pickups (weapons/ammo/health/buffs). The live pads are built from these at deploy; if a
 // level has none, spawnPowerups() falls back to the auto buff layout. Markers are an editor-only preview.
 let selPickup = -1;   // editor: index of the pickup spot grabbed by the gizmo (-1 = none)
-let pickupSpots = (savedLevel && Array.isArray(savedLevel.pickups)) ? savedLevel.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health', item:s.item })) : [];
+let pickupSpots = (savedLevel && Array.isArray(savedLevel.pickups)) ? savedLevel.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health', item:s.item, y:+s.y||0, rx:+s.rx||0, ry:+s.ry||0, rz:+s.rz||0, scale:(s.scale!=null?+s.scale:1) })) : [];
 let audioZones = (savedLevel && Array.isArray(savedLevel.audioZones)) ? savedLevel.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : [];
 // DEATH zones: stepping inside kills the player (lava, pits, out-of-bounds). { x,z,r, y, h }. The zone is a
 // horizontal LETHAL PLANE at height y (the surface where placed) with a band h tall above it — so you can jump
@@ -9539,9 +9539,12 @@ let pickupModels = (savedLevel && savedLevel.pickupModels && typeof savedLevel.p
 let keyNames = (savedLevel && savedLevel.keyNames && typeof savedLevel.keyNames==='object') ? JSON.parse(JSON.stringify(savedLevel.keyNames)) : {};   // color -> custom display name ('Engine Room Keycard'); ring/lock ids stay colors
 function keyDisplayName(color){ const n=keyNames[color]; return (n && String(n).trim()) ? String(n).trim() : color.toUpperCase()+' KEY'; }
 let pickupMarkers = [];
+// build 602: per-placed-pickup transform — height offset (Y), full rotation, and scale on the group. The icon's
+// idle spin/bob runs on a child, so the group's base orientation/scale composes cleanly with the animation.
+function _applyPickupXform(obj, sp){ if(!obj||!sp) return; obj.position.set(sp.x, _maxTerrainOver(sp.x,sp.z,1.2)+(+sp.y||0), sp.z); obj.rotation.set((+sp.rx||0)*RAD, (+sp.ry||0)*RAD, (+sp.rz||0)*RAD); obj.scale.setScalar((sp.scale!=null && +sp.scale>0)?+sp.scale:1); }
 function refreshPickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m); } pickupMarkers.length=0;
   if(typeof pickupsOn!=='undefined' && !pickupsOn) return;   // pickups disabled: no editor markers
-  for(const sp of pickupSpots){ const g=buildPowerupMesh(sp.kind, sp.item); g.position.set(sp.x, _maxTerrainOver(sp.x,sp.z,1.2), sp.z); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.pickupMarker=true; scene.add(g); pickupMarkers.push(g); } }
+  for(const sp of pickupSpots){ const g=buildPowerupMesh(sp.kind, sp.item); _applyPickupXform(g, sp); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.pickupMarker=true; scene.add(g); pickupMarkers.push(g); } }
 function setPickupMarkersVisible(v){ for(const m of pickupMarkers) m.visible=v; }
 // ---- Placed loot-box editor markers (mirror of pickup markers) ----
 let lootMarkers = [];
@@ -10764,7 +10767,7 @@ function spawnPowerups(){
   if(!pickupsOn) return;             // pickups disabled for this level
   const spots = (pickupSpots && pickupSpots.length) ? pickupSpots : powerupLayout();
   for(const spot of spots){
-    const mesh = buildPowerupMesh(spot.kind, spot.item); mesh.position.set(spot.x, _maxTerrainOver(spot.x,spot.z,1.2), spot.z); scene.add(mesh);
+    const mesh = buildPowerupMesh(spot.kind, spot.item); _applyPickupXform(mesh, spot); scene.add(mesh);
     powerups.push({ id:_puId++, x:spot.x, z:spot.z, kind:spot.kind, item:spot.item, ready:true, cd:0, mesh });
   }
 }
@@ -13876,10 +13879,17 @@ function openInventory(){ if(invOpen) return; invOpen=true; if(typeof safeExitPo
   _invEl.style.display='flex'; renderInventory(); }
 function closeInventory(){ invOpen=false; if(_invEl) _invEl.style.display='none'; closeInspect(); if(typeof gameOn!=='undefined' && gameOn && !paused && !isTouch && typeof tryPointerLock==='function') tryPointerLock(); }
 function toggleInventory(){ invOpen?closeInventory():openInventory(); }
+function _invCloseX(onclick){   // build 601: a stylized round close button (red on hover)
+  const b=document.createElement('button'); b.textContent='\u2715'; b.setAttribute('aria-label','Close');
+  b.style.cssText='width:30px;height:30px;flex:0 0 auto;border-radius:50%;border:1px solid #2a3a42;background:#0c1822;color:#9fe6cf;font-size:15px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;transition:background .15s,color .15s,border-color .15s,transform .15s;';
+  b.onmouseenter=()=>{ b.style.background='#ff3b30'; b.style.color='#fff'; b.style.borderColor='#ff3b30'; b.style.transform='scale(1.08)'; };
+  b.onmouseleave=()=>{ b.style.background='#0c1822'; b.style.color='#9fe6cf'; b.style.borderColor='#2a3a42'; b.style.transform='none'; };
+  b.onclick=onclick; return b;
+}
 function renderInventory(){ if(!_invEl) return; _invEl.innerHTML='';
   const card=document.createElement('div'); card.style.cssText='background:#0b141a;border:1px solid #2a3a42;border-radius:12px;max-width:560px;width:92%;max-height:86vh;overflow:auto;padding:18px 20px;';
   const h=document.createElement('div'); h.style.cssText='display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;'; h.innerHTML='<div style="font-family:var(--display-font);font-size:22px;color:#ffd166;letter-spacing:2px;">INVENTORY</div>';
-  const cl=document.createElement('button'); cl.textContent='Close'; cl.style.cssText='font-size:12px;padding:4px 10px;'; cl.onclick=closeInventory; h.appendChild(cl); card.appendChild(h);
+  const cl=_invCloseX(closeInventory); h.appendChild(cl); card.appendChild(h);
   if(!inventory.length){ const e=document.createElement('div'); e.style.cssText='color:#7fa99c;font-size:13px;padding:24px 0;text-align:center;'; e.textContent='Empty. Find items in the world to collect them.'; card.appendChild(e); }
   else { const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:repeat(4,1fr);gap:8px;';
     for(const slot of inventory){ const it=invCatalog[slot.id]||{ name:slot.id };
@@ -13903,7 +13913,7 @@ function openInspect(id){
   if(!_inspEl){ _inspEl=document.createElement('div'); _inspEl.id='inspect'; _inspEl.style.cssText='position:fixed;inset:0;z-index:82;display:none;align-items:center;justify-content:center;background:rgba(3,6,8,.86);'; const cd=document.createElement('div'); cd.id='inspectCard'; cd.style.cssText='position:relative;background:#0a1016;border:1px solid #2a3a42;border-radius:14px;max-width:540px;width:92%;padding:16px 18px;'; _inspEl.appendChild(cd); document.body.appendChild(_inspEl); _inspEl.addEventListener('click', e=>{ if(e.target===_inspEl) closeInspect(); }); }
   const card=_inspEl.querySelector('#inspectCard'); card.innerHTML='';
   const hd=document.createElement('div'); hd.style.cssText='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;'; hd.innerHTML='<div style="font-family:var(--display-font);font-size:20px;color:#ffd166;letter-spacing:1px;">'+(it.name||id)+'</div>';
-  const cl=document.createElement('button'); cl.textContent='\u2715'; cl.style.cssText='font-size:14px;padding:2px 9px;'; cl.onclick=closeInspect; hd.appendChild(cl); card.appendChild(hd);
+  const cl=_invCloseX(closeInspect); hd.appendChild(cl); card.appendChild(hd);
   _inspEl.style.display='flex';
   if(it.type==='journal'){
     const page=document.createElement('div'); page.style.cssText='background:#1d1810;border:1px solid #3a2f1a;border-radius:8px;padding:18px 20px;color:#ece0c4;font-size:14px;line-height:1.65;max-height:62vh;overflow:auto;white-space:pre-wrap;font-family:Georgia,"Times New Roman",serif;'; page.textContent=it.journal||it.desc||'(no text)'; card.appendChild(page);
@@ -14111,7 +14121,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 600 · 2026-06-19';
+const BUILD_VERSION = 'build 602 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14216,7 +14226,7 @@ const SCOPE_SENS = 0.00045;                   // much slower under the scope's h
 addEventListener('wheel', e=>{ if(heldProp){ heldDist=Math.max(HOLD_MIN, Math.min(HOLD_MAX, heldDist - e.deltaY*0.003)); } }, {passive:true});
 addEventListener('mousedown', e=>{
   if(radialOpen){ if(e.button===0) closeRadial(true); return; }
-  if(shopOpen || editorOpen || paused || mapOpen || duelDead) return;   // no actions while eliminated (awaiting respawn)
+  if(shopOpen || editorOpen || paused || mapOpen || duelDead || invOpen) return;   // no actions while eliminated or while the inventory is open
   if(e.button===0){ if(heldProp){ throwHeld(); return; } firing=true; }
   else if(e.button===1){ e.preventDefault(); grabAction(); }   // middle-click (scroll-wheel push): grab / drop
   else if(e.button===2) ads = true;   // right-click: aim down sights
@@ -15281,6 +15291,7 @@ function meleeAttack(wep){
 function shoot(){
   if(matchWarmup>0) return;   // no firing during the pre-match generating/countdown
   if(duelDead) return;        // eliminated: dead players can't fire until they respawn
+  if(invOpen) return;         // inventory open: clicks belong to the UI, not the trigger
   const w = W();
   const now = performance.now();
   if(now - lastShot < w.fireRate * run.fireMul || reloading) return;
@@ -16565,7 +16576,7 @@ function loop(){
   if(_cineActive){ updateCinematic(rawDt); if(mixers.length){ for(const m of mixers) m.update(rawDt); } if(typeof updateXAnim==='function') updateXAnim(rawDt); renderScene(scene,camera); return; }   // keep GLB clips AND mechanism/waypoint motion (doors, platforms, elevators) alive on camera   // keep prop/GLB animations alive on camera (raw time — no hitstop during a cutscene)   // intro/preview flythrough owns the camera; freeze the sim
   if(_interActive){ pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }   // campaign transition card owns the screen; hold the won level frozen behind it
   if(!gameOn) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }
-  if((shopOpen || choosingUpgrade || (paused && NET.mode==='off') || (mapOpen && NET.mode==='off')) && !(duelDead && pvpMode())) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); if(mapOpen) drawBigMap(); return; }  // freeze world while shopping / picking an upgrade / paused (solo) — but never while waiting to respawn
+  if((shopOpen || choosingUpgrade || (paused && NET.mode==='off') || (mapOpen && NET.mode==='off') || (invOpen && NET.mode==='off')) && !(duelDead && pvpMode())) { pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); if(mapOpen) drawBigMap(); return; }  // freeze world while shopping / picking an upgrade / paused / inventory open (solo) — but never while waiting to respawn
 
   pollGamepad(dt);   // controller input feeds the same flags as keyboard/mouse
   if(isTouch && !shopOpen && !choosingUpgrade){   // touch look (also drives the editor fly camera): applied here since there's no pointer lock on mobile
@@ -17868,7 +17879,7 @@ function serializeLevel(){
     turrets: turretModels.map(_turretOpts),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
     pickupsOn: pickupsOn,
-    pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind, ...(s.item!=null?{item:s.item}:{}) })),
+    pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind, ...(s.item!=null?{item:s.item}:{}), ...(s.y?{y:s.y}:{}), ...(s.rx?{rx:s.rx}:{}), ...(s.ry?{ry:s.ry}:{}), ...(s.rz?{rz:s.rz}:{}), ...(s.scale!=null&&s.scale!==1?{scale:s.scale}:{}) })),
     loot: lootSpots.map(s=>({ x:+s.x, y:+(s.y||0), z:+s.z, items:(s.items||[]).slice(), glowColor:(s.glowColor!=null?+s.glowColor:0xffd166), glowI:(s.glowI!=null?+s.glowI:8) })),
     extractFx: { color: extractFxCfg.color, opacity: extractFxCfg.opacity, height: extractFxCfg.height, pillar: extractFxCfg.pillar },
     audioZones: audioZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, url:z.url||'', vol:+z.vol, loop:!!z.loop })),
@@ -18854,6 +18865,29 @@ function renderAttachAuthoring(host, wep){
 // inspect (build 596). Writes straight into invCatalog, which already serializes with the level as invItems.
 let _editInvId = null;
 function _newInvId(){ let i=1; while(invCatalog['item_'+i]) i++; return 'item_'+i; }
+// build 602: per-placed-pickup transform editor (height, rotation, scale, X/Z). Sliders re-apply to the live
+// marker directly (cheap) instead of rebuilding every pickup; X/Z commit through the marker refresh.
+function _pickupXformPanel(host, sp, i){
+  const panel=document.createElement('div'); panel.style.cssText='margin:1px 0 7px 18px;padding:7px 9px;border-left:2px solid #2a3a42;display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;align-items:center;';
+  const dec=(st)=> st<1?2:0;
+  const num=(label, get, mn, mx, st, set)=>{ const l=document.createElement('span'); l.textContent=label; l.style.cssText='font-size:11px;color:#9fe6cf;';
+    const inp=document.createElement('input'); inp.type='range'; inp.min=mn; inp.max=mx; inp.step=st; inp.value=get(); inp.style.accentColor='var(--accent)';
+    const v=document.createElement('span'); v.textContent=(+get()).toFixed(dec(st)); v.style.cssText='font-size:10px;color:#cfeee2;min-width:42px;text-align:right;';
+    inp.onpointerdown=()=>{ if(typeof pushUndoSnapshot==='function') pushUndoSnapshot(); };
+    inp.oninput=()=>{ set(+inp.value); v.textContent=(+inp.value).toFixed(dec(st)); if(pickupMarkers[i]) _applyPickupXform(pickupMarkers[i], sp); };
+    panel.appendChild(l); panel.appendChild(inp); panel.appendChild(v); };
+  num('Height (Y)', ()=>(+sp.y||0), -10, 20, 0.1, v=>sp.y=v);
+  num('Rotate X\u00b0', ()=>(+sp.rx||0), -180, 180, 1, v=>sp.rx=v);
+  num('Rotate Y\u00b0', ()=>(+sp.ry||0), -180, 180, 1, v=>sp.ry=v);
+  num('Rotate Z\u00b0', ()=>(+sp.rz||0), -180, 180, 1, v=>sp.rz=v);
+  num('Scale', ()=>(sp.scale!=null?+sp.scale:1), 0.1, 8, 0.05, v=>sp.scale=v);
+  const xzRow=document.createElement('div'); xzRow.style.cssText='grid-column:1/4;display:flex;gap:8px;align-items:center;margin-top:2px;';
+  const mkXZ=(label, get, set)=>{ const l=document.createElement('span'); l.textContent=label; l.style.cssText='font-size:11px;color:#9fe6cf;'; const inp=document.createElement('input'); inp.type='number'; inp.step='0.1'; inp.value=(+get()).toFixed(2); inp.style.cssText='width:66px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:11px;'; inp.onchange=()=>{ if(typeof pushUndoSnapshot==='function') pushUndoSnapshot(); set(+inp.value||0); if(typeof refreshPickupMarkers==='function') refreshPickupMarkers(); renderEditorFields(); }; xzRow.appendChild(l); xzRow.appendChild(inp); };
+  mkXZ('X', ()=>sp.x, v=>sp.x=v); mkXZ('Z', ()=>sp.z, v=>sp.z=v);
+  const reset=document.createElement('button'); reset.textContent='Reset transform'; reset.style.cssText='font-size:10px;padding:2px 8px;margin-left:auto;'; reset.onclick=()=>{ if(typeof pushUndoSnapshot==='function') pushUndoSnapshot(); sp.y=0; sp.rx=0; sp.ry=0; sp.rz=0; sp.scale=1; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers(); renderEditorFields(); };
+  xzRow.appendChild(reset); panel.appendChild(xzRow);
+  host.appendChild(panel);
+}
 function renderInvItems(host){
   const hint=(h, html, margin)=>{ const d=document.createElement('div'); d.className='hint'; d.style.margin=margin||'6px 0 4px'; d.innerHTML=html; h.appendChild(d); return d; };
   host.innerHTML='';
@@ -19505,7 +19539,9 @@ function renderEditorFields(){
           isel.onchange=()=>{ pushUndoSnapshot(); sp.item=isel.value; refreshPickupMarkers(); }; }
         const pos=document.createElement('span'); pos.textContent='('+sp.x.toFixed(1)+', '+sp.z.toFixed(1)+')'; pos.style.cssText='font-size:10px;opacity:0.7;';
         const del=document.createElement('button'); del.textContent='\u2715'; del.style.cssText='padding:1px 7px'; del.onclick=()=>removePickupSpot(i);
-        row.appendChild(lab); row.appendChild(ks); if(isel) row.appendChild(isel); row.appendChild(pos); row.appendChild(del); pkHost.appendChild(row); });
+        const ed=document.createElement('button'); ed.textContent=(selPickup===i?'\u25be':'\u2699'); ed.title='Transform: height, rotation, scale, position'; ed.style.cssText='padding:1px 7px;font-size:11px;'; ed.onclick=()=>{ selPickup=(selPickup===i?-1:i); if(typeof refreshPickupMarkers==='function') refreshPickupMarkers(); renderEditorFields(); };
+        row.appendChild(lab); row.appendChild(ks); if(isel) row.appendChild(isel); row.appendChild(pos); row.appendChild(ed); row.appendChild(del); pkHost.appendChild(row);
+        if(selPickup===i) _pickupXformPanel(pkHost, sp, i); });
     } else { hint(pkHost,'','3px 0 0').textContent='None yet. Pick a kind, walk where you want it, then Place ahead. They respawn on a timer.'; }
     hint(gHost, '<b>Wave mode</b>', '12px 0 4px');
     const gmRow=document.createElement('div'); gmRow.className='row2';
@@ -20870,7 +20906,7 @@ function getSelPos(){
 function setSelPos(v){
   if(selPickup>=0){
     const g=pickupMarkers[selPickup], sp=pickupSpots[selPickup];
-    if(g && sp){ sp.x=+v.x.toFixed(2); sp.z=+v.z.toFixed(2); g.position.set(sp.x, _maxTerrainOver(sp.x,sp.z,1.2), sp.z); }
+    if(g && sp){ sp.x=+v.x.toFixed(2); sp.z=+v.z.toFixed(2); _applyPickupXform(g, sp); }
     return;
   }
   if(editorActive==='station' && station){
