@@ -14165,7 +14165,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 612 · 2026-06-19';
+const BUILD_VERSION = 'build 614 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -16621,6 +16621,8 @@ function _cinePvFrameAt(shot, u){   // pose _cinePvCam for parameter u (0..1) �
   _cinePvCam.up.set(0,1,0); _cinePvCam.lookAt(tx,ty,tz);
   if(d.roll!=null || d.rollTo!=null){ const r0=+d.roll||0, r1=(d.rollTo!=null?+d.rollTo:r0), rr=r0+(r1-r0)*te; if(rr) _cinePvCam.rotateZ(rr*Math.PI/180); }
   _cinePvCam.fov=lensToFov(d.lensFrom + (d.lensTo - d.lensFrom)*te); _cinePvCam.near=camera.near; _cinePvCam.far=camera.far;
+  _pvDofOn = !!d.focusOn;   // build 614: preview the shot's rack focus too
+  if(d.focusOn){ _pvDofFocus = d.focusFrom + (d.focusTo - d.focusFrom)*te; _pvDofRange = (d.dofRange!=null?d.dofRange:14); const sTo=(d.dofStrengthTo!=null?d.dofStrengthTo:d.dofStrength); _pvDofStrength = d.dofStrength + (sTo - d.dofStrength)*te; }
   return true;
 }
 function _ensureCinePvPanel(){
@@ -16634,6 +16636,31 @@ function _ensureCinePvPanel(){
   hdr.appendChild(lab); hdr.appendChild(sld); hdr.appendChild(x);
   const fr=document.createElement('div'); fr.style.cssText='pointer-events:none;width:240px;height:135px;border:1px solid rgba(var(--accent-rgb),0.45);border-top:none;box-sizing:border-box;background:transparent;box-shadow:0 6px 18px rgba(0,0,0,.5);'; _cinePvFrame=fr;
   p.appendChild(hdr); p.appendChild(fr); document.body.appendChild(p); _cinePvPanel=p;
+}
+let _pvDofRT=null, _pvDofRT2=null, _pvDofW=0, _pvDofH=0;
+let _pvDofOn=false, _pvDofFocus=8, _pvDofRange=14, _pvDofStrength=1.4;
+function _disposePvDof(){ for(const rt of [_pvDofRT,_pvDofRT2]){ if(rt){ rt.dispose&&rt.dispose(); if(rt.depthTexture) rt.depthTexture.dispose&&rt.depthTexture.dispose(); } } _pvDofRT=_pvDofRT2=null; _pvDofW=_pvDofH=0; }
+// Build 614: DoF for the preview window. Can't reuse the screen DoF targets (wrong aspect) or _runDofTo (its
+// intermediate target renders would be clipped by the corner scissor). So: own PiP-sized targets, the SAME blur
+// shaders, scene+H-blur into offscreen targets (scissor OFF), then V-blur to the scissored corner.
+function _renderPvDof(X, M, W, H){
+  const pr=renderer.getPixelRatio();
+  const Wd=Math.max(2,Math.round(W*pr)), Hd=Math.max(2,Math.round(H*pr));
+  if(!_pvDofRT || _pvDofW!==Wd || _pvDofH!==Hd){
+    _disposePvDof();
+    _pvDofRT = new THREE.WebGLRenderTarget(Wd,Hd,{ minFilter:THREE.LinearFilter, magFilter:THREE.LinearFilter, type:THREE.UnsignedByteType });
+    _pvDofRT.depthTexture = new THREE.DepthTexture(Wd,Hd); _pvDofRT.depthTexture.format=THREE.DepthFormat; _pvDofRT.depthTexture.type=THREE.UnsignedShortType;
+    _pvDofRT2 = new THREE.WebGLRenderTarget(Wd,Hd,{ minFilter:THREE.LinearFilter, magFilter:THREE.LinearFilter, type:THREE.UnsignedByteType });
+    _pvDofW=Wd; _pvDofH=Hd;
+  }
+  renderer.setScissorTest(false);
+  renderer.setRenderTarget(_pvDofRT); renderer.setViewport(0,0,W,H); renderer.render(scene, _cinePvCam);   // 1) scene -> color+depth
+  for(const m of [_dofMatH,_dofMatV]){ const u=m.uniforms; u.uNear.value=_cinePvCam.near; u.uFar.value=_cinePvCam.far; u.uFocus.value=_pvDofFocus; u.uRange.value=_pvDofRange; u.uStrength.value=_pvDofStrength; u.uTexel.value.set(1/Wd,1/Hd); }
+  _dofMatH.uniforms.tColor.value=_pvDofRT.texture; _dofMatH.uniforms.tDepth.value=_pvDofRT.depthTexture; _dofQuad.material=_dofMatH;
+  renderer.setRenderTarget(_pvDofRT2); renderer.setViewport(0,0,W,H); renderer.render(_dofScene,_dofCam);   // 2) horizontal blur
+  _dofMatV.uniforms.tColor.value=_pvDofRT2.texture; _dofMatV.uniforms.tDepth.value=_pvDofRT.depthTexture; _dofQuad.material=_dofMatV;
+  renderer.setRenderTarget(null);
+  renderer.setScissorTest(true); renderer.setViewport(X,M,W,H); renderer.setScissor(X,M,W,H); renderer.render(_dofScene,_dofCam);   // 3) vertical blur -> corner
 }
 function _renderCinePvWindow(){
   if(!editorOpen || !_cinePvOn || _cineActive){ if(_cinePvPanel) _cinePvPanel.style.display='none'; return; }
@@ -16653,9 +16680,13 @@ function _renderCinePvWindow(){
   const sbh=[]; if(typeof selBoxes!=='undefined' && selBoxes) for(const b of selBoxes){ if(b && b.visible){ b.visible=false; sbh.push(b); } }
   _cinePvCam.aspect=W/H; _cinePvCam.updateProjectionMatrix();
   const sa=renderer.shadowMap.autoUpdate; renderer.shadowMap.autoUpdate=false;   // sun shadows were already built by the main render this frame
-  renderer.setScissorTest(true); renderer.setViewport(X, M, W, H); renderer.setScissor(X, M, W, H);
-  try{ renderer.render(scene, _cinePvCam); }catch(e){}
-  renderer.setScissorTest(false); renderer.setViewport(0,0,size.x,size.y); renderer.setScissor(0,0,size.x,size.y);
+  if(_pvDofOn && !IS_COARSE && typeof ensureDof==='function' && ensureDof()){
+    try{ _renderPvDof(X, M, W, H); }catch(e){ renderer.setRenderTarget(null); renderer.setScissorTest(true); renderer.setViewport(X,M,W,H); renderer.setScissor(X,M,W,H); try{ renderer.render(scene, _cinePvCam); }catch(_e){} }
+  } else {
+    renderer.setScissorTest(true); renderer.setViewport(X, M, W, H); renderer.setScissor(X, M, W, H);
+    try{ renderer.render(scene, _cinePvCam); }catch(e){}
+  }
+  renderer.setScissorTest(false); renderer.setViewport(0,0,size.x,size.y); renderer.setScissor(0,0,size.x,size.y); renderer.setRenderTarget(null);
   renderer.shadowMap.autoUpdate=sa;
   for(const o of hid) o.visible=true; for(const b of sbh) b.visible=true;
 }
@@ -19301,7 +19332,11 @@ function renderEditorFields(){
         fsBtn.onclick=()=>{ if(fsBox){ fsBox.remove(); fsBox=null; fsBtn.textContent='Search Freesound'; return; } fsBox=renderFreesoundBrowser(fsHold, ()=>renderEditorFields(), { label:'Cutscene audio', set:v=>{ pushUndoSnapshot(); CC.audio=(v||'').trim(); } }); fsHold.appendChild(fsBox); fsBtn.textContent='Hide Freesound'; };
         fsHold.appendChild(fsBtn); b.appendChild(fsHold); }
       hint(b,'A one-shot track (voiceover, music sting) that fires when the cutscene begins and stops when it ends or is skipped. The file must allow cross-origin loading (CORS), same as custom music.','0 0 4px');
-      { const prev=document.createElement('button'); prev.textContent='▶ Preview'; prev.style.cssText='width:100%;padding:6px 8px;font-size:12px;cursor:pointer;margin-top:4px;'; prev.disabled=!cineHasData(); prev.onclick=()=>{ const _cc=_curCutscene(); startCinematic({ shots: cineShotsOf(_cc), audio: _cc.audio }, true); }; b.appendChild(prev); }
+      { const pr=document.createElement('div'); pr.style.cssText='display:flex;gap:6px;margin-top:4px;';
+        const _selShot=()=>{ const a=cineAllShots(); return a[Math.min(_cineShotSel, a.length-1)]; };
+        const prevAll=document.createElement('button'); prevAll.textContent='\u25b6 Cutscene'; prevAll.title='Play every shot in order'; prevAll.style.cssText='flex:1;padding:6px 8px;font-size:12px;cursor:pointer;'; prevAll.disabled=!cineHasData(); prevAll.onclick=()=>{ const _cc=_curCutscene(); startCinematic({ shots: cineShotsOf(_cc), audio: _cc.audio }, true); };
+        const prevShot=document.createElement('button'); prevShot.textContent='\u25b6 This shot'; prevShot.title='Play only the selected shot'; prevShot.style.cssText='flex:1;padding:6px 8px;font-size:12px;cursor:pointer;'; { const s=_selShot(); prevShot.disabled=!(s && s.path && s.path.length>=1); } prevShot.onclick=()=>{ const _cc=_curCutscene(), s=_selShot(); if(s && s.path && s.path.length) startCinematic({ shots:[s], audio:_cc.audio }, true); };
+        pr.appendChild(prevAll); pr.appendChild(prevShot); b.appendChild(pr); }
       if(typeof refreshCinePreview==='function') refreshCinePreview(); }
     { const b=subSec('Walls','walls',true);
       { const vr=document.createElement('label'); vr.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 6px;cursor:pointer;';
