@@ -14111,7 +14111,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 598 · 2026-06-19';
+const BUILD_VERSION = 'build 599 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14216,7 +14216,7 @@ const SCOPE_SENS = 0.00045;                   // much slower under the scope's h
 addEventListener('wheel', e=>{ if(heldProp){ heldDist=Math.max(HOLD_MIN, Math.min(HOLD_MAX, heldDist - e.deltaY*0.003)); } }, {passive:true});
 addEventListener('mousedown', e=>{
   if(radialOpen){ if(e.button===0) closeRadial(true); return; }
-  if(shopOpen || editorOpen || paused || mapOpen) return;
+  if(shopOpen || editorOpen || paused || mapOpen || duelDead) return;   // no actions while eliminated (awaiting respawn)
   if(e.button===0){ if(heldProp){ throwHeld(); return; } firing=true; }
   else if(e.button===1){ e.preventDefault(); grabAction(); }   // middle-click (scroll-wheel push): grab / drop
   else if(e.button===2) ads = true;   // right-click: aim down sights
@@ -15280,6 +15280,7 @@ function meleeAttack(wep){
 }
 function shoot(){
   if(matchWarmup>0) return;   // no firing during the pre-match generating/countdown
+  if(duelDead) return;        // eliminated: dead players can't fire until they respawn
   const w = W();
   const now = performance.now();
   if(now - lastShot < w.fireRate * run.fireMul || reloading) return;
@@ -18839,6 +18840,7 @@ function renderAttachAuthoring(host, wep){
 let _editInvId = null;
 function _newInvId(){ let i=1; while(invCatalog['item_'+i]) i++; return 'item_'+i; }
 function renderInvItems(host){
+  const hint=(h, html, margin)=>{ const d=document.createElement('div'); d.className='hint'; d.style.margin=margin||'6px 0 4px'; d.innerHTML=html; h.appendChild(d); return d; };
   host.innerHTML='';
   hint(host, '<b>Inventory items</b> \u2014 define what players can find, carry, and inspect (press <b>I</b> in-game). Drop them into the world from the <b>Pickups</b> section (kind: <b>Inventory Item</b>).', '12px 0 6px');
   const ids = Object.keys(invCatalog);
