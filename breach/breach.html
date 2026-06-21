@@ -764,6 +764,7 @@
     <button id="pauseCamMode" class="pBtnGhost">Camera: First person</button>
     <button id="pauseSprintMode" class="pBtnGhost">Sprint: Hold</button>
     <button id="pauseCrouchMode" class="pBtnGhost">Crouch: Hold</button>
+    <button id="pauseLoadout" class="pBtnGhost">&#9881; Weapon loadout</button>
     <div class="pauseAudio">
       <label class="paLbl"><input type="checkbox" id="muteCb"> Mute all</label>
       <label class="paLbl"><input type="checkbox" id="postFxCb"> Visual effects (bloom · motion blur)</label>
@@ -8889,6 +8890,51 @@ let curWep = 'rifle';            // current weapon key
 loadGunModel();                  // load the starting weapon's viewmodel (now that WEAPONS/curWep exist)
 applyWeaponMuzzle(curWep);        // position the muzzle point for the starting weapon
 function W(){ return WEAPONS[curWep]; }
+// ===== build 583: weapon attachments =====
+// Unlocked permanently with credits, equipped per weapon per slot (one per slot). Equipped sets modify the
+// weapon's EFFECTIVE stats (mag size, spread, ADS zoom). _resolveAtt is pure (unit-tested); applyAttachments
+// recomputes the live stats from a base snapshot so it's idempotent.
+const ATT_SLOTS = ['optic','muzzle','magazine','tactical'];
+const ATTACHMENTS = {
+  reddot:     { name:'Red Dot Sight', slot:'optic',    cost:120, desc:'Clean close-quarters optic',     mods:{ zoomMul:0.92 } },
+  scope2x:    { name:'2x Scope',      slot:'optic',    cost:260, desc:'Magnified, steadier aim',         mods:{ zoomMul:0.6, spreadMul:0.92 } },
+  compensator:{ name:'Compensator',   slot:'muzzle',   cost:200, desc:'Tighter spread',                  mods:{ spreadMul:0.7 } },
+  suppressor: { name:'Suppressor',    slot:'muzzle',   cost:240, desc:'Quieter, slightly tighter',       mods:{ spreadMul:0.85 } },
+  extmag:     { name:'Extended Mag',  slot:'magazine', cost:180, desc:'+50% magazine capacity',          mods:{ magMul:1.5 } },
+  drum:       { name:'Drum Mag',      slot:'magazine', cost:340, desc:'Double magazine capacity',        mods:{ magMul:2.0 } },
+  laser:      { name:'Laser Sight',   slot:'tactical', cost:160, desc:'Much tighter fire',               mods:{ spreadMul:0.6, laser:true } },
+  grip:       { name:'Angled Grip',   slot:'tactical', cost:150, desc:'Steadier handling',               mods:{ spreadMul:0.85 } },
+};
+let _ownedAtt = {};      // id -> true (permanently unlocked)
+let _attLoadout = {};    // weaponKey -> { slot: attId }
+const _attZoom = {};     // weaponKey -> ADS-fov multiplier (lower = more zoom)
+let _attAimReady = false;   // applyWeaponAim/aimByWep are defined far below; don't touch them during startup apply
+try{ const o=JSON.parse(localStorage.getItem('breach_att_owned')||'{}'); if(o&&typeof o==='object') _ownedAtt=o; }catch(e){}
+try{ const l=JSON.parse(localStorage.getItem('breach_att_loadout')||'{}'); if(l&&typeof l==='object') _attLoadout=l; }catch(e){}
+function _saveAtt(){ try{ localStorage.setItem('breach_att_owned', JSON.stringify(_ownedAtt)); localStorage.setItem('breach_att_loadout', JSON.stringify(_attLoadout)); }catch(e){} }
+const _attBase = {}; for(const k in WEAPONS){ _attBase[k]={ magSize:WEAPONS[k].magSize, spread:WEAPONS[k].spread }; }   // original stats, captured once
+function _resolveAtt(weaponKey, loadout, catalog){   // pure: aggregate equipped mods for a weapon
+  loadout=loadout||_attLoadout; catalog=catalog||ATTACHMENTS;
+  const eq=loadout[weaponKey]||{}; let magMul=1, spreadMul=1, zoomMul=1, laser=false;
+  for(const slot in eq){ const a=catalog[eq[slot]]; if(!a||!a.mods) continue; const m=a.mods;
+    if(m.magMul) magMul*=m.magMul; if(m.spreadMul) spreadMul*=m.spreadMul; if(m.zoomMul) zoomMul*=m.zoomMul; if(m.laser) laser=true; }
+  return { magMul, spreadMul, zoomMul, laser };
+}
+function applyAttachments(){   // recompute live stats from base + equipped (idempotent)
+  for(const k in WEAPONS){ const base=_attBase[k]; if(!base) continue; const r=_resolveAtt(k);
+    const newMag=Math.max(1, Math.round(base.magSize*r.magMul));
+    WEAPONS[k].magSize=newMag; if(WEAPONS[k].mag>newMag) WEAPONS[k].mag=newMag;   // never hold more than capacity
+    WEAPONS[k].spread=base.spread*r.spreadMul;
+    WEAPONS[k].hasLaser=r.laser;
+    _attZoom[k]=r.zoomMul;
+  }
+  if(_attAimReady && typeof applyWeaponAim==='function' && typeof curWep!=='undefined') applyWeaponAim(curWep);
+  if(_attAimReady && typeof updateHUD==='function') updateHUD();
+}
+function _attZoomMul(key){ return _attZoom[key]||1; }
+function buyAttachment(id){ const a=ATTACHMENTS[id]; if(!a||_ownedAtt[id]) return false; if(credits<a.cost){ if(typeof SFX!=='undefined'&&SFX.deny)SFX.deny(); return false; } credits-=a.cost; _ownedAtt[id]=true; if(typeof SFX!=='undefined'&&SFX.buy)SFX.buy(); _saveAtt(); if(typeof updateHUD==='function')updateHUD(); return true; }
+function equipAttachment(weaponKey, id){ const a=ATTACHMENTS[id]; if(!a||!_ownedAtt[id]) return; _attLoadout[weaponKey]=_attLoadout[weaponKey]||{}; if(_attLoadout[weaponKey][a.slot]===id) delete _attLoadout[weaponKey][a.slot]; else _attLoadout[weaponKey][a.slot]=id; applyAttachments(); _saveAtt(); }
+applyAttachments();   // apply any saved loadout at startup
 let reloading = false;
 let lastShot = 0, recoil = 0;
 // Top up every weapon to a full mag + full reserve (used by solo start and duel respawn).
@@ -13632,6 +13678,47 @@ function closeShop(){
   $('shop').classList.add('hidden');
   if(gameOn) tryPointerLock();
 }
+// build 583: weapon-loadout screen — buy attachments with credits, equip one per slot per weapon. Built
+// dynamically so it needs no extra static markup; opened from the pause menu.
+let _loadoutEl=null, _loadoutWep=null;
+function openLoadout(){
+  _loadoutWep = (typeof curWep!=='undefined' && owned.indexOf(curWep)>=0 && !WEAPONS[curWep].melee) ? curWep : (owned.find(k=>!WEAPONS[k].melee)||'rifle');
+  if(!_loadoutEl){ _loadoutEl=document.createElement('div'); _loadoutEl.id='loadout';
+    _loadoutEl.style.cssText='position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;background:rgba(4,8,10,.74);';
+    document.body.appendChild(_loadoutEl);
+    _loadoutEl.addEventListener('click', e=>{ if(e.target===_loadoutEl) closeLoadout(); });
+  }
+  _loadoutEl.style.display='flex'; renderLoadout();
+}
+function closeLoadout(){ if(_loadoutEl) _loadoutEl.style.display='none'; }
+function renderLoadout(){
+  if(!_loadoutEl) return;
+  const wk=_loadoutWep, lo=_attLoadout[wk]||{}; const c=[];
+  c.push('<div style="background:#0b141a;border:1px solid #2a3a42;border-radius:12px;max-width:560px;width:92%;max-height:88vh;overflow:auto;padding:18px 20px;font-family:inherit;">');
+  c.push('<div style="display:flex;justify-content:space-between;align-items:center;"><div style="font-family:var(--display-font);font-size:22px;color:#ffd166;letter-spacing:2px;">WEAPON LOADOUT</div><div style="color:#ffd166;font-weight:700;">\u25c6'+credits+'</div></div>');
+  c.push('<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 4px;">');
+  for(const k of owned){ if(WEAPONS[k]&&WEAPONS[k].melee) continue; const on=(k===wk);
+    c.push('<button data-wep="'+k+'" style="padding:5px 11px;border-radius:6px;cursor:pointer;border:1px solid '+(on?'var(--accent)':'#2a3a42')+';background:'+(on?'#16302a':'#0c1418')+';color:'+(on?'#bff3df':'#9fe6cf')+';font-size:12px;">'+WEAPONS[k].name+'</button>'); }
+  c.push('</div>');
+  for(const slot of ATT_SLOTS){
+    c.push('<div style="font-size:10px;color:#7fa99c;text-transform:uppercase;letter-spacing:1.5px;margin:11px 0 4px;">'+slot+'</div>');
+    for(const id in ATTACHMENTS){ const a=ATTACHMENTS[id]; if(a.slot!==slot) continue;
+      const own=!!_ownedAtt[id], eqp=(lo[slot]===id), can=credits>=a.cost;
+      const tag = eqp?'EQUIPPED' : (own?'EQUIP' : '\u25c6'+a.cost);
+      const border = eqp?'var(--accent)' : (own?'#3a7a63':'#2a3a42');
+      const op = (!own && !can)?'opacity:.45;':'';
+      const tc = eqp?'var(--accent)' : (own?'#9fe6cf':'#ffd166');
+      c.push('<div data-att="'+id+'" style="display:flex;align-items:center;gap:10px;padding:8px 10px;margin-bottom:5px;border:1px solid '+border+';border-radius:7px;cursor:pointer;'+op+'">'
+        +'<div style="flex:1;"><div style="color:#e8fff6;font-size:13px;font-weight:600;">'+a.name+'</div><div style="color:#7fa99c;font-size:11px;">'+a.desc+'</div></div>'
+        +'<div style="font-size:12px;font-weight:700;color:'+tc+';">'+tag+'</div></div>');
+    }
+  }
+  c.push('<button id="loadoutClose" style="width:100%;margin-top:10px;padding:8px;border-radius:7px;border:1px solid #2a3a42;background:#16242b;color:#9fe6cf;cursor:pointer;">Close</button></div>');
+  _loadoutEl.innerHTML=c.join('');
+  _loadoutEl.querySelectorAll('[data-wep]').forEach(el=>el.onclick=()=>{ _loadoutWep=el.dataset.wep; renderLoadout(); });
+  _loadoutEl.querySelectorAll('[data-att]').forEach(el=>el.onclick=()=>{ const id=el.dataset.att; if(!_ownedAtt[id]){ if(!buyAttachment(id)) return; } equipAttachment(_loadoutWep, id); renderLoadout(); });
+  const cb=_loadoutEl.querySelector('#loadoutClose'); if(cb) cb.onclick=closeLoadout;
+}
 
 // ---------- Bullets / tracers ----------
 const tracers = [];
@@ -13814,7 +13901,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 582 · 2026-06-19';
+const BUILD_VERSION = 'build 583 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -13903,7 +13990,8 @@ const AIM_DEFAULT = { x:ADS_AIM.x, y:ADS_AIM.y, z:ADS_AIM.z, rx:ADS_ROT.x*180/Ma
 const aimByWep = {};
 aimByWep.sniper = Object.assign({}, AIM_DEFAULT, { fov: 12 });   // the sniper's ADS is a true scope: hard zoom by default
 function getWeaponAim(key){ if(!aimByWep[key]) aimByWep[key]=Object.assign({}, AIM_DEFAULT); return aimByWep[key]; }
-function applyWeaponAim(key){ const a=getWeaponAim(key); ADS_AIM.set(a.x,a.y,a.z); ADS_ROT.set(a.rx*Math.PI/180, a.ry*Math.PI/180, a.rz*Math.PI/180); adsFovLive = a.fov; }
+function applyWeaponAim(key){ const a=getWeaponAim(key); ADS_AIM.set(a.x,a.y,a.z); ADS_ROT.set(a.rx*Math.PI/180, a.ry*Math.PI/180, a.rz*Math.PI/180); adsFovLive = a.fov * (typeof _attZoomMul==='function'?_attZoomMul(key):1); }
+_attAimReady = true;   // build 583: aim system is up; attachment re-applies may now refresh ADS zoom
 // apply saved aim pose if present — restore the FULL per-weapon map, not just one pose
 if(savedLevel && savedLevel.aimWep){
   for(const k in savedLevel.aimWep) aimByWep[k]=Object.assign({}, AIM_DEFAULT, savedLevel.aimWep[k]);   // each weapon keeps its own ADS pose across reloads
@@ -21505,6 +21593,7 @@ function exitToMenu(){
 function bindPauseMenu(){
   const pb=document.getElementById('pauseBtn'); if(pb) pb.onclick=openPause;
   const r=document.getElementById('pauseResume'); if(r) r.onclick=resumeGame;
+  const plb=document.getElementById('pauseLoadout'); if(plb) plb.onclick=()=>{ if(typeof openLoadout==='function') openLoadout(); };
   const eh=document.getElementById('pauseEditHud'); if(eh) eh.onclick=()=>{ const pm=document.getElementById('pauseMenu'); if(pm) pm.classList.add('hidden'); enterTouchEdit(); };
   const smb=document.getElementById('pauseSprintMode'); if(smb){ const upds=()=>{ smb.textContent='Sprint: '+(_sprintMode==='toggle'?'Toggle':'Hold'); }; upds(); smb.onclick=()=>{ _sprintMode = _sprintMode==='toggle'?'hold':'toggle'; _sprintToggled=false; try{ localStorage.setItem('breach_sprint_mode', _sprintMode); }catch(e){} upds(); }; }
   const crmb=document.getElementById('pauseCrouchMode'); if(crmb){ const updc=()=>{ crmb.textContent='Crouch: '+(_crouchMode==='toggle'?'Toggle':'Hold'); }; updc(); crmb.onclick=()=>{ _crouchMode = _crouchMode==='toggle'?'hold':'toggle'; _crouchToggled=false; try{ localStorage.setItem('breach_crouch_mode', _crouchMode); }catch(e){} updc(); }; }   // Toggle lets players crouch-walk without the Ctrl+W browser close-combo
