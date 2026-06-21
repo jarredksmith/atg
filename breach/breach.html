@@ -14165,7 +14165,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 611 · 2026-06-19';
+const BUILD_VERSION = 'build 612 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -16593,6 +16593,72 @@ function refreshCinePreview(){
   }catch(e){ /* path preview is cosmetic; never let it break the editor */ }
 }
 addEventListener('pointerdown', ()=>{ if(_cineActive) endCinematic(); });
+// ---- Live camera-preview window (build 612): a corner picture-in-picture showing what the cinematic camera
+// will frame at the scrub point, so the author can compose shots without playing them. Renders the SAME scene
+// with the main renderer into a scissored viewport (no second context), behind a DOM frame + scrubber.
+let _cinePvOn=true; try{ if(localStorage.getItem('breach_cinepv')==='off') _cinePvOn=false; }catch(e){}
+let _cinePvT=0, _cinePvCam=null, _cinePvPanel=null, _cinePvFrame=null, _cinePvSlider=null;
+function _cinePvShot(){   // the editor-selected shot, if it has a path worth framing
+  if(!editorOpen) return null;
+  const all=cineAllShots(); if(!all || !all.length) return null;
+  const s=all[Math.min(_cineShotSel, all.length-1)];
+  return (s && s.path && s.path.length>=1) ? s : null;
+}
+function _cinePvFrameAt(shot, u){   // pose _cinePvCam for parameter u (0..1) — mirrors updateCinematic's framing math
+  const d=_normCineShot(shot); if(!d.path || !d.path.length) return false;
+  if(!_cinePvCam){ _cinePvCam=new THREE.PerspectiveCamera(50, 16/9, camera.near, camera.far); }
+  const te=_cineEase(Math.max(0,Math.min(1,u)), d.ease);
+  const poly=d._poly||d.path; let px,py,pz;
+  if(d.path.length>=2){ const pp=pointAlongPath(poly, te, false); px=pp[0]; py=pp[1]; pz=pp[2]; }
+  else { px=d.path[0][0]; py=d.path[0][1]; pz=d.path[0][2]; }
+  _cinePvCam.position.set(px,py,pz);
+  let tx,ty,tz;
+  if(d.lookPts && d.lookPts.length>=2){ const a=pointAlongPath(d.lookPts, te, false); tx=a[0]; ty=a[1]; tz=a[2]; }
+  else if(d.lookPts && d.lookPts.length===1){ tx=d.lookPts[0][0]; ty=d.lookPts[0][1]; tz=d.lookPts[0][2]; }
+  else if(d.look==='path' && d.path.length>=2){ const a=pointAlongPath(poly, Math.min(1,te+0.02), false); tx=a[0]; ty=a[1]; tz=a[2];
+    if(Math.abs(tx-px)<1e-2 && Math.abs(ty-py)<1e-2 && Math.abs(tz-pz)<1e-2){ const bb=pointAlongPath(poly, Math.max(0,te-0.02), false); tx=px*2-bb[0]; ty=py*2-bb[1]; tz=pz*2-bb[2]; } }
+  else { tx=playerSpawn.x; ty=terrainHeightAt(playerSpawn.x,playerSpawn.z)+EYE; tz=playerSpawn.z; }
+  _cinePvCam.up.set(0,1,0); _cinePvCam.lookAt(tx,ty,tz);
+  if(d.roll!=null || d.rollTo!=null){ const r0=+d.roll||0, r1=(d.rollTo!=null?+d.rollTo:r0), rr=r0+(r1-r0)*te; if(rr) _cinePvCam.rotateZ(rr*Math.PI/180); }
+  _cinePvCam.fov=lensToFov(d.lensFrom + (d.lensTo - d.lensFrom)*te); _cinePvCam.near=camera.near; _cinePvCam.far=camera.far;
+  return true;
+}
+function _ensureCinePvPanel(){
+  if(_cinePvPanel) return;
+  const p=document.createElement('div'); p.id='cinePvPanel';
+  p.style.cssText='position:fixed;bottom:20px;left:20px;z-index:46;pointer-events:none;';
+  const hdr=document.createElement('div'); hdr.style.cssText='pointer-events:auto;display:flex;align-items:center;gap:8px;background:rgba(8,14,18,.94);border:1px solid rgba(var(--accent-rgb),0.45);border-bottom:none;border-radius:7px 7px 0 0;padding:5px 9px;box-shadow:0 -2px 14px rgba(0,0,0,.45);';
+  const lab=document.createElement('span'); lab.textContent='\ud83c\udfa5 Camera'; lab.style.cssText='font-size:11px;color:var(--accent);letter-spacing:.04em;flex:0 0 auto;';
+  const sld=document.createElement('input'); sld.type='range'; sld.min=0; sld.max=1; sld.step=0.001; sld.value=_cinePvT; sld.title='Scrub through the shot'; sld.style.cssText='flex:1;accent-color:var(--accent);min-width:80px;'; sld.oninput=()=>{ _cinePvT=+sld.value; }; _cinePvSlider=sld;
+  const x=document.createElement('button'); x.textContent='\u2715'; x.title='Hide camera preview'; x.style.cssText='flex:0 0 auto;background:none;border:none;color:#9fe6cf;font-size:13px;line-height:1;cursor:pointer;padding:0 2px;'; x.onclick=()=>{ _cinePvOn=false; try{ localStorage.setItem('breach_cinepv','off'); }catch(e){} if(typeof renderEditorFields==='function') renderEditorFields(); };
+  hdr.appendChild(lab); hdr.appendChild(sld); hdr.appendChild(x);
+  const fr=document.createElement('div'); fr.style.cssText='pointer-events:none;width:240px;height:135px;border:1px solid rgba(var(--accent-rgb),0.45);border-top:none;box-sizing:border-box;background:transparent;box-shadow:0 6px 18px rgba(0,0,0,.5);'; _cinePvFrame=fr;
+  p.appendChild(hdr); p.appendChild(fr); document.body.appendChild(p); _cinePvPanel=p;
+}
+function _renderCinePvWindow(){
+  if(!editorOpen || !_cinePvOn || _cineActive){ if(_cinePvPanel) _cinePvPanel.style.display='none'; return; }
+  const shot=_cinePvShot();
+  if(!shot){ if(_cinePvPanel) _cinePvPanel.style.display='none'; return; }
+  _ensureCinePvPanel(); _cinePvPanel.style.display='block';
+  if(_cinePvSlider && document.activeElement!==_cinePvSlider && +_cinePvSlider.value!==_cinePvT) _cinePvSlider.value=_cinePvT;
+  if(!_cinePvFrameAt(shot, _cinePvT)) return;
+  const size=renderer.getSize(new THREE.Vector2());
+  const W=Math.max(180, Math.min(320, Math.round(size.x*0.26))), H=Math.round(W*9/16), M=20;
+  const dockLeft = !!(editorEl && editorEl.classList.contains('dockLeft'));
+  const X = dockLeft ? (size.x - W - M) : M;   // sit opposite the editor panel
+  _cinePvPanel.style.left = dockLeft ? 'auto' : M+'px'; _cinePvPanel.style.right = dockLeft ? M+'px' : 'auto';
+  _cinePvPanel.style.bottom=M+'px'; _cinePvPanel.style.width=W+'px'; _cinePvFrame.style.width=W+'px'; _cinePvFrame.style.height=H+'px';
+  // hide editor-only overlays so the framing reads clean
+  const hid=[]; for(const o of [_cinePreviewGroup, (typeof gizmo!=='undefined'?gizmo:null), (typeof selBox!=='undefined'?selBox:null)]){ if(o && o.visible){ o.visible=false; hid.push(o); } }
+  const sbh=[]; if(typeof selBoxes!=='undefined' && selBoxes) for(const b of selBoxes){ if(b && b.visible){ b.visible=false; sbh.push(b); } }
+  _cinePvCam.aspect=W/H; _cinePvCam.updateProjectionMatrix();
+  const sa=renderer.shadowMap.autoUpdate; renderer.shadowMap.autoUpdate=false;   // sun shadows were already built by the main render this frame
+  renderer.setScissorTest(true); renderer.setViewport(X, M, W, H); renderer.setScissor(X, M, W, H);
+  try{ renderer.render(scene, _cinePvCam); }catch(e){}
+  renderer.setScissorTest(false); renderer.setViewport(0,0,size.x,size.y); renderer.setScissor(0,0,size.x,size.y);
+  renderer.shadowMap.autoUpdate=sa;
+  for(const o of hid) o.visible=true; for(const b of sbh) b.visible=true;
+}
 let _shadowDirtyFrames = 2;
 let _adaptLast = 0;
 function _dirtyShadows(n){ _shadowDirtyFrames = Math.max(_shadowDirtyFrames, n||2); }   // call whenever something the sun casts moves/spawns/breaks
@@ -17206,6 +17272,7 @@ function loop(){
   if(mapOpen) drawBigMap();
   if(editorOpen && typeof updateSelectionHighlight==='function') updateSelectionHighlight();
   renderScene(scene, activeCam());
+  if(editorOpen && typeof _renderCinePvWindow==='function') _renderCinePvWindow();
   renderViewmodel();
 }
 loop();
@@ -19134,6 +19201,10 @@ function renderEditorFields(){
         tb.appendChild(bw);
         b.appendChild(tb); } }
     { const b=subSec('Cinematic','cine',true);
+      { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 6px;cursor:pointer;';
+        const c=document.createElement('input'); c.type='checkbox'; c.checked=(typeof _cinePvOn!=='undefined' && _cinePvOn); c.style.cssText='width:15px;height:15px;accent-color:var(--accent);cursor:pointer;';
+        c.onchange=()=>{ _cinePvOn=c.checked; try{ localStorage.setItem('breach_cinepv', _cinePvOn?'on':'off'); }catch(e){} };
+        const sp=document.createElement('span'); sp.innerHTML='<b>Camera preview window</b> \u2014 live framing (scrub in the panel)'; r.appendChild(c); r.appendChild(sp); b.appendChild(r); }
       { const r=document.createElement('label'); r.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:2px 0 6px;cursor:pointer;';
         const c=document.createElement('input'); c.type='checkbox'; c.checked=!!cineCfg.on; c.style.cssText='width:15px;height:15px;accent-color:var(--accent);cursor:pointer;';
         c.onchange=()=>{ pushUndoSnapshot(); cineCfg.on=c.checked; };
