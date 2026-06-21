@@ -9484,13 +9484,14 @@ const POWERUP_KINDS = {
   sniper: { c:0xc6ff7a, label:'SNIPER RIFLE' },
   launcher:{ c:0xff7a3a, label:'ROCKET LAUNCHER' },
   grenade:{ c:0x9be15a, label:'+GRENADE' },
+  item:   { c:0xffd166, label:'ITEM' },   // build 597: collectible inventory item; grants invCatalog[spot.item]
   // keys: per-run inventory items for locked props. One-shot pads (no respawn), never auto-laid-out.
   key_red:  { c:0xff5a5a, label:'RED KEY',  key:'red' },
   key_blue: { c:0x4aa3ff, label:'BLUE KEY', key:'blue' },
   key_gold: { c:0xffd166, label:'GOLD KEY', key:'gold' },
   key_green:{ c:0x9be15a, label:'GREEN KEY', key:'green' },
 };
-const PICKUP_KIND_OPTS = [['health','+Health'],['ammo','+Ammo'],['rifle','Rifle'],['smg','SMG'],['shotgun','Shotgun'],['sniper','Sniper'],['launcher','Rocket'],['grenade','Grenade'],['damage','2x Dmg'],['speed','Speed'],['shield','Shield'],['key_red','Red Key'],['key_blue','Blue Key'],['key_gold','Gold Key'],['key_green','Green Key']];   // editor dropdown labels, shared by add-row + per-spot selects
+const PICKUP_KIND_OPTS = [['health','+Health'],['ammo','+Ammo'],['rifle','Rifle'],['smg','SMG'],['shotgun','Shotgun'],['sniper','Sniper'],['launcher','Rocket'],['grenade','Grenade'],['damage','2x Dmg'],['speed','Speed'],['shield','Shield'],['key_red','Red Key'],['key_blue','Blue Key'],['key_gold','Gold Key'],['key_green','Green Key'],['item','Inventory Item']];   // editor dropdown labels, shared by add-row + per-spot selects
 let playerKeys = {};   // per-run key ring: color -> true. Reset every deploy; PvP respawns keep it.
 function renderKeyChips(){
   let host = document.getElementById('keyChips');
@@ -9510,7 +9511,7 @@ let _puId = 1;
 // Editor-placed pickups (weapons/ammo/health/buffs). The live pads are built from these at deploy; if a
 // level has none, spawnPowerups() falls back to the auto buff layout. Markers are an editor-only preview.
 let selPickup = -1;   // editor: index of the pickup spot grabbed by the gizmo (-1 = none)
-let pickupSpots = (savedLevel && Array.isArray(savedLevel.pickups)) ? savedLevel.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health' })) : [];
+let pickupSpots = (savedLevel && Array.isArray(savedLevel.pickups)) ? savedLevel.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health', item:s.item })) : [];
 let audioZones = (savedLevel && Array.isArray(savedLevel.audioZones)) ? savedLevel.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : [];
 // DEATH zones: stepping inside kills the player (lava, pits, out-of-bounds). { x,z,r, y, h }. The zone is a
 // horizontal LETHAL PLANE at height y (the surface where placed) with a band h tall above it — so you can jump
@@ -9540,7 +9541,7 @@ function keyDisplayName(color){ const n=keyNames[color]; return (n && String(n).
 let pickupMarkers = [];
 function refreshPickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m); } pickupMarkers.length=0;
   if(typeof pickupsOn!=='undefined' && !pickupsOn) return;   // pickups disabled: no editor markers
-  for(const sp of pickupSpots){ const g=buildPowerupMesh(sp.kind); g.position.set(sp.x, _maxTerrainOver(sp.x,sp.z,1.2), sp.z); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.pickupMarker=true; scene.add(g); pickupMarkers.push(g); } }
+  for(const sp of pickupSpots){ const g=buildPowerupMesh(sp.kind, sp.item); g.position.set(sp.x, _maxTerrainOver(sp.x,sp.z,1.2), sp.z); g.visible=!!(typeof editorOpen!=='undefined'&&editorOpen); g.userData.pickupMarker=true; scene.add(g); pickupMarkers.push(g); } }
 function setPickupMarkersVisible(v){ for(const m of pickupMarkers) m.visible=v; }
 // ---- Placed loot-box editor markers (mirror of pickup markers) ----
 let lootMarkers = [];
@@ -10656,7 +10657,7 @@ function updateDeathZones(){
   _inDeathZone=false;
 }   // rings are editor-only; hide on play without rebuilding
 function disposePickupMarkers(){ for(const m of pickupMarkers){ scene.remove(m); } pickupMarkers.length=0; }
-function addPickupSpot(kind){ pushUndoSnapshot(); const fwd=new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw)); pickupSpots.push({ x:+(player.pos.x+fwd.x*6).toFixed(2), z:+(player.pos.z+fwd.z*6).toFixed(2), kind:kind||'health' }); selPickup = pickupSpots.length-1; refreshPickupMarkers(); renderEditorFields(); }
+function addPickupSpot(kind){ pushUndoSnapshot(); const fwd=new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw)); const spot={ x:+(player.pos.x+fwd.x*6).toFixed(2), z:+(player.pos.z+fwd.z*6).toFixed(2), kind:kind||'health' }; if(spot.kind==='item'){ const ids=Object.keys(invCatalog); spot.item=ids[0]||''; } pickupSpots.push(spot); selPickup = pickupSpots.length-1; refreshPickupMarkers(); renderEditorFields(); }
 function removePickupSpot(i){ pushUndoSnapshot(); pickupSpots.splice(i,1); selPickup=-1; refreshPickupMarkers(); renderEditorFields(); }
 // ---------- Audio zones: ambient sounds that fade up as the player nears the center ----------
 function disposeAudioZoneMarkers(){ for(const m of audioZoneMarkers){ scene.remove(m); try{ m.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); }catch(e){} } audioZoneMarkers.length=0; }
@@ -10705,7 +10706,7 @@ function updateAudioZones(){
   }
 }
 const WEAPON_PICKUP_KINDS = { rifle:1, smg:1, shotgun:1, sniper:1, launcher:1 };
-function buildPowerupMesh(kind){
+function buildPowerupMesh(kind, itemId){
   const k = POWERUP_KINDS[kind] || POWERUP_KINDS.health;
   const g = new THREE.Group();
   const pad = new THREE.Mesh(new THREE.CylinderGeometry(1.15,1.15,0.12,20), new THREE.MeshStandardMaterial({ color:k.c, emissive:k.c, emissiveIntensity:0.6, transparent:true, opacity:0.55, roughness:0.4 }));
@@ -10729,6 +10730,19 @@ function buildPowerupMesh(kind){
         m.traverse(o=>{ o.raycast=()=>{}; });
         holder.clear(); holder.add(m);
       }catch(e){} }, ()=>{}); }
+  } else if(kind==='item'){
+    // a floating copy of the inventory item's model (loads async; a gold gem stands in)
+    const it=(typeof invCatalog!=='undefined') ? invCatalog[itemId] : null;
+    const holder=new THREE.Group(); holder.position.y=1.15; g.add(holder); g.userData.icon=holder;
+    if(it && it.model && typeof loadGLTFCached==='function'){ loadGLTFCached(it.model, (gltf)=>{ try{
+        const m=(THREE.cloneSkinned?THREE.cloneSkinned(gltf.scene):gltf.scene.clone(true));
+        const box=new THREE.Box3().setFromObject(m), sz=new THREE.Vector3(); box.getSize(sz);
+        const sc=(0.9/Math.max(0.001, Math.max(sz.x,sz.y,sz.z)))*(it.scale||1); m.scale.setScalar(sc);
+        const c=new THREE.Vector3(); box.getCenter(c); m.position.sub(c.multiplyScalar(sc));
+        m.traverse(o=>{ if(o.isMesh) o.castShadow=true; o.raycast=()=>{}; });
+        holder.clear(); holder.add(m);
+      }catch(e){} }, ()=>{}); }
+    else { holder.add(new THREE.Mesh(new THREE.IcosahedronGeometry(0.4,0), new THREE.MeshStandardMaterial({ color:0xffffff, emissive:k.c, emissiveIntensity:0.9, roughness:0.3 }))); }
   } else {
     const icon = new THREE.Mesh(new THREE.OctahedronGeometry(0.42), new THREE.MeshStandardMaterial({ color:0xffffff, emissive:k.c, emissiveIntensity:0.9, roughness:0.3 }));
     icon.position.y=1.25; g.add(icon); g.userData.icon=icon;
@@ -10750,11 +10764,12 @@ function spawnPowerups(){
   if(!pickupsOn) return;             // pickups disabled for this level
   const spots = (pickupSpots && pickupSpots.length) ? pickupSpots : powerupLayout();
   for(const spot of spots){
-    const mesh = buildPowerupMesh(spot.kind); mesh.position.set(spot.x, _maxTerrainOver(spot.x,spot.z,1.2), spot.z); scene.add(mesh);
-    powerups.push({ id:_puId++, x:spot.x, z:spot.z, kind:spot.kind, ready:true, cd:0, mesh });
+    const mesh = buildPowerupMesh(spot.kind, spot.item); mesh.position.set(spot.x, _maxTerrainOver(spot.x,spot.z,1.2), spot.z); scene.add(mesh);
+    powerups.push({ id:_puId++, x:spot.x, z:spot.z, kind:spot.kind, item:spot.item, ready:true, cd:0, mesh });
   }
 }
-function applyPowerupLocal(kind){
+function applyPowerupLocal(kind, item){
+  if(kind==='item'){ if(item && typeof giveItem==='function') giveItem(item); return; }   // build 597: collectible inventory item
   if(kind==='health'){ player.hp = Math.min(player.maxHp, player.hp + 50); SFX.power && SFX.power(); updateHUD(); }
   else if(kind==='damage') applyDamage();
   else if(kind==='speed') applySpeed();
@@ -10765,9 +10780,9 @@ function applyPowerupLocal(kind){
   else if(WEAPONS[kind]){ giveWeapon(kind); updateHUD(); if(SFX.pickup) SFX.pickup(); }
   const k = POWERUP_KINDS[kind]; if(k) flashToast(k.key ? keyDisplayName(k.key).toUpperCase() : k.label);
 }
-function grantPowerup(playerEntry, kind){
-  if(playerEntry.id===NET.myId) applyPowerupLocal(kind);
-  else sendToPlayer(playerEntry.id, { t:'power', k:kind });
+function grantPowerup(playerEntry, kind, item){
+  if(playerEntry.id===NET.myId) applyPowerupLocal(kind, item);
+  else sendToPlayer(playerEntry.id, { t:'power', k:kind, item:item });
 }
 function updatePowerups(dt){
   if(!powerups.length) return;
@@ -10777,7 +10792,7 @@ function updatePowerups(dt){
     if(p.mesh){ p.mesh.visible=true; _animatePickup(p.mesh, dt); }
     let near=null, nd=1e9;
     for(const pl of players){ const d=Math.hypot(pl.pos.x-p.x, pl.pos.z-p.z); if(d<nd){ nd=d; near=pl; } }
-    if(near && nd < 2.0){ grantPowerup(near, p.kind); p.ready=false; p.cd=(POWERUP_KINDS[p.kind]&&POWERUP_KINDS[p.kind].key)?1e9:POWERUP_COOLDOWN; if(p.mesh) p.mesh.visible=false; }   // keys are one-shot
+    if(near && nd < 2.0){ grantPowerup(near, p.kind, p.item); p.ready=false; p.cd=((POWERUP_KINDS[p.kind]&&POWERUP_KINDS[p.kind].key)||p.kind==='item')?1e9:POWERUP_COOLDOWN; if(p.mesh) p.mesh.visible=false; }   // keys are one-shot
   }
 }
 
@@ -12738,7 +12753,7 @@ function handleHostMsg(msg){
   else if(msg.t==='world'){ applyWorld(msg); }
   else if(msg.t==='hurt'){ applyEnemyDamageToSelf(msg.d); }
   else if(msg.t==='credit'){ credits+=msg.v; SFX.coin(); updateHUD(); }
-  else if(msg.t==='power'){ applyPowerupLocal(msg.k); }
+  else if(msg.t==='power'){ applyPowerupLocal(msg.k, msg.item); }
   else if(msg.t==='cp'){ NET.cpOwner=msg.o; NET.cpCap=msg.c; NET.cpCapTeam=msg.ct; NET.cpContested=!!msg.x; if(msg.s) NET.cpScore=msg.s; }
   else if(msg.t==='pvpHit'){ applyPvpDamage(msg.d, msg.from); }        // the host shot this client
   else if(msg.t==='fire'){ remoteFire(msg.from, msg.o, msg.d); }       // someone fired
@@ -14096,7 +14111,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 595 · 2026-06-19';
+const BUILD_VERSION = 'build 597 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -17463,7 +17478,7 @@ const MODE_SECTIONS = {
   build:   ['gizmo','object','material','transform','characters'],
   scene:   ['world','generate','audiozones','deathzones','jumppads','firezones'],
   enemies: ['enemies','gizmo','object','transform'],   // spawn points live here now; their picker/fields/gizmo sections come along
-  rules:   ['game','pickups','loot'],
+  rules:   ['game','pickups','loot','invitems'],
   kit:     ['object','transform','impactfx','tracerfx','crosshair'],   // 'object' carries the weapon model import + per-weapon shoot sound; impact/streak FX; music/SFX live in Scene
   files:   ['levelfile','campaign'],
 };
@@ -17828,7 +17843,7 @@ function serializeLevel(){
     turrets: turretModels.map(_turretOpts),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
     pickupsOn: pickupsOn,
-    pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind })),
+    pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind, ...(s.item!=null?{item:s.item}:{}) })),
     loot: lootSpots.map(s=>({ x:+s.x, y:+(s.y||0), z:+s.z, items:(s.items||[]).slice(), glowColor:(s.glowColor!=null?+s.glowColor:0xffd166), glowI:(s.glowI!=null?+s.glowI:8) })),
     extractFx: { color: extractFxCfg.color, opacity: extractFxCfg.opacity, height: extractFxCfg.height, pillar: extractFxCfg.pillar },
     audioZones: audioZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, url:z.url||'', vol:+z.vol, loop:!!z.loop })),
@@ -18511,6 +18526,7 @@ function buildEditorPanel(){
     + sec('Game / waves', 'game', '<div id="edGame"></div>')
     + sec('Pickups', 'pickups', '<div id="edPickups"></div>')
     + sec('Loot', 'loot', '<div id="edLoot"></div>')
+    + sec('Inventory items', 'invitems', '<div id="edInvItems"></div>')
     + sec('Audio zones', 'audiozones', '<div id="edAudioZones"></div>')
     + sec('Death zones', 'deathzones', '<div id="edDeathZones"></div>')
     + sec('Jump pads', 'jumppads', '<div id="edJumpPads"></div>')
@@ -18809,6 +18825,49 @@ function renderAttachAuthoring(host, wep){
   }
   host.appendChild(box);
 }
+// Inventory item authoring: define the catalog (name/desc/model+search/journal/scale) that players collect and
+// inspect (build 596). Writes straight into invCatalog, which already serializes with the level as invItems.
+let _editInvId = null;
+function _newInvId(){ let i=1; while(invCatalog['item_'+i]) i++; return 'item_'+i; }
+function renderInvItems(host){
+  host.innerHTML='';
+  hint(host, '<b>Inventory items</b> \u2014 define what players can find, carry, and inspect (press <b>I</b> in-game). Drop them into the world from the <b>Pickups</b> section (kind: <b>Inventory Item</b>).', '12px 0 6px');
+  const ids = Object.keys(invCatalog);
+  if(!ids.length){ hint(host,'','2px 0 6px').textContent='No items yet \u2014 create one below.'; }
+  else { const list=document.createElement('div'); list.style.cssText='display:flex;flex-direction:column;gap:3px;margin-bottom:6px;';
+    for(const id of ids){ const it=invCatalog[id];
+      const row=document.createElement('div'); row.style.cssText='display:flex;align-items:center;gap:6px;background:'+(id===_editInvId?'#13303a':'#0c1822')+';border:1px solid #24323a;border-radius:6px;padding:4px 8px;';
+      const nm=document.createElement('button'); nm.textContent=(it.type==='journal'?'\ud83d\udcd6 ':'\ud83d\udce6 ')+(it.name||id); nm.style.cssText='flex:1;text-align:left;background:none;border:none;color:#cfeee2;font-size:12px;cursor:pointer;padding:0;'; nm.onclick=()=>{ _editInvId=(_editInvId===id?null:id); renderInvItems(host); };
+      const del=document.createElement('button'); del.textContent='\u2715'; del.title='Delete'; del.style.cssText='flex:0 0 auto;font-size:11px;padding:1px 7px;'; del.onclick=()=>{ if(!confirm('Delete item "'+(it.name||id)+'"? Any pickup set to grant it will keep the id but find nothing.')) return; pushUndoSnapshot(); delete invCatalog[id]; if(_editInvId===id) _editInvId=null; renderInvItems(host); };
+      row.appendChild(nm); row.appendChild(del); list.appendChild(row); }
+    host.appendChild(list); }
+  const addB=document.createElement('button'); addB.textContent='+ New item'; addB.onclick=()=>{ pushUndoSnapshot(); const id=_newInvId(); defineItem({ id, name:'New Item', type:'object' }); _editInvId=id; renderInvItems(host); }; host.appendChild(addB);
+  if(_editInvId && invCatalog[_editInvId]){
+    const it=invCatalog[_editInvId];
+    const form=document.createElement('div'); form.style.cssText='margin-top:10px;border-top:1px solid #24323a;padding-top:8px;';
+    const IST='width:100%;box-sizing:border-box;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:4px 6px;font-size:12px;';
+    const field=(label, el)=>{ const w=document.createElement('div'); w.style.marginBottom='6px'; const l=document.createElement('div'); l.textContent=label; l.style.cssText='font-size:11px;color:#9fe6cf;margin-bottom:2px;'; w.appendChild(l); w.appendChild(el); form.appendChild(w); };
+    const nameI=document.createElement('input'); nameI.type='text'; nameI.value=it.name||''; nameI.style.cssText=IST; nameI.oninput=()=>{ it.name=nameI.value; }; field('Name', nameI);
+    const typeS=document.createElement('select'); typeS.style.cssText=IST; [['object','3D object (rotate / zoom)'],['journal','Journal / note (text page)']].forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if((it.type||'object')===o[0]) op.selected=true; typeS.appendChild(op); }); typeS.onchange=()=>{ pushUndoSnapshot(); it.type=typeS.value; renderInvItems(host); }; field('Type', typeS);
+    const descT=document.createElement('textarea'); descT.value=it.desc||''; descT.rows=2; descT.style.cssText=IST+'resize:vertical;'; descT.oninput=()=>{ it.desc=descT.value; }; field('Description (shown under the item)', descT);
+    if((it.type||'object')==='journal'){
+      const jT=document.createElement('textarea'); jT.value=it.journal||''; jT.rows=6; jT.style.cssText=IST+'resize:vertical;font-family:Georgia,serif;'; jT.oninput=()=>{ it.journal=jT.value; }; field('Journal text (the page contents)', jT);
+    } else {
+      const urlRow=document.createElement('div'); urlRow.style.cssText='display:flex;gap:6px;';
+      const urlI=document.createElement('input'); urlI.type='text'; urlI.value=it.model||''; urlI.placeholder='https://\u2026/item.glb (blank = default crystal)'; urlI.style.cssText=IST;
+      const setB=document.createElement('button'); setB.textContent='Set'; setB.style.flex='0 0 auto'; setB.onclick=()=>{ pushUndoSnapshot(); it.model=urlI.value.trim(); it.thumb=''; renderInvItems(host); };
+      const clrB=document.createElement('button'); clrB.textContent='Clear'; clrB.style.flex='0 0 auto'; clrB.onclick=()=>{ pushUndoSnapshot(); it.model=''; it.thumb=''; renderInvItems(host); };
+      urlRow.appendChild(urlI); urlRow.appendChild(setB); urlRow.appendChild(clrB); field('Model URL', urlRow);
+      const scI=document.createElement('input'); scI.type='number'; scI.min='0.05'; scI.max='20'; scI.step='0.05'; scI.value=it.scale||1; scI.style.cssText=IST; scI.onchange=()=>{ it.scale=Math.max(0.05,Math.min(20,parseFloat(scI.value)||1)); }; field('Model scale', scI);
+      const psTog=document.createElement('button'); psTog.textContent='\ud83d\udd0d Search models'; psTog.style.cssText='font-size:10px;padding:2px 8px;margin:2px 0 4px;';
+      const psHost=document.createElement('div'); psHost.style.display='none'; let _b=false;
+      psTog.onclick=()=>{ const show=(psHost.style.display==='none'); psHost.style.display=show?'':'none'; psTog.textContent=show?'\u2715 Close search':'\ud83d\udd0d Search models';
+        if(show && !_b){ _b=true; renderModelSearch(psHost, (m, st)=>{ pushUndoSnapshot(); it.model=m.glb; it.thumb=m.thumb||''; if(typeof creditAsset==='function') creditAsset(m.attribution); if(st) st.textContent='Using "'+m.title+'"'; renderInvItems(host); }, { placeholder:'e.g. key, amulet, book, gem' }); } };
+      form.appendChild(psTog); form.appendChild(psHost);
+    }
+    host.appendChild(form);
+  }
+}
 function renderEditorFields(){
   if(!editorEl) return;
   // The wholesale rebuild below resets the panel's scroll position on every change; restore it once
@@ -18829,6 +18888,7 @@ function renderEditorFields(){
   const crosshairHost = editorEl.querySelector('#edCrosshair');
   const lootHost    = editorEl.querySelector('#edLoot');
   const soundHost   = editorEl.querySelector('#edSounds');
+  const invItemsHost = editorEl.querySelector('#edInvItems'); if(invItemsHost && typeof renderInvItems==='function') renderInvItems(invItemsHost);
   // Sounds relocated: per-weapon shoot sound -> each weapon (Weapons tab); music + global SFX -> Scene > Audio
   if(worldHost){
     worldHost.innerHTML = '';
@@ -19410,10 +19470,14 @@ function renderEditorFields(){
         const lab=document.createElement('span'); lab.textContent=(i+1)+'.'; lab.style.minWidth='18px';
         const ks=document.createElement('select'); ks.style.cssText='flex:1;font-size:11px;';
         PICKUP_KIND_OPTS.forEach(o=>{ const op=document.createElement('option'); op.value=o[0]; op.textContent=o[1]; if(sp.kind===o[0]) op.selected=true; ks.appendChild(op); });   // global list — the block-scoped KINDS isn't visible here
-        ks.onchange=()=>{ pushUndoSnapshot(); sp.kind=ks.value; refreshPickupMarkers(); renderEditorFields(); };   // change in place — no delete+re-add
+        ks.onchange=()=>{ pushUndoSnapshot(); sp.kind=ks.value; if(sp.kind==='item' && !sp.item){ const ids=Object.keys(invCatalog); sp.item=ids[0]||''; } refreshPickupMarkers(); renderEditorFields(); };   // change in place — no delete+re-add
+        let isel=null; if(sp.kind==='item'){ isel=document.createElement('select'); isel.style.cssText='flex:1;font-size:11px;'; const ids=Object.keys(invCatalog);
+          if(!ids.length){ const op=document.createElement('option'); op.value=''; op.textContent='(define items first)'; isel.appendChild(op); isel.disabled=true; }
+          else { if(!sp.item || !invCatalog[sp.item]) sp.item=ids[0]; ids.forEach(id=>{ const op=document.createElement('option'); op.value=id; op.textContent=invCatalog[id].name||id; if(sp.item===id) op.selected=true; isel.appendChild(op); }); }
+          isel.onchange=()=>{ pushUndoSnapshot(); sp.item=isel.value; refreshPickupMarkers(); }; }
         const pos=document.createElement('span'); pos.textContent='('+sp.x.toFixed(1)+', '+sp.z.toFixed(1)+')'; pos.style.cssText='font-size:10px;opacity:0.7;';
         const del=document.createElement('button'); del.textContent='\u2715'; del.style.cssText='padding:1px 7px'; del.onclick=()=>removePickupSpot(i);
-        row.appendChild(lab); row.appendChild(ks); row.appendChild(pos); row.appendChild(del); pkHost.appendChild(row); });
+        row.appendChild(lab); row.appendChild(ks); if(isel) row.appendChild(isel); row.appendChild(pos); row.appendChild(del); pkHost.appendChild(row); });
     } else { hint(pkHost,'','3px 0 0').textContent='None yet. Pick a kind, walk where you want it, then Place ahead. They respawn on a timer.'; }
     hint(gHost, '<b>Wave mode</b>', '12px 0 4px');
     const gmRow=document.createElement('div'); gmRow.className='row2';
