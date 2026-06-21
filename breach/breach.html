@@ -8521,6 +8521,9 @@ addEventListener('keydown', e=>{
   if(GAME_KEYS[e.code]){ e.preventDefault(); }
   if(_sprintMode==='toggle' && (e.code==='ShiftLeft'||e.code==='ShiftRight') && !e.repeat){ _sprintToggled = !_sprintToggled; }   // tap toggles run (no need to HOLD Shift while pressing W+Space)
   if(_crouchMode==='toggle' && (e.code==='ControlLeft'||e.code==='ControlRight') && !e.repeat){ _crouchToggled = !_crouchToggled; }   // tap toggles crouch -> no need to HOLD Ctrl+W (the browser close-tab combo)
+  if(e.code==='Escape' && invOpen){ if(_inspEl && _inspEl.style.display!=='none') closeInspect(); else closeInventory(); e.preventDefault(); return; }   // Esc backs out of the inspector / inventory
+  if(e.code==='KeyI' && !e.repeat && gameOn && !gameOver && !editorOpen && !shopOpen && !chatOpen && !radialOpen && !choosingUpgrade && !mapOpen){ toggleInventory(); e.preventDefault(); return; }   // I: inventory
+  if(invOpen) return;   // inventory open: swallow other game keys
   if(e.code==='Tab'){ if(!e.repeat) openRadial(); e.preventDefault(); return; }   // radial deploy menu
   if(e.code==='KeyT' && NET.mode!=='off' && gameOn && !gameOver && !editorOpen && !shopOpen && !choosingUpgrade && !radialOpen){ openChat(); e.preventDefault(); return; }   // T: open multiplayer text chat
   // Crouch is Ctrl, so crouch+WASD lands on browser shortcuts: Ctrl+S (save page), Ctrl+D (bookmark),
@@ -8605,7 +8608,7 @@ addEventListener('wheel', e=>{
     return;   // no weapon switching while editing
   }
   if(heldProp) return;   // while holding a prop the wheel controls its distance only (see the held-prop wheel handler), not weapon switching
-  if(gameOn && !shopOpen) cycleWeapon(e.deltaY>0?1:-1);
+  if(gameOn && !shopOpen && !invOpen) cycleWeapon(e.deltaY>0?1:-1);
 }, {passive:false});
 
 // pointer lock look
@@ -8613,9 +8616,9 @@ let locked = false;let lookFresh = false;   // set when pointer lock is (re)acqu
 let _lastLookDX = 0, _lastLookDY = 0;   // running reference of recent per-event look deltas, for spurious-spike rejection
 const MAX_LOOK_DELTA = 300;   // px per mousemove event; guards against spurious spikes that snap the view
 let editorDragLook = false, editorDragMoved = false, editorDragPan = false;   // editor mouse states
-renderer.domElement.addEventListener('click', ()=>{ if(!isTouch && gameOn && !locked && !shopOpen && !editorOpen && !paused) tryPointerLock(); });
+renderer.domElement.addEventListener('click', ()=>{ if(!isTouch && gameOn && !locked && !shopOpen && !invOpen && !editorOpen && !paused) tryPointerLock(); });
 document.addEventListener('pointerlockchange', ()=>{ const was=locked; locked = document.pointerLockElement === renderer.domElement; if(locked && !was){ lookFresh = true; _lastLookDX=0; _lastLookDY=0; if(paused) resumeGame(); }
-  if(!locked && was && !isTouch && gameOn && !gameOver && !shopOpen && !editorOpen && !choosingUpgrade && !paused && !chatOpen && !mapOpen) openPause(); });   // Esc releases the lock -> show the pause menu (but not when opening chat)
+  if(!locked && was && !isTouch && gameOn && !gameOver && !shopOpen && !editorOpen && !choosingUpgrade && !paused && !chatOpen && !mapOpen && !invOpen) openPause(); });   // Esc releases the lock -> show the pause menu (but not when opening chat)
 // Ctrl+W (crouch + forward) is the browser's close-tab shortcut and can't be cancelled from a keydown.
 // While actively playing (pointer locked), ask the browser to confirm before unloading so an accidental
 // Ctrl+W shows a "Leave site?" prompt the player can cancel instead of silently losing the session.
@@ -13833,6 +13836,79 @@ window.devMode = function(on){ const v = (on!==false); try{ if(v) localStorage.s
 let _infAmmo = false;
 window.infiniteAmmo = function(on){ _infAmmo = (on!==false); if(_infAmmo){ for(const k in WEAPONS){ const w=WEAPONS[k]; if(w && w.reserveMax!=null) w.reserve=w.reserveMax; } if(typeof updateHUD==='function') updateHUD(); } return _infAmmo; };
 
+// ===== Inventory system (adventure / puzzle) =====
+// Items the player finds and stores. The panel opens visually (I); clicking an item opens an inspector where an
+// 'object' item can be rotated/zoomed in 3D, or a 'journal' item shows a readable page. Catalog saves with the
+// level; held inventory is runtime. Collectible item-pickups + editor authoring of the catalog come next build.
+let invCatalog = {};   // id -> { name, desc, model, thumb, scale, type:'object'|'journal', journal }
+try{ if(savedLevel && savedLevel.invItems && typeof savedLevel.invItems==='object') invCatalog=savedLevel.invItems; }catch(e){}
+let inventory = [];    // [{id, n}] held
+let invOpen=false; let _invEl=null;
+function defineItem(def){ if(!def||!def.id) return null; invCatalog[def.id]=Object.assign({ name:def.id, desc:'', model:'', thumb:'', scale:1, type:'object', journal:'' }, invCatalog[def.id]||{}, def); return invCatalog[def.id]; }
+function hasItem(id){ return inventory.some(s=>s.id===id && s.n>0); }
+function invCount(id){ const s=inventory.find(x=>x.id===id); return s?s.n:0; }
+function giveItem(id, n){ n=n||1; if(!id) return false; if(!invCatalog[id]) defineItem({ id, name:id }); const s=inventory.find(x=>x.id===id); if(s) s.n+=n; else inventory.push({ id, n }); if(typeof toast==='function') toast('Picked up: '+((invCatalog[id]&&invCatalog[id].name)||id)); if(typeof SFX!=='undefined'&&SFX.coin) SFX.coin(); if(invOpen) renderInventory(); return true; }
+function takeItem(id, n){ n=n||1; const s=inventory.find(x=>x.id===id); if(!s) return false; s.n-=n; if(s.n<=0) inventory=inventory.filter(x=>x!==s); if(invOpen) renderInventory(); return true; }
+window.giveItem=giveItem; window.defineItem=defineItem;   // used by editor authoring (next build) + console testing
+function openInventory(){ if(invOpen) return; invOpen=true; if(typeof safeExitPointerLock==='function') safeExitPointerLock();
+  if(!_invEl){ _invEl=document.createElement('div'); _invEl.id='inventory'; _invEl.style.cssText='position:fixed;inset:0;z-index:78;display:flex;align-items:center;justify-content:center;background:rgba(4,8,10,.72);'; document.body.appendChild(_invEl); _invEl.addEventListener('click', e=>{ if(e.target===_invEl) closeInventory(); }); }
+  _invEl.style.display='flex'; renderInventory(); }
+function closeInventory(){ invOpen=false; if(_invEl) _invEl.style.display='none'; closeInspect(); if(typeof gameOn!=='undefined' && gameOn && !paused && !isTouch && typeof tryPointerLock==='function') tryPointerLock(); }
+function toggleInventory(){ invOpen?closeInventory():openInventory(); }
+function renderInventory(){ if(!_invEl) return; _invEl.innerHTML='';
+  const card=document.createElement('div'); card.style.cssText='background:#0b141a;border:1px solid #2a3a42;border-radius:12px;max-width:560px;width:92%;max-height:86vh;overflow:auto;padding:18px 20px;';
+  const h=document.createElement('div'); h.style.cssText='display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;'; h.innerHTML='<div style="font-family:var(--display-font);font-size:22px;color:#ffd166;letter-spacing:2px;">INVENTORY</div>';
+  const cl=document.createElement('button'); cl.textContent='Close'; cl.style.cssText='font-size:12px;padding:4px 10px;'; cl.onclick=closeInventory; h.appendChild(cl); card.appendChild(h);
+  if(!inventory.length){ const e=document.createElement('div'); e.style.cssText='color:#7fa99c;font-size:13px;padding:24px 0;text-align:center;'; e.textContent='Empty. Find items in the world to collect them.'; card.appendChild(e); }
+  else { const grid=document.createElement('div'); grid.style.cssText='display:grid;grid-template-columns:repeat(4,1fr);gap:8px;';
+    for(const slot of inventory){ const it=invCatalog[slot.id]||{ name:slot.id };
+      const cell=document.createElement('button'); cell.style.cssText='position:relative;aspect-ratio:1;background:#0c1822;border:1px solid #24323a;border-radius:8px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;padding:6px;overflow:hidden;';
+      const ico=document.createElement('div'); ico.style.cssText='position:absolute;left:6px;right:6px;top:6px;bottom:22px;border-radius:6px;background:#06222a;';
+      if(it.thumb||it.model){ try{ _renderCharThumb({ url:it.model, thumb:it.thumb, scale:it.scale }, ico); }catch(e){} } else { ico.style.display='flex'; ico.style.alignItems='center'; ico.style.justifyContent='center'; ico.innerHTML='<span style="font-size:26px;color:#9fe6cf;">'+String(it.name||'?').slice(0,1).toUpperCase()+'</span>'; }
+      cell.appendChild(ico);
+      const nm=document.createElement('div'); nm.textContent=it.name||slot.id; nm.style.cssText='position:relative;z-index:1;font-size:10px;color:#cfeee2;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'; cell.appendChild(nm);
+      if(slot.n>1){ const cnt=document.createElement('div'); cnt.textContent='\u00d7'+slot.n; cnt.style.cssText='position:absolute;top:4px;right:6px;font-size:11px;font-weight:700;color:#ffd166;z-index:1;'; cell.appendChild(cnt); }
+      cell.onclick=()=>openInspect(slot.id); grid.appendChild(cell);
+    } card.appendChild(grid);
+  }
+  const hint=document.createElement('div'); hint.style.cssText='margin-top:10px;font-size:11px;color:#7fa99c;'; hint.textContent='Click an item to inspect it. Press I or Esc to close.'; card.appendChild(hint);
+  _invEl.appendChild(card);
+}
+// ---- Item inspector: rotate/zoom a 3D object, or read a journal page ----
+let _inspEl=null, _invR=null, _inspScene=null, _inspCam=null, _inspModel=null, _inspRAF=0, _inspRotX=0.25, _inspRotY=0.5, _inspDist=3, _inspSpin=true;
+function closeInspect(){ if(_inspRAF){ cancelAnimationFrame(_inspRAF); _inspRAF=0; } if(_inspEl) _inspEl.style.display='none'; if(_inspModel && _inspScene){ _inspScene.remove(_inspModel); _inspModel=null; } }
+function openInspect(id){
+  const it=invCatalog[id]; if(!it) return;
+  if(!_inspEl){ _inspEl=document.createElement('div'); _inspEl.id='inspect'; _inspEl.style.cssText='position:fixed;inset:0;z-index:82;display:none;align-items:center;justify-content:center;background:rgba(3,6,8,.86);'; const cd=document.createElement('div'); cd.id='inspectCard'; cd.style.cssText='position:relative;background:#0a1016;border:1px solid #2a3a42;border-radius:14px;max-width:540px;width:92%;padding:16px 18px;'; _inspEl.appendChild(cd); document.body.appendChild(_inspEl); _inspEl.addEventListener('click', e=>{ if(e.target===_inspEl) closeInspect(); }); }
+  const card=_inspEl.querySelector('#inspectCard'); card.innerHTML='';
+  const hd=document.createElement('div'); hd.style.cssText='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;'; hd.innerHTML='<div style="font-family:var(--display-font);font-size:20px;color:#ffd166;letter-spacing:1px;">'+(it.name||id)+'</div>';
+  const cl=document.createElement('button'); cl.textContent='\u2715'; cl.style.cssText='font-size:14px;padding:2px 9px;'; cl.onclick=closeInspect; hd.appendChild(cl); card.appendChild(hd);
+  _inspEl.style.display='flex';
+  if(it.type==='journal'){
+    const page=document.createElement('div'); page.style.cssText='background:#1d1810;border:1px solid #3a2f1a;border-radius:8px;padding:18px 20px;color:#ece0c4;font-size:14px;line-height:1.65;max-height:62vh;overflow:auto;white-space:pre-wrap;font-family:Georgia,"Times New Roman",serif;'; page.textContent=it.journal||it.desc||'(no text)'; card.appendChild(page);
+  } else {
+    const holder=document.createElement('div'); holder.style.cssText='position:relative;width:100%;aspect-ratio:1;max-height:60vh;background:radial-gradient(circle at 50% 38%, #16242e, #070b0e);border-radius:10px;overflow:hidden;touch-action:none;cursor:grab;'; card.appendChild(holder);
+    if(_invR===null){ try{ _invR=new THREE.WebGLRenderer({ alpha:true, antialias:true }); _invR.setPixelRatio(Math.min(2, window.devicePixelRatio||1)); _inspScene=new THREE.Scene(); _inspCam=new THREE.PerspectiveCamera(35,1,0.01,100); const k=new THREE.DirectionalLight(0xffffff,1.6); k.position.set(3,4,5); _inspScene.add(k); const r=new THREE.DirectionalLight(0x9fc6ff,0.6); r.position.set(-3,1,-3); _inspScene.add(r); _inspScene.add(new THREE.HemisphereLight(0xffffff,0x202830,0.9)); }catch(e){ _invR=false; } }
+    if(_invR){ const cv=_invR.domElement; cv.style.cssText='width:100%;height:100%;display:block;'; holder.appendChild(cv);
+      const w=Math.min(440, Math.floor((window.innerWidth||420)*0.8)); _invR.setSize(w,w,false); _inspCam.aspect=1; _inspCam.updateProjectionMatrix();
+      _inspRotX=0.25; _inspRotY=0.5; _inspSpin=true; _inspDist=3;
+      if(_inspModel){ _inspScene.remove(_inspModel); _inspModel=null; }
+      const grp=new THREE.Group(); _inspScene.add(grp); _inspModel=grp;
+      if(it.model){ loadGLTFCached(it.model, (gltf)=>{ try{ const m=THREE.cloneSkinned(gltf.scene); const bb=new THREE.Box3().setFromObject(m), s=new THREE.Vector3(), c=new THREE.Vector3(); bb.getSize(s); bb.getCenter(c); const md=Math.max(s.x,s.y,s.z)||1, k=1.7/md; m.scale.setScalar(k); m.position.set(-c.x*k, -c.y*k, -c.z*k); grp.add(m); }catch(e){} }, ()=>{}); }
+      else { grp.add(new THREE.Mesh(new THREE.IcosahedronGeometry(0.85,0), new THREE.MeshStandardMaterial({ color:0x3a6a7a, roughness:0.4, metalness:0.35 }))); }
+      let drag=false, lx=0, ly=0;
+      holder.onpointerdown=e=>{ drag=true; _inspSpin=false; lx=e.clientX; ly=e.clientY; holder.style.cursor='grabbing'; try{ holder.setPointerCapture(e.pointerId); }catch(_e){} };
+      holder.onpointermove=e=>{ if(!drag) return; _inspRotY+=(e.clientX-lx)*0.01; _inspRotX=Math.max(-1.45,Math.min(1.45,_inspRotX+(e.clientY-ly)*0.01)); lx=e.clientX; ly=e.clientY; };
+      holder.onpointerup=()=>{ drag=false; holder.style.cursor='grab'; }; holder.onpointercancel=holder.onpointerup;
+      holder.onwheel=e=>{ e.preventDefault(); _inspDist=Math.max(1.3, Math.min(8, _inspDist + e.deltaY*0.002)); };
+      const loop=()=>{ if(!_invR || !_inspEl || _inspEl.style.display==='none'){ _inspRAF=0; return; } if(_inspSpin) _inspRotY+=0.005; if(_inspModel) _inspModel.rotation.set(_inspRotX,_inspRotY,0); _inspCam.position.set(0,0,_inspDist); _inspCam.lookAt(0,0,0); _invR.render(_inspScene,_inspCam); _inspRAF=requestAnimationFrame(loop); };
+      if(_inspRAF) cancelAnimationFrame(_inspRAF); _inspRAF=requestAnimationFrame(loop);
+    }
+    const tip=document.createElement('div'); tip.style.cssText='margin-top:6px;font-size:10px;color:#6f9385;text-align:center;'; tip.textContent='Drag to rotate \u00b7 scroll to zoom'; card.appendChild(tip);
+  }
+  if(it.desc){ const d=document.createElement('div'); d.style.cssText='margin-top:10px;font-size:13px;color:#bfe0d2;line-height:1.5;'; d.textContent=it.desc; card.appendChild(d); }
+}
+
 // ---------- Bullets / tracers ----------
 const tracers = [];
 // Remote players' gunfire: each shot is broadcast so everyone sees a tracer + muzzle flash from the shooter
@@ -14014,7 +14090,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 592 · 2026-06-19';
+const BUILD_VERSION = 'build 594 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -17733,6 +17809,7 @@ function serializeLevel(){
     aimWep:  JSON.parse(JSON.stringify(aimByWep)),
     mountWep: (typeof mountByWep!=='undefined') ? JSON.parse(JSON.stringify(mountByWep)) : {},
     attModels: (typeof attModels!=='undefined') ? JSON.parse(JSON.stringify(attModels)) : {},
+    invItems: (typeof invCatalog!=='undefined') ? JSON.parse(JSON.stringify(invCatalog)) : {},
     station: { url: stationModelUrl, state: Object.assign({}, editorTargets.station.state) },
     player:  { url: playerModelCfg.url, thumb: playerModelCfg.thumb||'', state: Object.assign({}, editorTargets.player.state), clips: Object.assign({}, playerModelCfg.clips), clipSpeed: Object.assign({}, playerModelCfg.clipSpeed||{}), clipHold: Object.assign({}, playerModelCfg.clipHold||{}), clipInPlace: Object.assign({}, playerModelCfg.clipInPlace||{}) },
     world:   Object.assign({}, worldCfg),
@@ -18705,6 +18782,11 @@ function renderAttachAuthoring(host, wep){
       const setb=document.createElement('button'); setb.textContent='Set'; setb.style.cssText='font-size:10px;padding:2px 8px;'; setb.onclick=()=>{ const u=inp.value.trim(); if(u) attModels[id]=u; else delete attModels[id]; if(typeof rebuildAttMounts==='function') rebuildAttMounts(wep); };
       const clrb=document.createElement('button'); clrb.textContent='Clear'; clrb.style.cssText='font-size:10px;padding:2px 7px;'; clrb.onclick=()=>{ delete attModels[id]; inp.value=''; if(typeof rebuildAttMounts==='function') rebuildAttMounts(wep); };
       murl.appendChild(inp); murl.appendChild(setb); murl.appendChild(clrb); slotWrap.appendChild(murl);
+      const psTog=document.createElement('button'); psTog.textContent='\ud83d\udd0d Search models'; psTog.style.cssText='font-size:10px;padding:2px 8px;margin:0 0 4px;';
+      const psHost=document.createElement('div'); psHost.style.display='none'; let _psBuilt=false;
+      psTog.onclick=()=>{ const show=(psHost.style.display==='none'); psHost.style.display=show?'':'none'; psTog.textContent=(show?'\u2715 Close search':'\ud83d\udd0d Search models');
+        if(show && !_psBuilt){ _psBuilt=true; renderModelSearch(psHost, (m, st)=>{ attModels[id]=m.glb; inp.value=m.glb; if(typeof rebuildAttMounts==='function') rebuildAttMounts(wep); if(typeof creditAsset==='function') creditAsset(m.attribution); if(st) st.textContent='Using "'+m.title+'"'; }, { placeholder:'e.g. scope, silencer, magazine, laser' }); } };
+      slotWrap.appendChild(psTog); slotWrap.appendChild(psHost);
       const mm=getMount(wep, slot);
       for(const ax of [['x','X',-0.6,0.6,0.005],['y','Y',-0.6,0.6,0.005],['z','Z',-0.8,0.8,0.005],['rx','Rot X',-180,180,1],['ry','Rot Y',-180,180,1],['rz','Rot Z',-180,180,1],['s','Scale',0.05,5,0.05]]){
         const fr=document.createElement('div'); fr.style.cssText='display:flex;align-items:center;gap:6px;margin:2px 0;';
@@ -19305,6 +19387,9 @@ function renderEditorFields(){
       sc.onchange=()=>{ pushUndoSnapshot(); pm.scale=parseFloat(sc.value)||1; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers(); };
       mrow.appendChild(url); mrow.appendChild(sc); pkHost.appendChild(mrow);
       hint(pkHost,'','2px 0 0').textContent='Custom model for the "'+newPickupKind+'" pickup (replaces the floating icon). Blank = default; weapons default to their gun model.';
+      const pkPsHead=document.createElement('div'); pkPsHead.className='hint'; pkPsHead.style.margin='8px 0 3px'; pkPsHead.innerHTML='<b>\ud83d\udd0d Search free models</b> \u2014 Poly Pizza / Sketchfab, click to use for this pickup'; pkHost.appendChild(pkPsHead);
+      const pkPsHost=document.createElement('div'); pkHost.appendChild(pkPsHost);
+      renderModelSearch(pkPsHost, (m, st)=>{ url.value=m.glb; pushUndoSnapshot(); pm.url=m.glb; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers(); if(typeof creditAsset==='function') creditAsset(m.attribution); if(st) st.textContent='Using "'+m.title+'" \u2014 credit: '+(m.attribution||''); }, { placeholder:'e.g. medkit, ammo box, battery' });
     }
     if(pickupSpots.length){
       hint(pkHost,'','3px 0 2px').textContent = pickupSpots.length+' placed:';
@@ -19455,6 +19540,9 @@ function renderEditorFields(){
       const cab=document.createElement('button'); cab.textContent='Apply'; cab.style.flex='0 0 auto';
       cab.onclick=()=>{ pushUndoSnapshot(); coinCfg.url=cu.value.trim(); for(const c of coins.slice()){ scene.remove(c.mesh); } coins.length=0; };
       cuRow.appendChild(cu); cuRow.appendChild(cab); lHost.appendChild(cuRow);
+      const coPsHead=document.createElement('div'); coPsHead.className='hint'; coPsHead.style.margin='8px 0 3px'; coPsHead.innerHTML='<b>\ud83d\udd0d Search free models</b> \u2014 Poly Pizza / Sketchfab, click to use as the coin'; lHost.appendChild(coPsHead);
+      const coPsHost=document.createElement('div'); lHost.appendChild(coPsHost);
+      renderModelSearch(coPsHost, (m, st)=>{ cu.value=m.glb; pushUndoSnapshot(); coinCfg.url=m.glb; for(const c of coins.slice()){ scene.remove(c.mesh); } coins.length=0; if(typeof creditAsset==='function') creditAsset(m.attribution); if(st) st.textContent='Using "'+m.title+'" \u2014 credit: '+(m.attribution||''); }, { placeholder:'e.g. coin, gem, token' });
       const csLab=document.createElement('label'); csLab.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:6px 0 2px;';
       const csSp=document.createElement('span'); csSp.textContent='Model scale'; csSp.style.minWidth='86px';
       const csN=document.createElement('input'); csN.type='number'; csN.min='0.05'; csN.max='50'; csN.step='0.05'; csN.value=coinCfg.scale; csN.style.cssText='width:64px;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:2px 4px;font-size:12px;';
@@ -21305,7 +21393,7 @@ function startGame(){
   if(pvpMode()) credits = 150;   // starting stipend so the economy is usable from the first life
   buffs.damage=0; buffs.speed=0; buffs.shield=0;
   // reset aim/shake state
-  firing=false; ads=false; adsBlend=0; shake=0; if(typeof _killTimes!=='undefined') _killTimes.length=0;
+  firing=false; ads=false; adsBlend=0; shake=0; if(typeof _killTimes!=='undefined') _killTimes.length=0; if(typeof inventory!=='undefined'){ inventory.length=0; if(typeof closeInventory==='function') closeInventory(); }
   editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false;
   if(typeof updateGizmo==='function') updateGizmo();   // editorOpen now false -> updateGizmo hides the handles (it only hides when called, and nothing else calls it on this path)
   if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false;
