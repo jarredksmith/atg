@@ -6122,32 +6122,29 @@ function disposeDof(){
 }
 function resizeDof(){ if(_dofScene){ disposeDof(); /* rebuilt on next render */ } }
 // Render either straight to screen, or through the DoF passes. Used by every render call site.
+// DoF as 3 passes (scene->color+depth, H blur, V blur) ending at `out` (null = screen, or a post-FX input RT).
+// Build 611: pulling this out lets the post-FX chain run DoF FIRST, so focus blur survives with effects on.
+function _runDofTo(scn, cam, out){
+  if(!ensureDof()){ renderer.setRenderTarget(out); renderer.render(scn, cam); return false; }
+  const [w,h] = _dofSize();
+  if(_dofRT.width !== w || _dofRT.height !== h){ disposeDof(); ensureDof(); }
+  renderer.setRenderTarget(_dofRT); renderer.render(scn, cam);
+  for(const m of [_dofMatH,_dofMatV]){ const u=m.uniforms; u.uNear.value=cam.near; u.uFar.value=cam.far; u.uFocus.value=dofFocus; u.uRange.value=dofRange; u.uStrength.value=dofStrength; u.uTexel.value.set(1/w,1/h); }
+  _dofMatH.uniforms.tColor.value = _dofRT.texture; _dofMatH.uniforms.tDepth.value = _dofRT.depthTexture; _dofQuad.material = _dofMatH;
+  renderer.setRenderTarget(_dofRT2); renderer.render(_dofScene, _dofCam);
+  _dofMatV.uniforms.tColor.value = _dofRT2.texture; _dofMatV.uniforms.tDepth.value = _dofRT.depthTexture; _dofQuad.material = _dofMatV;
+  renderer.setRenderTarget(out); renderer.render(_dofScene, _dofCam);
+  return true;
+}
 function renderScene(scn, cam){
   const _r=perfOn?_pnow():0;
   if(_postOn && !_postFail && typeof ensurePost==='function' && ensurePost()){
     try{ _renderPostFX(scn, cam); _perfCalls=renderer.info.render.calls; _perfTris=renderer.info.render.triangles; if(perfOn)_prof.render+=_pnow()-_r; return; }
     catch(e){ _postFail=true; try{ renderer.setRenderTarget(null); }catch(_e){} if(typeof console!=='undefined') console.warn('Post-FX disabled after an error:', e&&e.message); }
   }
-  if(!dofEnabled || !ensureDof()){ renderer.render(scn, cam); _perfCalls=renderer.info.render.calls; _perfTris=renderer.info.render.triangles; if(perfOn)_prof.render+=_pnow()-_r; return; }
-  const [w,h] = _dofSize();
-  if(_dofRT.width !== w || _dofRT.height !== h){ disposeDof(); ensureDof(); }
-  // 1) scene -> color+depth target
-  renderer.setRenderTarget(_dofRT);
-  renderer.render(scn, cam);
-  // sync uniforms (focus/range/strength can change live; near/far track the camera)
-  for(const m of [_dofMatH,_dofMatV]){ const u=m.uniforms; u.uNear.value=cam.near; u.uFar.value=cam.far; u.uFocus.value=dofFocus; u.uRange.value=dofRange; u.uStrength.value=dofStrength; u.uTexel.value.set(1/w,1/h); }
-  // 2) horizontal blur -> RT2
-  _dofMatH.uniforms.tColor.value = _dofRT.texture;
-  _dofMatH.uniforms.tDepth.value = _dofRT.depthTexture;
-  _dofQuad.material = _dofMatH;
-  renderer.setRenderTarget(_dofRT2);
-  renderer.render(_dofScene, _dofCam);
-  // 3) vertical blur -> screen (depth still sampled from the original target)
-  _dofMatV.uniforms.tColor.value = _dofRT2.texture;
-  _dofMatV.uniforms.tDepth.value = _dofRT.depthTexture;
-  _dofQuad.material = _dofMatV;
-  renderer.setRenderTarget(null);
-  renderer.render(_dofScene, _dofCam);
+  if(!dofEnabled || !ensureDof()){ renderer.render(scn, cam); }
+  else { _runDofTo(scn, cam, null); }
+  _perfCalls=renderer.info.render.calls; _perfTris=renderer.info.render.triangles; if(perfOn)_prof.render+=_pnow()-_r;
 }
 
 // ---------- Post-processing: bloom + color grade + vignette + film grain + motion blur ----------
@@ -6215,8 +6212,9 @@ function _renderPostFX(scn, cam){
   const [w,h]=_postSize();
   if(_postRT.width!==w || _postRT.height!==h){ disposePost(); ensurePost(); }
   const hw=Math.max(1,w>>1), hh=Math.max(1,h>>1);
-  // 1) scene -> full-res color
-  renderer.setRenderTarget(_postRT); renderer.render(scn, cam);
+  // 1) scene -> full-res color (run DoF first when active, so bloom/grade operate on the focus-blurred image)
+  if(dofEnabled && ensureDof()){ _runDofTo(scn, cam, _postRT); }
+  else { renderer.setRenderTarget(_postRT); renderer.render(scn, cam); }
   // 2) bright-pass + blur -> half-res bloom
   _matBright.uniforms.tColor.value=_postRT.texture; _matBright.uniforms.uTexel.value.set(1/hw,1/hh); _matBright.uniforms.uThresh.value=_postThresh;
   _postQuad.material=_matBright; renderer.setRenderTarget(_bloomRT); renderer.render(_postScene,_postCam);
@@ -14167,7 +14165,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 610 · 2026-06-19';
+const BUILD_VERSION = 'build 611 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
