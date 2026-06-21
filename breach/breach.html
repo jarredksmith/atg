@@ -8851,6 +8851,39 @@ function showWeaponModel(key){
 
 // Legacy entry points kept for callers: load/refresh the CURRENT weapon's model.
 function loadGunModel(){ showWeaponModel(curWep); }
+// build 585: laser sight. When the active weapon has a laser attachment equipped, raycast the player's aim into
+// the world and draw a red dot at the hit plus a thin beam from a gun-ish origin. World-space, so it works on any
+// gun model. _laserVisible is pure (unit-tested). Hidden in menus, while reloading, on melee, and deep in ADS.
+let _laserDot=null, _laserBeam=null; const _laserRay = new THREE.Raycaster();
+const _lz_o=new THREE.Vector3(), _lz_d=new THREE.Vector3(), _lz_r=new THREE.Vector3(), _lz_u=new THREE.Vector3(), _lz_start=new THREE.Vector3();
+function _laserVisible(s){ return !!(s.hasLaser && s.gameOn && !s.reloading && !s.melee && !s.shopOpen && !s.paused && !s.dead && (s.adsBlend||0) < 0.6); }
+function ensureLaser(){
+  if(_laserDot) return;
+  _laserDot=new THREE.Mesh(new THREE.SphereGeometry(0.5,10,8), new THREE.MeshBasicMaterial({ color:0xff2233, depthTest:true, transparent:true, opacity:0.95 }));
+  _laserDot.renderOrder=998; _laserDot.visible=false; scene.add(_laserDot);
+  const g=new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+  _laserBeam=new THREE.Line(g, new THREE.LineBasicMaterial({ color:0xff2a3a, transparent:true, opacity:0.35, blending:THREE.AdditiveBlending, depthWrite:false }));
+  _laserBeam.frustumCulled=false; _laserBeam.renderOrder=997; _laserBeam.visible=false; scene.add(_laserBeam);
+}
+function updateLaser(){
+  const w=(typeof W==='function')?W():null;
+  const vis=_laserVisible({ hasLaser:!!(w&&w.hasLaser), gameOn:(typeof gameOn!=='undefined'&&gameOn), reloading:(typeof reloading!=='undefined'&&reloading),
+    melee:!!(w&&w.melee), shopOpen:(typeof shopOpen!=='undefined'&&shopOpen), paused:(typeof paused!=='undefined'&&paused),
+    dead:(typeof duelDead!=='undefined'&&duelDead)||(typeof gameOver!=='undefined'&&gameOver), adsBlend:(typeof adsBlend!=='undefined'?adsBlend:0) });
+  if(!vis){ if(_laserDot){ _laserDot.visible=false; _laserBeam.visible=false; } return; }
+  ensureLaser();
+  camera.getWorldPosition(_lz_o); camera.getWorldDirection(_lz_d); _lz_d.normalize();
+  _laserRay.set(_lz_o, _lz_d); _laserRay.far = 300;
+  const hits = (typeof colliders!=='undefined' && colliders.length) ? _laserRay.intersectObjects(colliders, true) : [];
+  if(!hits.length){ _laserDot.visible=false; _laserBeam.visible=false; return; }
+  const hit=hits[0].point, dist=hits[0].distance;
+  // beam start: a touch below-right of the eye, approximating the muzzle (the gun is a viewmodel, not in the world)
+  _lz_r.setFromMatrixColumn(camera.matrixWorld, 0).normalize(); _lz_u.setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+  _lz_start.copy(_lz_o).addScaledVector(_lz_d, 0.25).addScaledVector(_lz_r, 0.14).addScaledVector(_lz_u, -0.12);
+  _laserDot.position.copy(hit); _laserDot.scale.setScalar(Math.max(0.006, Math.min(0.04, dist*0.006)));   // ~constant apparent size
+  const p=_laserBeam.geometry.attributes.position; p.setXYZ(0, _lz_start.x,_lz_start.y,_lz_start.z); p.setXYZ(1, hit.x,hit.y,hit.z); p.needsUpdate=true;
+  _laserDot.visible=true; _laserBeam.visible=true;
+}
 // Swap the model URL. Call with an explicit weapon key to set THAT weapon's override. Call with no key
 // to set the shared default gun url (legacy single-gun behavior) that weapons fall back to.
 function swapGunModel(url, key){
@@ -13901,7 +13934,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 584 · 2026-06-19';
+const BUILD_VERSION = 'build 585 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -16324,6 +16357,7 @@ function loop(){
   { const v = gameOn && !gameOver && !shopOpen && !editorOpen && !choosingUpgrade && !paused;   // show ❚❚ only during live play
     if(v!==_pbShow){ _pbShow=v; const pb=document.getElementById('pauseBtn'); if(pb) pb.style.display = v?'flex':'none'; } }
   if(hitStop > 0){ hitStop -= rawDt; dt = rawDt * 0.12; }   // impact freeze: slow the sim briefly (real-time countdown)
+  if(typeof updateLaser==='function') updateLaser();   // build 585: laser sight dot/beam (hides itself when inactive)
   if(_levelLoaderActive){ pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }   // hold the world frozen behind the level loading screen until assets finish loading — checked BEFORE the cutscene so the intro cinematic can't advance while loading
   if(_cineActive){ updateCinematic(rawDt); if(mixers.length){ for(const m of mixers) m.update(rawDt); } if(typeof updateXAnim==='function') updateXAnim(rawDt); renderScene(scene,camera); return; }   // keep GLB clips AND mechanism/waypoint motion (doors, platforms, elevators) alive on camera   // keep prop/GLB animations alive on camera (raw time — no hitstop during a cutscene)   // intro/preview flythrough owns the camera; freeze the sim
   if(_interActive){ pollGamepad(dt); renderScene(scene,camera); renderViewmodel(); return; }   // campaign transition card owns the screen; hold the won level frozen behind it
