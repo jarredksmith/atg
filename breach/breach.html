@@ -766,6 +766,7 @@
     <button id="pauseCrouchMode" class="pBtnGhost">Crouch: Hold</button>
     <div class="pauseAudio">
       <label class="paLbl"><input type="checkbox" id="muteCb"> Mute all</label>
+      <label class="paLbl"><input type="checkbox" id="postFxCb"> Visual effects (bloom · motion blur)</label>
       <label class="paLbl"><svg class="eico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>Master<input type="range" id="volMaster" min="0" max="100" value="80"></label>
       <label class="paLbl">♪ Music<input type="range" id="volMusic" min="0" max="100" value="60"></label>
       <label class="paLbl"><svg class="eico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/></svg>SFX<input type="range" id="volSfx" min="0" max="100" value="100"></label>
@@ -6120,6 +6121,10 @@ function resizeDof(){ if(_dofScene){ disposeDof(); /* rebuilt on next render */ 
 // Render either straight to screen, or through the DoF passes. Used by every render call site.
 function renderScene(scn, cam){
   const _r=perfOn?_pnow():0;
+  if(_postOn && !_postFail && typeof ensurePost==='function' && ensurePost()){
+    try{ _renderPostFX(scn, cam); _perfCalls=renderer.info.render.calls; _perfTris=renderer.info.render.triangles; if(perfOn)_prof.render+=_pnow()-_r; return; }
+    catch(e){ _postFail=true; try{ renderer.setRenderTarget(null); }catch(_e){} if(typeof console!=='undefined') console.warn('Post-FX disabled after an error:', e&&e.message); }
+  }
   if(!dofEnabled || !ensureDof()){ renderer.render(scn, cam); _perfCalls=renderer.info.render.calls; _perfTris=renderer.info.render.triangles; if(perfOn)_prof.render+=_pnow()-_r; return; }
   const [w,h] = _dofSize();
   if(_dofRT.width !== w || _dofRT.height !== h){ disposeDof(); ensureDof(); }
@@ -6142,7 +6147,89 @@ function renderScene(scn, cam){
   renderer.render(_dofScene, _dofCam);
 }
 
-function _fitViewport(){ camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight, false); if(typeof resizeDof==='function') resizeDof(); }
+// ---------- Post-processing: bloom + color grade + vignette + film grain + motion blur ----------
+// Self-contained (no composer addons), mirroring the DoF pattern: render the scene into a target, then run a
+// short chain of fullscreen-quad passes. Motion blur is a temporal afterimage (each frame keeps a decaying copy
+// of the last, so movement leaves light trails). The whole path is wrapped in a fallback in renderScene: if
+// anything throws, it disables itself and reverts to a plain render — it can never black-screen the game.
+let _postOn = true; try{ const v=localStorage.getItem('breach_postfx'); if(v==='off') _postOn=false; }catch(e){}
+let _postFail = false;
+let _postBloom = 0.65, _postMotion = 0.62, _postVig = 0.42, _postGrain = 0.05, _postSat = 1.08, _postCon = 1.05, _postThresh = 0.62;
+let _postRT=null, _bloomRT=null, _compRT=null, _afterA=null, _afterB=null, _postScene=null, _postCam=null, _postQuad=null;
+let _matBright=null, _matComp=null, _matAfter=null, _matCopy=null;
+function _postSize(){ return [Math.max(2, Math.floor(innerWidth * renderer.getPixelRatio())), Math.max(2, Math.floor(innerHeight * renderer.getPixelRatio()))]; }
+function ensurePost(){
+  if(_postScene) return true;
+  if(!THREE.WebGLRenderTarget) return false;
+  const [w,h] = _postSize(); const hw=Math.max(1,w>>1), hh=Math.max(1,h>>1);
+  const mkRT = (rw,rh)=> new THREE.WebGLRenderTarget(rw, rh, { minFilter:THREE.LinearFilter, magFilter:THREE.LinearFilter, type:THREE.UnsignedByteType });
+  _postRT=mkRT(w,h); _bloomRT=mkRT(hw,hh); _compRT=mkRT(w,h); _afterA=mkRT(w,h); _afterB=mkRT(w,h);
+  const vert='varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }';
+  // bright-pass + blur into the half-res bloom buffer (a 5x5 thresholded box gather)
+  _matBright=new THREE.ShaderMaterial({ depthTest:false, depthWrite:false,
+    uniforms:{ tColor:{value:null}, uTexel:{value:new THREE.Vector2(1/hw,1/hh)}, uThresh:{value:_postThresh} },
+    vertexShader:vert, fragmentShader:[
+      'varying vec2 vUv; uniform sampler2D tColor; uniform vec2 uTexel; uniform float uThresh;',
+      'float L(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }',
+      'void main(){ vec3 s=vec3(0.0); float w=0.0;',
+      '  for(int x=-2;x<=2;x++){ for(int y=-2;y<=2;y++){ vec2 o=vec2(float(x),float(y))*uTexel*1.5;',
+      '    vec3 c=texture2D(tColor, vUv+o).rgb; float b=max(0.0, L(c)-uThresh); s+=c*b; w+=1.0; } }',
+      '  gl_FragColor=vec4(s/w, 1.0); }'
+    ].join('\n') });
+  // composite: scene + bloom, then contrast/saturation grade, vignette, and film grain
+  _matComp=new THREE.ShaderMaterial({ depthTest:false, depthWrite:false,
+    uniforms:{ tColor:{value:null}, tBloom:{value:null}, uBloom:{value:_postBloom}, uVig:{value:_postVig}, uGrain:{value:_postGrain}, uSat:{value:_postSat}, uCon:{value:_postCon}, uTime:{value:0} },
+    vertexShader:vert, fragmentShader:[
+      'varying vec2 vUv; uniform sampler2D tColor; uniform sampler2D tBloom;',
+      'uniform float uBloom; uniform float uVig; uniform float uGrain; uniform float uSat; uniform float uCon; uniform float uTime;',
+      'void main(){ vec3 c=texture2D(tColor,vUv).rgb; c += texture2D(tBloom,vUv).rgb * uBloom;',
+      '  c=(c-0.5)*uCon+0.5;',                                    // contrast
+      '  float l=dot(c, vec3(0.299,0.587,0.114)); c=mix(vec3(l), c, uSat);',   // saturation
+      '  float r=length(vUv-0.5); c *= 1.0 - smoothstep(0.42,0.78,r)*uVig;',   // vignette
+      '  float n=fract(sin(dot(vUv*(uTime+1.0), vec2(12.9898,78.233)))*43758.5453); c += (n-0.5)*uGrain;',   // grain
+      '  gl_FragColor=vec4(clamp(c,0.0,1.0), 1.0); }'
+    ].join('\n') });
+  // temporal afterimage motion blur: keep the brighter of (new) and (old * damp) -> decaying trails on motion
+  _matAfter=new THREE.ShaderMaterial({ depthTest:false, depthWrite:false,
+    uniforms:{ tNew:{value:null}, tOld:{value:null}, uDamp:{value:_postMotion} },
+    vertexShader:vert, fragmentShader:[
+      'varying vec2 vUv; uniform sampler2D tNew; uniform sampler2D tOld; uniform float uDamp;',
+      'void main(){ vec4 nw=texture2D(tNew,vUv); vec4 od=texture2D(tOld,vUv)*uDamp; gl_FragColor=max(nw, od); }'
+    ].join('\n') });
+  _matCopy=new THREE.ShaderMaterial({ depthTest:false, depthWrite:false,
+    uniforms:{ tColor:{value:null} }, vertexShader:vert,
+    fragmentShader:'varying vec2 vUv; uniform sampler2D tColor; void main(){ gl_FragColor=texture2D(tColor,vUv); }' });
+  _postScene=new THREE.Scene(); _postCam=new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+  _postQuad=new THREE.Mesh(new THREE.PlaneGeometry(2,2), _matCopy); _postScene.add(_postQuad);
+  return true;
+}
+function disposePost(){
+  for(const rt of [_postRT,_bloomRT,_compRT,_afterA,_afterB]){ if(rt && rt.dispose) rt.dispose(); }
+  _postRT=_bloomRT=_compRT=_afterA=_afterB=null; _postScene=null;
+}
+function resizePost(){ if(_postScene) disposePost(); }   // rebuilt lazily on next render
+function _renderPostFX(scn, cam){
+  const [w,h]=_postSize();
+  if(_postRT.width!==w || _postRT.height!==h){ disposePost(); ensurePost(); }
+  const hw=Math.max(1,w>>1), hh=Math.max(1,h>>1);
+  // 1) scene -> full-res color
+  renderer.setRenderTarget(_postRT); renderer.render(scn, cam);
+  // 2) bright-pass + blur -> half-res bloom
+  _matBright.uniforms.tColor.value=_postRT.texture; _matBright.uniforms.uTexel.value.set(1/hw,1/hh); _matBright.uniforms.uThresh.value=_postThresh;
+  _postQuad.material=_matBright; renderer.setRenderTarget(_bloomRT); renderer.render(_postScene,_postCam);
+  // 3) composite (scene + bloom + grade + vignette + grain) -> full res
+  const cu=_matComp.uniforms; cu.tColor.value=_postRT.texture; cu.tBloom.value=_bloomRT.texture;
+  cu.uBloom.value=_postBloom; cu.uVig.value=_postVig; cu.uGrain.value=_postGrain; cu.uSat.value=_postSat; cu.uCon.value=_postCon; cu.uTime.value=(performance.now()*0.001)%1000;
+  _postQuad.material=_matComp; renderer.setRenderTarget(_compRT); renderer.render(_postScene,_postCam);
+  // 4) motion blur: blend with the previous frame -> _afterB
+  _matAfter.uniforms.tNew.value=_compRT.texture; _matAfter.uniforms.tOld.value=_afterA.texture; _matAfter.uniforms.uDamp.value=_postMotion;
+  _postQuad.material=_matAfter; renderer.setRenderTarget(_afterB); renderer.render(_postScene,_postCam);
+  // 5) present -> screen
+  _matCopy.uniforms.tColor.value=_afterB.texture; _postQuad.material=_matCopy; renderer.setRenderTarget(null); renderer.render(_postScene,_postCam);
+  // 6) swap accumulation buffers (this frame's result becomes next frame's "old")
+  const t=_afterA; _afterA=_afterB; _afterB=t;
+}
+function _fitViewport(){ camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight, false); if(typeof resizeDof==='function') resizeDof(); if(typeof resizePost==='function') resizePost(); }
 addEventListener('resize', _fitViewport);
 addEventListener('load', _fitViewport);                 // a fresh tab/window can mis-report height until fully laid out
 setTimeout(_fitViewport, 200); setTimeout(_fitViewport, 800);   // catch late layout/devtools docking
@@ -7373,6 +7460,32 @@ const PRIMITIVE_BUILDERS = { box:buildBoxProp, sphere:buildSphereProp, cylinder:
 function isPrimitive(src){ return PRIMITIVE_BUILDERS.hasOwnProperty(src); }
 // Cache loaded glTFs by URL so repeated/added props of the same model don't refetch.
 const gltfCache = {};
+// build 576: model cache eviction. Instances are clone(true), so all live copies + the cached master share GPU
+// geometry/textures. To free memory safely we ref-count per url: every loadGLTFCached resolve increments, and
+// only props release (on removeProp). Persistent objects (weapons, turrets, coins, the grenade) load once and
+// never release, so their count stays >=1 and they're never evicted. When the cache exceeds the cap, the
+// least-recently-used zero-ref models are disposed (freeing their VRAM); the bytes stay in IndexedDB so a later
+// reuse re-parses without re-downloading.
+const _modelRefs = {};       // url -> live reference count
+const _modelUsedAt = {};     // url -> recency clock
+let _modelClock = 0;
+const _MODEL_CACHE_CAP = 24; // keep this many recent models warm; evict zero-ref ones beyond it
+function _modelTouch(url){ _modelRefs[url]=(_modelRefs[url]||0)+1; _modelUsedAt[url]=++_modelClock; }
+function _modelRelease(url){ if(url!=null && _modelRefs[url]!=null) _modelRefs[url]=Math.max(0, _modelRefs[url]-1); }
+function _disposeGLTF(gltf){
+  if(!gltf || !gltf.scene || !gltf.scene.traverse) return;
+  const geos=new Set(), mats=new Set(), texs=new Set();
+  gltf.scene.traverse(o=>{ if(o.geometry) geos.add(o.geometry); const m=o.material; if(m){ (Array.isArray(m)?m:[m]).forEach(x=>{ if(x) mats.add(x); }); } });
+  mats.forEach(m=>{ for(const k in m){ const v=m[k]; if(v && v.isTexture) texs.add(v); } if(m.dispose) try{ m.dispose(); }catch(e){} });
+  texs.forEach(t=>{ if(t.dispose) try{ t.dispose(); }catch(e){} });
+  geos.forEach(g=>{ if(g.dispose) try{ g.dispose(); }catch(e){} });
+}
+function _enforceModelCacheCap(){
+  const urls=Object.keys(gltfCache); if(urls.length<=_MODEL_CACHE_CAP) return;
+  let over=urls.length-_MODEL_CACHE_CAP;
+  const evictable=urls.filter(u=>(_modelRefs[u]||0)<=0).sort((a,b)=>(_modelUsedAt[a]||0)-(_modelUsedAt[b]||0));   // oldest first
+  for(const u of evictable){ if(over<=0) break; try{ _disposeGLTF(gltfCache[u]); }catch(e){} delete gltfCache[u]; delete _modelRefs[u]; delete _modelUsedAt[u]; over--; }
+}
 // Optional CORS proxy (a Cloudflare Worker) for loading cross-origin models whose host blocks
 // cross-origin fetches (e.g. Poly Pizza). Same-origin loads are never proxied.
 // Baked-in defaults so Poly Pizza works out of the box; the editor fields still override these
@@ -7409,17 +7522,24 @@ const _glbQueue = []; let _glbActive = 0; const GLB_MAX_CONCURRENT = 3;
 function _glbPump(){ while(_glbActive < GLB_MAX_CONCURRENT && _glbQueue.length){ const task = _glbQueue.shift(); _glbActive++; task(); } }
 const _glbWaiters = {};   // url -> [{cb,errcb}] all riding a single in-flight load, so a model shared by several avatars (or a prewarm + the real build) is fetched once
 const _shrunkTex = (typeof WeakSet!=='undefined') ? new WeakSet() : null;   // each texture is shared via the cache; shrink once
-function _shrinkTexturesForMobile(root){
-  if(!IS_COARSE || !root || !root.traverse) return;
-  const MAXD = 1024;
+// build 575: downscale model textures on load to cap VRAM/RAM. Sketchfab models often ship 4K PBR maps (~64MB
+// each on the GPU); capping the longest side to e.g. 1024 cuts that ~16x. Runs once per cached master, so every
+// clone inherits the smaller maps. Configurable cap (0 = no cap on desktop); mobile is always capped at <=1024.
+let _modelTexCap = 1024; try{ const _v=parseInt(localStorage.getItem('breach_model_texcap'),10); if([0,512,1024,2048].indexOf(_v)>=0) _modelTexCap=_v; }catch(e){}
+function _modelTexCapEff(){ let cap=_modelTexCap; if(typeof IS_COARSE!=='undefined' && IS_COARSE) cap=(cap===0?1024:Math.min(cap,1024)); return cap; }
+function _shrinkTexturesForMobile(root){   // (name kept for call sites) downscale to the effective cap AND pre-upload, so first render never stalls
+  if(!root || !root.traverse) return;
+  const MAXD=_modelTexCapEff();   // 0 = no downscale (desktop "Off"); we still pre-warm the GPU upload
+  const canWarm = (typeof renderer!=='undefined' && renderer && renderer.initTexture);
+  if(!MAXD && !canWarm) return;
+  const SLOTS=['map','normalMap','roughnessMap','metalnessMap','aoMap','emissiveMap','alphaMap','bumpMap','displacementMap','specularMap','clearcoatMap','clearcoatNormalMap','clearcoatRoughnessMap','sheenColorMap','sheenRoughnessMap','lightMap'];
   root.traverse(o=>{
     const mats = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : null; if(!mats) return;
     for(const m of mats){ if(!m) continue;
-      for(const k of ['map','normalMap','roughnessMap','metalnessMap','aoMap','emissiveMap','alphaMap']){
-        const t=m[k]; if(!t || !t.image || (_shrunkTex && _shrunkTex.has(t))) continue;
+      for(const k of SLOTS){
+        const t=m[k]; if(!t || !t.image || t.isCompressedTexture || t.isDataTexture || (_shrunkTex && _shrunkTex.has(t))) continue;
         const im=t.image, w=im.width||0, h=im.height||0;
-        if(!(w>MAXD || h>MAXD)) { if(_shrunkTex) _shrunkTex.add(t); continue; }
-        if(typeof im.getContext==='function' || (typeof HTMLImageElement!=='undefined' && im instanceof HTMLImageElement) || (typeof ImageBitmap!=='undefined' && im instanceof ImageBitmap)){
+        if(MAXD && (w>MAXD || h>MAXD) && (typeof im.getContext==='function' || (typeof HTMLImageElement!=='undefined' && im instanceof HTMLImageElement) || (typeof ImageBitmap!=='undefined' && im instanceof ImageBitmap))){
           try{
             const sc=MAXD/Math.max(w,h), cw=Math.max(1,Math.round(w*sc)), ch=Math.max(1,Math.round(h*sc));
             const cv=document.createElement('canvas'); cv.width=cw; cv.height=ch;
@@ -7428,17 +7548,26 @@ function _shrinkTexturesForMobile(root){
             if(typeof im.close==='function') try{ im.close(); }catch(e){}   // free the ImageBitmap's backing store
           }catch(e){}
         }
+        if(canWarm) try{ renderer.initTexture(t); }catch(e){}   // build 577: upload to the GPU now (off the render loop) so the prop's first frame doesn't hitch
         if(_shrunkTex) _shrunkTex.add(t);
       } } });
 }
+// build 577: after a burst of model spawns settles, precompile their shader programs once, so turning to look at
+// a freshly furnished room doesn't stall while WebGL links shaders on first draw. Debounced + off the render loop.
+let _warmCompileT=0;
+function _scheduleWarmCompile(){
+  if(typeof renderer==='undefined' || !renderer || !renderer.compile || typeof scene==='undefined') return;
+  if(_warmCompileT) clearTimeout(_warmCompileT);
+  _warmCompileT=setTimeout(()=>{ _warmCompileT=0; try{ renderer.compile(scene, (typeof camera!=='undefined'?camera:null)); }catch(e){} }, 250);
+}
 function loadGLTFCached(url, cb, errcb){
-  if(gltfCache[url]){ cb(gltfCache[url]); return; }   // cached: synchronous, nothing to wait on
+  if(gltfCache[url]){ _modelTouch(url); cb(gltfCache[url]); return; }   // cached: synchronous, nothing to wait on
   if(_glbWaiters[url]){ _glbWaiters[url].push({cb:cb,errcb:errcb}); return; }   // a load for this url is already in flight; ride along instead of fetching again
   const waiters=[{cb:cb,errcb:errcb}]; _glbWaiters[url]=waiters;
   _glbPending++;
   let _fin=false; const _done=()=>{ if(_fin) return; _fin=true; _glbPending=Math.max(0,_glbPending-1); delete _glbWaiters[url]; };
   const _release=()=>{ _glbActive=Math.max(0,_glbActive-1); _glbPump(); };
-  const _cb=(g)=>{ _done(); _release(); try{ if(g && g.scene) _shrinkTexturesForMobile(g.scene); }catch(e){} for(const w of waiters){ try{ w.cb && w.cb(g); }catch(e){} } };
+  const _cb=(g)=>{ _done(); _release(); try{ if(g && g.scene) _shrinkTexturesForMobile(g.scene); }catch(e){} for(const w of waiters){ if(g) _modelTouch(url); try{ w.cb && w.cb(g); }catch(e){} } _enforceModelCacheCap(); };
   let _tries=0;
   const _ec=(e)=>{
     if(++_tries<=2){ _release(); setTimeout(()=>{ _glbQueue.push(start); _glbPump(); }, 500*_tries + Math.random()*400); return; }   // retry transient failures (429 rate-limit) with backoff
@@ -7479,6 +7608,11 @@ function sfGetToken(){ try{ const own=(localStorage.getItem(SF_TOKEN_KEY)||'').t
 function sfSetToken(k){ try{ localStorage.setItem(SF_TOKEN_KEY, (k||'').trim()); }catch(e){} }
 function sfEnabled(){ try{ return localStorage.getItem(SF_ON_KEY)==='1'; }catch(e){ return false; } }
 function sfSetEnabled(b){ try{ localStorage.setItem(SF_ON_KEY, b?'1':'0'); }catch(e){} }
+// build 571: optional Anthropic key (editor-only) for the AI scene builder. Browser->API direct call uses the
+// documented 'anthropic-dangerous-direct-browser-access' header. Stored like the other source keys.
+const AI_KEY_LS='breach_anthropic_key'; const AI_MODEL='claude-sonnet-4-6';
+function aiGetKey(){ try{ return (localStorage.getItem(AI_KEY_LS)||'').trim(); }catch(e){ return ''; } }
+function aiSetKey(k){ try{ localStorage.setItem(AI_KEY_LS, (k||'').trim()); }catch(e){} }
 function sfThumb(m){ try{ const imgs=(m.thumbnails&&m.thumbnails.images)||[]; const s=imgs.filter(i=>i.width<=320).sort((a,b)=>b.width-a.width)[0]||imgs[0]; return s?s.url:''; }catch(e){ return ''; } }
 function sfMap(m){ return { uid:m.uid, title:m.name||'Untitled', thumb:sfThumb(m), animated:!!(m.animationCount), attribution:(m.name||'Model')+(m.user&&m.user.username?(' by '+m.user.username):'')+(m.license&&m.license.label?(' ['+m.license.label+']'):'')+' \u2014 via Sketchfab' }; }
 function sfFetchPage(url, cb, errcb){   // cb(results, nextPageUrl|null)
@@ -7659,7 +7793,7 @@ function spawnProp(src, t, onReady, slot, animMode, mat, onError, nid, animClip)
     return;
   }
   loadGLTFCached(src,
-    (gltf)=>{ const obj = finalizeProp(THREE.cloneSkinned(gltf.scene), src, t, gltf, slot, animMode, mat, nid, animClip); if(onReady) onReady(obj); },
+    (gltf)=>{ const obj = finalizeProp(THREE.cloneSkinned(gltf.scene), src, t, gltf, slot, animMode, mat, nid, animClip); if(typeof _scheduleWarmCompile==='function') _scheduleWarmCompile(); if(onReady) onReady(obj); },
     (err)=>{ console.warn('Prop load failed for', src, '-', err && err.message); if(onError) onError(err); }
   );
 }
@@ -7679,6 +7813,7 @@ function wipeScene(){
   if(editorTargets.props) editorTargets.props.idx=-1; if(editorTargets.lights) editorTargets.lights.idx=-1; if(editorTargets.spawns) editorTargets.spawns.idx=-1;
   if(typeof updateSelectionHighlight==='function') updateSelectionHighlight();
   if(typeof renderEditorFields==='function') renderEditorFields();
+  if(typeof _enforceModelCacheCap==='function') _enforceModelCacheCap();   // build 576: free VRAM from models with no instances left (recent ones stay warm under the cap)
 }
 function removeProp(idx){
   const obj = propModels[idx]; if(!obj) return;
@@ -7688,6 +7823,7 @@ function removeProp(idx){
   scene.remove(obj);
   const ci = colliders.indexOf(obj); if(ci>=0) colliders.splice(ci,1);
   if(obj.userData.mixer){ const mi = mixers.indexOf(obj.userData.mixer); if(mi>=0) mixers.splice(mi,1); }
+  if(obj.userData.src && typeof isModelSrc==='function' && isModelSrc(obj.userData.src)) _modelRelease(obj.userData.src);   // build 576: drop this instance's ref; the master is freed once no instance remains
   propModels.splice(idx,1);
 }
 function loadHostedProps(){
@@ -9458,7 +9594,7 @@ function removeFireZone(i){ pushUndoSnapshot(); fireZones.splice(i,1); if(selFir
 // bots) spawn via randomSpawn(), which validates points against geometry, so they land in open corridors.
 // Seeded with a small PRNG so a given seed reproduces the same maze (each click rolls a fresh random seed).
 function _mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15, 1|a); t=t+Math.imul(t^t>>>7, 61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
-let _genCells=9, _lastMazeSeed=0, _genCover=true, _genLoot=true, _genTex=true, _genDesc='';
+let _genCells=9, _lastMazeSeed=0, _genCover=true, _genLoot=true, _genTex=true, _genDesc='', _genVision=true;
 const _GEN_FLOOR_TEX=['wood','tiles','concrete','carpet','marble'];
 const _GEN_WALL_TEX=['concrete','plaster','brick','painted','stone'];
 // build 562: after a layout is built, asynchronously pick a random Poly Haven (CC0) texture for the floor and
@@ -9542,7 +9678,10 @@ const SCENE_CATALOG = {
   sign:     { terms:'sign',            size:1.4, zone:'wall',   n:2 },
   trashcan: { terms:'trash can',       size:0.9, zone:'corner', n:3 },
   computer: { terms:'computer',        size:0.7, zone:'wall',   n:3 },
-  vending:  { terms:'vending machine', size:1.9, zone:'wall',   n:2 }
+  vending:  { terms:'vending machine', size:1.9, zone:'wall',   n:2 },
+  painting: { terms:'framed painting', size:1.1, zone:'mount',  n:3 },
+  clock:    { terms:'wall clock',       size:0.5, zone:'mount',  n:1 },
+  whiteboard:{ terms:'whiteboard',      size:1.6, zone:'mount',  n:1 }
 };
 // word -> catalog category (plurals + common synonyms). First match wins per word.
 const SCENE_SYN = {
@@ -9565,6 +9704,8 @@ const SCENE_SYN = {
   cart:'cart', carts:'cart', trolley:'cart',
   register:'register', registers:'register', till:'register',
   tv:'tv', television:'tv', televisions:'tv', monitor:'tv', screen:'tv',
+  painting:'painting', paintings:'painting', art:'painting', artwork:'painting', picture:'painting', poster:'painting', frame:'painting',
+  clock:'clock', whiteboard:'whiteboard', chalkboard:'whiteboard',
   computer:'computer', computers:'computer', pc:'computer', desktop:'computer', laptop:'computer', keyboard:'computer',
   sign:'sign', signs:'sign', signage:'sign',
   trash:'trashcan', garbage:'trashcan', bin:'trashcan', dumpster:'trashcan',
@@ -9636,14 +9777,15 @@ function _sceneCellZone(n, s, e, w){
 function _planFurnish(items, pools, rnd, cap){
   cap = cap || 40; const out=[];
   const pop = z => (pools[z] && pools[z].length ? pools[z].pop() : null);
-  const ORDER = { wall:['wall','corner'], corner:['corner','wall'], center:['center','wall','corner'], any:['wall','corner','center'] };
+  const ORDER = { wall:['wall','corner'], corner:['corner','wall'], center:['center','wall','corner'], any:['wall','corner','center'], mount:['wall','corner'] };
   const take = zone => { for(const z of (ORDER[zone]||[zone])){ const s=pop(z); if(s) return s; } return null; };
   for(const it of (items||[])){
     if(!it || !it.term) continue;
+    const mount = (it.zone==='mount');
     for(let i=0;i<(it.n||1) && out.length<cap;i++){
       const sp = take(it.zone||'any');
       if(!sp) break;   // no suitable spot left -> skip rather than drop it somewhere illogical
-      out.push({ term:it.term, q2:it.q2, size:(it.size||1.2), x:sp.x, z:sp.z, yaw:(sp.yaw!=null?sp.yaw:(rnd?rnd()*Math.PI*2:0)), nx:(sp.nx||0), nz:(sp.nz||0) });
+      out.push({ term:it.term, q2:it.q2, size:(it.size||1.2), mount, x:sp.x, z:sp.z, yaw:(sp.yaw!=null?sp.yaw:(rnd?rnd()*Math.PI*2:0)), nx:(sp.nx||0), nz:(sp.nz||0) });
     }
   }
   return out;
@@ -9661,32 +9803,162 @@ function _hugWall(obj, nx, nz, room){
   obj.updateMatrixWorld(true);
   obj.userData.footR=_propFootR(obj); if(typeof refreshPropCollider==='function') refreshPropCollider(obj);
 }
-// Async glue (not unit-tested — network): for each planned placement, search for a model, drop the first usable
-// result in at its planned spot, fit to the category's real-world size, ground it, credit it. Prefers Sketchfab
-// (a far deeper catalog) when a token is present, and falls back to Poly Pizza per placement on a miss/error.
-function _furnishExecute(placements, room){
+// Title relevance of a model name to a query (pure). >=1 means the name actually contains the query's words.
+function _titleScore(title, query){
+  const qt = String(query||'').toLowerCase().split(/[^a-z0-9]+/).filter(w=>w && !_SCENE_STOP[w]).map(_stemWord);
+  if(!qt.length) return 0;
+  const head = qt[qt.length-1];
+  const tl = String(title||'').toLowerCase(); const tt = tl.split(/[^a-z0-9]+/).filter(Boolean).map(_stemWord);
+  let s=0; for(const q of qt){ if(tt.indexOf(q)>=0) s+=1; else if(tl.indexOf(q)>=0) s+=0.5; }
+  if(tt.indexOf(head)>=0) s+=1.5;     // the head noun ("computer" in "office computer") matters most
+  return s;
+}
+function _pickModel(results, query){   // best single result by title (kept for the no-key path / tests)
+  const list = results||[]; if(!list.length) return null;
+  let best=list[0], bestScore=-1e9;
+  for(let i=0;i<list.length;i++){ const r=list[i]; if(!r) continue; const s=_titleScore(r.title, query) - i*0.05; if(s>bestScore){ bestScore=s; best=r; } }
+  return { model:best, score:bestScore };
+}
+function _rankByTitle(cands, query){   // candidates sorted best-first by title score (stable-ish via tiny index bias)
+  return (cands||[]).map((c,i)=>({ c, s:_titleScore(c&&c.title, query) - i*0.02 })).sort((a,b)=>b.s-a.s).map(x=>x.c);
+}
+let _furnishScale = 1.6; try{ const _fs=parseFloat(localStorage.getItem('breach_furnish_scale')); if(isFinite(_fs)&&_fs>0) _furnishScale=_fs; }catch(e){}   // build 573: global size multiplier (real-world sizes read small in big rooms)
+const _AI_VISION_K = 5;   // candidate thumbnails shown to the vision picker per item
+// Async glue (network). Groups planned placements by search term, gathers candidate models (with thumbnails) once
+// per distinct item, then chooses which model to use: with a key + vision on, Claude looks at the thumbnails and
+// picks the ones that actually look right (rejecting wrong/cluttered models); otherwise the best title match.
+// Multiple instances of an item rotate through the approved models for variety, and everything is fit to its
+// real-world size times the furniture-scale multiplier, then wall-hugged / mounted.
+function _furnishExecute(placements, room, fopts){
   if(!placements || !placements.length) return;
-  room = room || 4.5;
+  room = room || 4.5; fopts = fopts || {};
   const sfOk = (typeof sfSearch==='function' && typeof sfGetToken==='function' && !!sfGetToken());
   const ppOk = (typeof ppSearch==='function' && (typeof ppGetKey!=='function' || !!ppGetKey()));
   if(!sfOk && !ppOk){ if(typeof toast==='function') toast('Add a Sketchfab or Poly Pizza key (Models tab) to furnish from a description'); return; }
-  let i=0;
-  const next=()=>{
-    if(i>=placements.length) return;
-    const p=placements[i++];
-    const queries = [p.term, p.q2].filter((q,idx,a)=> q && a.indexOf(q)===idx);   // user's words first, broad fallback second
-    const place=(srcUrl, attr, onFail)=>{ spawnProp(srcUrl, [p.x, 0, p.z, 0, p.yaw, 0, 1], (obj)=>{ if(obj){ if(attr) obj.userData.attribution=attr; _fitPropToSize(obj, p.size); _hugWall(obj, p.nx, p.nz, room); if(typeof renderModelCredits==='function') renderModelCredits(); } }, undefined, 'loop', null, ()=>{ if(onFail) onFail(); }); };
-    // try one query across both sources (Sketchfab preferred); on a miss/failure, advance to the next query
-    const trySrc=(q, hit, miss)=>{
-      const ppFor=()=>{ if(!ppOk){ miss(); return; } ppSearch(q, (m)=>{ const r=(m||[]).find(x=>x&&x.glb); if(r) hit(r.glb, r.attribution); else miss(); }, ()=>miss()); };
-      if(sfOk) sfSearch(q, (res)=>{ const r=(res||[]).find(x=>x&&x.uid); if(r) hit('sketchfab:'+r.uid, r.attribution); else ppFor(); }, ()=>ppFor());
-      else ppFor();
+  const useVision = !!(fopts.vision && typeof aiGetKey==='function' && aiGetKey() && typeof _aiPickModel==='function');
+  const scale = (typeof _furnishScale==='number' && _furnishScale>0) ? _furnishScale : 1;
+  const place=(p, ref)=>{ if(!ref || !ref.url) return; spawnProp(ref.url, [p.x, 0, p.z, 0, p.yaw, 0, 1], (obj)=>{ if(!obj) return; if(ref.attr) obj.userData.attribution=ref.attr; _fitPropToSize(obj, (p.size||1.2)*scale); _hugWall(obj, p.nx, p.nz, room);
+    if(p.mount){ const gy=(typeof terrainHeightAt==='function'?terrainHeightAt(p.x,p.z):0); obj.position.y = gy + 1.55; if(obj.userData.footR!=null) obj.userData.footR=0.1; }   // wall art / screens hang at eye height
+    if(typeof renderModelCredits==='function') renderModelCredits(); }, undefined, 'loop', null, ()=>{}); };
+  // group identical items so we search + (vision-)pick once, then place every instance
+  const groups=new Map();
+  for(const p of placements){ const k=(p.term||'')+'|'+(p.q2||''); if(!groups.has(k)) groups.set(k, { term:p.term, q2:p.q2, items:[] }); groups.get(k).items.push(p); }
+  const glist=[...groups.values()]; let gi=0;
+  const finishGroup=(g, refs)=>{ if(refs && refs.length) g.items.forEach((p,idx)=> place(p, refs[idx % refs.length])); };
+  const gather=(g, cb)=>{   // collect up to K candidates {url,title,thumb,attr} from [term,q2] x [SF,PP]
+    const queries=[g.term, g.q2].filter((q,i,a)=> q && a.indexOf(q)===i); const cands=[]; let qi=0, sp=0;
+    const step=()=>{ if(cands.length>=_AI_VISION_K || qi>=queries.length){ cb(cands); return; }
+      const q=queries[qi]; const adv=()=>{ sp++; if(sp>1){ sp=0; qi++; } step(); };
+      if(sp===0){ if(!sfOk){ adv(); return; } sfSearch(q, (res)=>{ for(const r of (res||[])){ if(r&&r.uid&&cands.length<_AI_VISION_K) cands.push({ url:'sketchfab:'+r.uid, title:r.title, thumb:r.thumb, attr:r.attribution }); } adv(); }, ()=>adv()); }
+      else      { if(!ppOk){ adv(); return; } ppSearch(q, (m)=>{ for(const r of (m||[])){ if(r&&r.glb&&cands.length<_AI_VISION_K) cands.push({ url:r.glb, title:r.title, thumb:r.thumb, attr:r.attribution }); } adv(); }, ()=>adv()); }
     };
-    const run=(qi)=>{ if(qi>=queries.length) return; trySrc(queries[qi], (src,attr)=>place(src, attr, ()=>run(qi+1)), ()=>run(qi+1)); };
-    run(0);
-    setTimeout(next, 140);   // stagger the NEXT item; downloads proceed in parallel (the browser caps concurrency)
+    step();
   };
-  next();
+  const nextGroup=()=>{
+    if(gi>=glist.length){ if(useVision && typeof toast==='function') toast('Scene furnished'); return; }
+    const g=glist[gi++];
+    gather(g, (cands)=>{
+      const proceed=(refs)=>{ finishGroup(g, refs); setTimeout(nextGroup, useVision?40:120); };
+      if(!cands.length){ proceed([]); return; }
+      if(useVision){
+        if(typeof toast==='function') toast('Claude is checking models for \u201c'+g.term+'\u201d ('+gi+'/'+glist.length+')\u2026');
+        _aiPickModel(g.term, fopts.context||'', cands, (good)=>{ proceed((good||[]).map(i=>cands[i]).filter(Boolean)); },   // vision rejected all -> skip (better empty than a wrong prop)
+                     ()=>{ proceed([ _rankByTitle(cands,g.term)[0] ]); });   // only on an API error, fall back to the best title match
+      } else { proceed(_rankByTitle(cands, g.term).slice(0,3)); }   // no key: best title matches, rotate top 3 for variety
+    });
+  };
+  nextGroup();
+}
+// ===== build 571: AI scene builder (optional, editor-only) =====
+// With an Anthropic key, Claude composes the scene per-room (a break room gets tables/vending/coffee, a reception
+// gets a desk/chairs/couch/tv, etc.) instead of sprinkling one item list everywhere. It returns a manifest that
+// normalises into the SAME item shape the rule parser produces, so the planner + executor are reused unchanged.
+// _aiNormalizePlan is pure (unit-tested); the fetch is thin glue with the rule parser as the no-key fallback.
+function _aiNormalizePlan(obj, numRooms){
+  const ZONES={ wall:1, corner:1, center:1, any:1, mount:1 };
+  let rooms = (obj && Array.isArray(obj.rooms)) ? obj.rooms : (Array.isArray(obj) ? obj : []);
+  const cap = numRooms || rooms.length;
+  const out=[];
+  for(let i=0;i<rooms.length && out.length<cap;i++){
+    const r=rooms[i]||{}; const list=Array.isArray(r.items)?r.items:[]; const items=[];
+    for(const it of list){
+      if(!it) continue;
+      const term=String(it.term||it.name||'').trim().replace(/\s+/g,' ').slice(0,40); if(!term) continue;
+      const size=Math.max(0.2, Math.min(6, (+it.size||1.2)));
+      const zone=ZONES[String(it.zone||'').toLowerCase()] ? String(it.zone).toLowerCase() : 'any';
+      const n=Math.max(1, Math.min(8, Math.round(+it.count||1)));
+      items.push({ term, q2:term.split(' ').pop(), size, zone, n });
+      if(items.length>=8) break;
+    }
+    out.push({ role:String(r.role||'room').slice(0,40), items });
+  }
+  return out;
+}
+function _aiPlanScene(desc, roomInfos, cb, errcb){
+  const key=aiGetKey(); if(!key){ errcb && errcb(new Error('no key')); return; }
+  const prompt =
+    'You are furnishing a procedurally generated '+(desc?('"'+desc.replace(/"/g,'')+'"'):'building')+' for a 3D game level editor.\n'
+    + 'There are '+roomInfos.length+' connected rooms. Sizes (and which one is the entrance the player walks in through):\n'
+    + roomInfos.map((r,i)=>(i+1)+'. about '+r.w+'m by '+r.d+'m'+(r.entrance?' (ENTRANCE)':'')).join('\n') + '\n\n'
+    + 'Assign each room ONE coherent role from the description, fitting the role to the room SIZE: put the conference room / open areas in the LARGEST rooms, '
+    + 'small rooms become bathrooms, closets or single offices, and the reception/lobby should be the ENTRANCE room. Reuse a role (e.g. several offices) when the description implies it.\n'
+    + 'Furnish each room ONLY with items that belong to THAT room\u2019s role. Keep role-specific fixtures in their own room: toilets and sinks go ONLY in a bathroom, '
+    + 'kitchen counters/sinks ONLY in a break room, reception desks ONLY in reception. Never scatter a bathroom or kitchen fixture into an office. An office gets a desk, chair(s), trash can, maybe a painting \u2014 nothing else.\n'
+    + 'Provide an entry for EVERY room listed above, in the same order. Each item: '
+    + '"term" (a short concrete search query for a free 3D model library, e.g. "office chair", "vending machine", "reception desk", "potted plant"), '
+    + '"size" (real-world length of its LONGEST side in metres), '
+    + '"zone" (one of: "wall" = flush against a wall like desks/couches/counters/vending; "center" = free-standing like tables/conference tables; "corner" = plants/lamps/bins; "mount" = hung ON a wall at eye height like paintings/tv/clocks/whiteboards), '
+    + 'and "count" (small, scaled to the room: a tiny room fits ~2-3 items, a big room ~5-7). '
+    + 'Skip items that can only sit ON furniture (a computer or phone on a desk) for now. Use realistic metre sizes so nothing is giant. '
+    + 'Return ONLY minified JSON (no prose, no code fences) exactly like: '
+    + '{"rooms":[{"role":"reception","items":[{"term":"reception desk","size":2.2,"zone":"wall","count":1},{"term":"painting","size":1.1,"zone":"mount","count":2}]}]}';
+  fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST',
+    headers:{ 'content-type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
+    body: JSON.stringify({ model:AI_MODEL, max_tokens:4096, messages:[{ role:'user', content:prompt }] })
+  })
+  .then(r=>{ if(!r.ok) return r.text().then(t=>{ throw new Error('HTTP '+r.status+(r.status===401?' — check your Anthropic key':'')); }); return r.json(); })
+  .then(d=>{
+    const txt=(d && Array.isArray(d.content)) ? d.content.filter(b=>b&&b.type==='text').map(b=>b.text).join('') : '';
+    const clean=txt.replace(/```json|```/g,'').trim();
+    const start=clean.indexOf('{'), end=clean.lastIndexOf('}');
+    if(start<0||end<0) throw new Error('the model did not return JSON');
+    const parsed=JSON.parse(clean.slice(start, end+1));
+    cb(_aiNormalizePlan(parsed, roomInfos.length));
+  })
+  .catch(err=>{ errcb && errcb(err); });
+}
+// build 573: vision model picker. Given candidate models (with thumbnail URLs), Claude looks at the thumbnails and
+// returns the ones that actually look like the requested prop, best first (empty if none fit). _aiParsePick is pure.
+function _aiParsePick(txt, n){
+  const s=String(txt||''); let arr=null;
+  try{ const a=s.indexOf('{'), b=s.lastIndexOf('}'); if(a>=0&&b>a){ const o=JSON.parse(s.slice(a,b+1)); if(o&&Array.isArray(o.good)) arr=o.good; } }catch(e){}
+  if(!arr){ try{ const a=s.indexOf('['), b=s.lastIndexOf(']'); if(a>=0&&b>a){ const o=JSON.parse(s.slice(a,b+1)); if(Array.isArray(o)) arr=o; } }catch(e){} }
+  if(!arr){ const m=s.match(/-?\d+/g); arr = m ? m.map(Number) : []; }
+  const out=[]; for(const v of (arr||[])){ const i=Math.round(+v)-1; if(i>=0 && i<n && out.indexOf(i)<0) out.push(i); }   // 1-based -> 0-based, in range, de-duped
+  return out;
+}
+function _aiPickModel(term, context, cands, cb, errcb){
+  const key=aiGetKey(); if(!key){ errcb && errcb(new Error('no key')); return; }
+  const withThumbs=(cands||[]).filter(c=>c && c.thumb);
+  if(!withThumbs.length){ errcb && errcb(new Error('no thumbnails')); return; }   // nothing to look at -> caller falls back to title
+  const content=[{ type:'text', text:
+    'I am choosing a 3D model to place as "'+term+'"'+(context?(' for '+String(context).slice(0,80)):'')+' in a game level. '
+    + 'Below are '+withThumbs.length+' candidate models, each a numbered thumbnail. Pick the ones that clearly look like a single, realistic "'+term+'" suitable to drop into a room. '
+    + 'Reject wrong objects, logos or text cards, tiny unclear renders, and cluttered multi-object scenes. '
+    + 'Reply with ONLY JSON {"good":[numbers, best first]} — use an empty array if none are acceptable.' }];
+  withThumbs.forEach((c,i)=>{ content.push({ type:'text', text:'Candidate '+(i+1)+': '+(c.title||'(untitled)') }); content.push({ type:'image', source:{ type:'url', url:c.thumb } }); });
+  fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST',
+    headers:{ 'content-type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
+    body: JSON.stringify({ model:AI_MODEL, max_tokens:200, messages:[{ role:'user', content }] })
+  })
+  .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+  .then(d=>{ const txt=(d && Array.isArray(d.content)) ? d.content.filter(b=>b&&b.type==='text').map(b=>b.text).join('') : '';
+    const idx=_aiParsePick(txt, withThumbs.length);
+    // map back to the original cands array (we filtered out thumb-less ones)
+    cb(idx.map(i=>cands.indexOf(withThumbs[i])).filter(i=>i>=0)); })
+  .catch(err=>{ errcb && errcb(err); });
 }
 function generateMaze(opts){
   opts=opts||{};
@@ -9779,16 +10051,17 @@ function generateOffice(opts){
   const wallH=Math.max(3, opts.wallH||5);
   const span=G*cell, half=span/2;
   const wall=[]; for(let i=0;i<G;i++) wall.push(new Array(G).fill(true));   // true = solid; carve rooms + corridors to false
-  const rooms=[];
+  const rooms=[], roomRects=[];
+  const corr=[]; for(let i=0;i<G;i++) corr.push(new Array(G).fill(false));   // build 574: mark corridor cells so furniture never lands in a hallway / doorway / bend
   const inB=(r,c)=> (r>0 && c>0 && r<G-1 && c<G-1);   // keep a solid outer shell
   const carveRect=(r0,c0,r1,c1)=>{ for(let r=r0;r<r1;r++) for(let c=c0;c<c1;c++){ if(inB(r,c)) wall[r][c]=false; } };
-  const carveCorr=(r1,c1,r2,c2)=>{ let r=r1,c=c1; while(c!==c2){ if(inB(r,c)) wall[r][c]=false; c+=(c2>c?1:-1); } while(r!==r2){ if(inB(r,c)) wall[r][c]=false; r+=(r2>r?1:-1); } if(inB(r,c)) wall[r][c]=false; };   // L-shaped, 1 cell wide
-  const MINSZ=5;
+  const carveCorr=(r1,c1,r2,c2)=>{ let r=r1,c=c1; while(c!==c2){ if(inB(r,c)){ wall[r][c]=false; corr[r][c]=true; } c+=(c2>c?1:-1); } while(r!==r2){ if(inB(r,c)){ wall[r][c]=false; corr[r][c]=true; } r+=(r2>r?1:-1); } if(inB(r,c)){ wall[r][c]=false; corr[r][c]=true; } };   // L-shaped, 1 cell wide; cells flagged as corridor
+  const MINSZ=4;
   const split=(r0,c0,r1,c1,depth)=>{
     const h=r1-r0, w=c1-c0, canV=(w>=2*MINSZ), canH=(h>=2*MINSZ);
     if(depth<=0 || (!canV && !canH)){                 // leaf -> a room filling the region minus a 1-cell wall margin
       carveRect(r0+1, c0+1, r1-1, c1-1);
-      const ctr=[(r0+r1)>>1, (c0+c1)>>1]; rooms.push(ctr); return ctr;
+      const ctr=[(r0+r1)>>1, (c0+c1)>>1]; rooms.push(ctr); roomRects.push([r0+1, c0+1, r1-1, c1-1]); return ctr;
     }
     const doV = (canV && canH) ? (w>=h) : canV;
     let aC, bC;
@@ -9813,25 +10086,51 @@ function generateOffice(opts){
   const sx=rooms.length?cx(rooms[0][1]):0, sz=rooms.length?cz(rooms[0][0]):0;
   const floorSpots=[], coverSpots=[];
   const zonePools={ wall:[], corner:[], center:[] };   // build 567: spots for furniture, by where they sit in a room
-  for(let r=0;r<G;r++) for(let c=0;c<G;c++){ if(!isFloor(r,c)) continue; const x=cx(c), z=cz(r); if((x-sx)*(x-sx)+(z-sz)*(z-sz) < (cell*2.2)*(cell*2.2)) continue; floorSpots.push([x,z]);
+  for(let r=0;r<G;r++) for(let c=0;c<G;c++){ if(!isFloor(r,c)) continue; const x=cx(c), z=cz(r); if((x-sx)*(x-sx)+(z-sz)*(z-sz) < (cell*1.4)*(cell*1.4)) continue; floorSpots.push([x,z]);
     const n=isFloor(r-1,c), s2=isFloor(r+1,c), e=isFloor(r,c+1), w=isFloor(r,c-1);
     if((n?1:0)+(s2?1:0)+(e?1:0)+(w?1:0)>=3) coverSpots.push([x,z]);   // roomy = 3+ open neighbours -> not a 1-wide hallway
+    if(corr[r][c]) continue;   // build 574: never furnish a corridor cell (bends/junctions otherwise look like corner/edge spots)
     const zone=_sceneCellZone(n,s2,e,w);
-    if(zone!=='corridor'){ const ox=(e?1:0)-(w?1:0), oz=(s2?1:0)-(n?1:0); const spot={ x:+x.toFixed(2), z:+z.toFixed(2), yaw:((ox||oz)?Math.atan2(ox,oz):0), nx:-ox, nz:-oz };   // nx,nz = toward the wall (opposite the open side) -> used to hug the wall
+    if(zone!=='corridor'){ const ox=(e?1:0)-(w?1:0), oz=(s2?1:0)-(n?1:0); const spot={ x:+x.toFixed(2), z:+z.toFixed(2), yaw:((ox||oz)?Math.atan2(ox,oz):(rnd()*Math.PI*2)), nx:-ox, nz:-oz };   // nx,nz = toward the wall; free-standing (center) spots get a random facing
       if(zone==='center') zonePools.center.push(spot); else if(zone==='edge') zonePools.wall.push(spot); else zonePools.corner.push(spot); }
+  }
+  // build 571: per-room zone pools (same classification, scoped to each room's carved rect) so the AI scene
+  // builder can furnish each room by its assigned role rather than from one global pool.
+  const roomPools=[];
+  for(const rc of roomRects){ const rp={ wall:[], corner:[], center:[] };
+    for(let r=rc[0];r<rc[2];r++) for(let c=rc[1];c<rc[3];c++){ if(!isFloor(r,c) || corr[r][c]) continue; const x=cx(c), z=cz(r);
+      if((x-sx)*(x-sx)+(z-sz)*(z-sz) < (cell*1.4)*(cell*1.4)) continue;
+      const n=isFloor(r-1,c), s2=isFloor(r+1,c), e=isFloor(r,c+1), w=isFloor(r,c-1);
+      const zone=_sceneCellZone(n,s2,e,w); if(zone==='corridor') continue;
+      const ox=(e?1:0)-(w?1:0), oz=(s2?1:0)-(n?1:0); const spot={ x:+x.toFixed(2), z:+z.toFixed(2), yaw:((ox||oz)?Math.atan2(ox,oz):(rnd()*Math.PI*2)), nx:-ox, nz:-oz };
+      if(zone==='center') rp.center.push(spot); else if(zone==='edge') rp.wall.push(spot); else rp.corner.push(spot);
+    }
+    roomPools.push(rp);
   }
   if(opts.cover!==false){ _genShuffle(rnd, coverSpots); _genScatterCover(rnd, coverSpots, gndAt, 0.22); }
   if(opts.loot!==false){ _genPlaceExtract(floorSpots, sx, sz); const pk=floorSpots.slice(); _genShuffle(rnd, pk); _genSeedPickups(rnd, pk, gndAt); }
   // one cool overhead light per room (office fluorescent feel), budgeted under the active-light cap
-  let placed=0; const lstep=Math.max(1, Math.ceil(rooms.length/13));
-  for(let i=0;i<rooms.length && placed<14;i+=lstep){ const [r,c]=rooms[i]; if(typeof buildLight==='function'){ buildLight({ type:'point', color:(lm?lm.color:0xeaf2ff), intensity:(lm?lm.intensity:3), distance:cell*5, t:[cx(c), gndAt(cx(c),cz(r))+wallH*0.82, cz(r)] }); placed++; } }
-  if(typeof buildLight==='function') buildLight({ type:'point', color:0xfff0d8, intensity:2.5, distance:span*0.7, t:[0, gndAt(0,0)+wallH*1.7, 0] });   // soft global fill
+  let placed=0; const lstep=Math.max(1, Math.ceil(rooms.length/20));
+  for(let i=0;i<rooms.length && placed<20;i+=lstep){ const [r,c]=rooms[i]; if(typeof buildLight==='function'){ buildLight({ type:'point', color:(lm?lm.color:0xeaf2ff), intensity:Math.max(3.6,(lm?lm.intensity:3)), distance:cell*6, t:[cx(c), gndAt(cx(c),cz(r))+wallH*0.82, cz(r)] }); placed++; } }
+  if(typeof buildLight==='function') buildLight({ type:'point', color:0xfff0d8, intensity:3.2, distance:span*0.8, t:[0, gndAt(0,0)+wallH*1.7, 0] });   // soft global fill
   // player start in the first room; a few enemy spawns spread across rooms (wave / co-op support)
   if(rooms.length){ const [r,c]=rooms[0]; playerSpawn.x=+cx(c).toFixed(2); playerSpawn.z=+cz(r).toFixed(2); playerSpawn.y=0; playerSpawn.yaw=Math.atan2(-cx(c), -cz(r)); if(typeof refreshPlayerSpawnMarker==='function') refreshPlayerSpawnMarker(); }
   const sstep=Math.max(1, Math.floor(rooms.length/4));
   for(let i=0, n=0; i<rooms.length && n<5; i+=sstep, n++){ const [r,c]=rooms[i]; if(typeof buildSpawnMarker==='function') buildSpawnMarker({ mode:'hunt', t:[cx(c), cz(r)], face:0 }); }
   if(opts.tex!==false) _genApplyTextures(rnd, floorProp, wallProps, 4, span, spec.floor, spec.wall);   // build 567: description-driven textures (falls back to random when no theme matched)
-  if(spec.items.length){ _genShuffle(rnd, zonePools.wall); _genShuffle(rnd, zonePools.corner); _genShuffle(rnd, zonePools.center); _furnishExecute(_planFurnish(spec.items, zonePools, rnd), cell); }   // build 567/569/570: place curated props (open-vocabulary), hugged to walls
+  // build 567/569/570: deterministic keyword placement (global pool). build 571: when an Anthropic key + a
+  // description are present, Claude composes the scene PER ROOM (reception vs break room vs storage...) and we
+  // furnish each room from its own pool; any failure falls back to the keyword path so generate never stalls.
+  const _furnishDet = ()=>{ if(spec.items.length){ _genShuffle(rnd, zonePools.wall); _genShuffle(rnd, zonePools.corner); _genShuffle(rnd, zonePools.center); _furnishExecute(_planFurnish(spec.items, zonePools, rnd), cell); } };
+  if(opts.desc && typeof aiGetKey==='function' && aiGetKey() && typeof _aiPlanScene==='function'){
+    const roomInfos = roomRects.map((r,idx)=>({ w:Math.max(1,Math.round((r[3]-r[1])*cell)), d:Math.max(1,Math.round((r[2]-r[0])*cell)), entrance:(idx===0) }));
+    if(typeof toast==='function') toast('Composing the scene with Claude\u2026');
+    _aiPlanScene(opts.desc, roomInfos, (plan)=>{
+      let all=[];
+      for(let i=0;i<plan.length && i<roomPools.length;i++){ const rp=roomPools[i]; _genShuffle(rnd, rp.wall); _genShuffle(rnd, rp.corner); _genShuffle(rnd, rp.center); all=all.concat(_planFurnish(plan[i].items, rp, rnd, 10)); }
+      if(all.length){ if(typeof toast==='function') toast('Placing '+all.length+' props from Claude\u2019s plan\u2026'); _furnishExecute(all, cell, { vision:(typeof _genVision==='undefined'?true:_genVision), context:opts.desc }); } else _furnishDet();
+    }, (err)=>{ if(typeof toast==='function') toast('AI scene failed ('+((err&&err.message)||'error')+') \u2014 using keyword placement'); _furnishDet(); });
+  } else { _furnishDet(); }
   if(gameCfg && gameCfg.spawnRegion) gameCfg.spawnRegion.on=false;
   NAV.built=false;
   if(typeof refreshSpawnRegionMarker==='function') refreshSpawnRegionMarker();
@@ -9860,12 +10159,45 @@ function renderGeneratePanel(){
     const dt=document.createElement('textarea'); dt.value=_genDesc; dt.placeholder='e.g. a hotel lobby with couches, plants, a reception desk'; dt.rows=2;
     dt.style.cssText='width:100%;box-sizing:border-box;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:5px 7px;font-size:12px;resize:vertical;'; dt.oninput=()=>{ _genDesc=dt.value; };
     host.appendChild(dl); host.appendChild(dt);
+    // build 571: optional Anthropic key -> Claude composes the scene per room (reception vs break room vs ...).
+    const aiHas = (typeof aiGetKey==='function' && !!aiGetKey());
+    const ar=document.createElement('div'); ar.style.cssText='display:flex;gap:6px;align-items:center;margin:6px 0 2px;';
+    const ak=document.createElement('input'); ak.type='password'; ak.placeholder=aiHas?'Anthropic key saved \u2014 paste to replace':'Anthropic API key (optional, sk-ant-...)'; ak.value='';
+    ak.style.cssText='flex:1;box-sizing:border-box;background:#0c1418;border:1px solid '+(aiHas?'var(--accent)':'#2a3a42')+';color:#cfeee2;border-radius:4px;padding:5px 7px;font-size:11px;';
+    const sv=document.createElement('button'); sv.textContent=aiHas?'Update':'Save'; sv.style.cssText='background:#16242b;border:1px solid #2a3a42;color:#9fe6cf;border-radius:4px;padding:5px 9px;font-size:11px;cursor:pointer;';
+    sv.onclick=()=>{ if(typeof aiSetKey==='function'){ aiSetKey(ak.value); renderGeneratePanel(); if(typeof toast==='function') toast(ak.value?'Anthropic key saved (this browser only)':'Anthropic key cleared'); } };
+    ar.appendChild(ak); ar.appendChild(sv); host.appendChild(ar);
+    const an=document.createElement('div'); an.className='hint'; an.style.cssText='font-size:10px;opacity:0.75;margin:0 0 2px;';
+    an.innerHTML = aiHas ? '\u2713 Rooms are composed by Claude (each room gets a role + matching furniture). Key stays in this browser; only you (the author) need it.'
+                         : 'Without a key, the description is placed by keyword. Add a key to have Claude lay out each room logically.';
+    host.appendChild(an);
+    if(aiHas){ const vl=document.createElement('label'); vl.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:11px;margin:2px 0 2px;cursor:pointer;'; const vc=document.createElement('input'); vc.type='checkbox'; vc.checked=_genVision; vc.style.accentColor='var(--accent)'; vc.onchange=()=>{ _genVision=vc.checked; }; const vs=document.createElement('span'); vs.innerHTML='<b>Verify models with vision</b> \u2014 Claude looks at thumbnails and rejects wrong ones (slower, more API calls)'; vl.appendChild(vc); vl.appendChild(vs); host.appendChild(vl); }
   }
   // content toggles
   const mkChk=(label,get,set)=>{ const l=document.createElement('label'); l.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:11px;margin:3px 0;cursor:pointer;'; const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=get(); cb.style.accentColor='var(--accent)'; cb.onchange=()=>set(cb.checked); const s=document.createElement('span'); s.innerHTML=label; l.appendChild(cb); l.appendChild(s); host.appendChild(l); };
   mkChk('<b>Scatter cover</b> \u2014 crates, low barriers, pillars', ()=>_genCover, v=>{ _genCover=v; });
   mkChk('<b>Seed weapons &amp; pickups</b> \u2014 guns, health, ammo, powerups + an extraction point', ()=>_genLoot, v=>{ _genLoot=v; });
   mkChk('<b>Textured surfaces</b> \u2014 random Poly Haven floor + walls (CC0)', ()=>_genTex, v=>{ _genTex=v; });
+  // build 573: global furniture scale (real-world sizes read small in big rooms)
+  if(!isMaze){ const sc=document.createElement('div'); sc.style.cssText='margin:5px 0 2px;';
+    const cur=(typeof _furnishScale==='number'?_furnishScale:1.6);
+    const lab=document.createElement('div'); lab.style.cssText='color:#9fe6cf;font-size:11px;margin-bottom:2px;'; lab.innerHTML='<b>Furniture scale</b> \u2014 <span id="edFurnScaleV">'+cur.toFixed(1)+'\u00d7</span>';
+    const sl=document.createElement('input'); sl.type='range'; sl.min='0.6'; sl.max='3'; sl.step='0.1'; sl.value=String(cur); sl.style.cssText='width:100%;accent-color:var(--accent);';
+    sl.oninput=()=>{ const v=parseFloat(sl.value)||1.6; _furnishScale=v; try{ localStorage.setItem('breach_furnish_scale', String(v)); }catch(e){} const o=sc.querySelector('#edFurnScaleV'); if(o) o.textContent=v.toFixed(1)+'\u00d7'; };
+    sc.appendChild(lab); sc.appendChild(sl); host.appendChild(sc);
+  }
+  // build 575: model texture memory cap (downscales big Sketchfab maps on load)
+  { const tc=document.createElement('div'); tc.style.cssText='margin:5px 0 2px;';
+    const lab=document.createElement('div'); lab.style.cssText='color:#9fe6cf;font-size:11px;margin-bottom:3px;'; lab.innerHTML='<b>Model texture cap</b> \u2014 shrinks oversized maps to save memory';
+    const row=document.createElement('div'); row.style.cssText='display:flex;gap:5px;';
+    const cur=(typeof _modelTexCap==='number'?_modelTexCap:1024);
+    [['Off',0],['512',512],['1024',1024],['2048',2048]].forEach(([txt,val])=>{ const b=document.createElement('button'); b.textContent=txt; const on=(cur===val);
+      b.style.cssText='flex:1;padding:4px 0;font-size:11px;border-radius:4px;cursor:pointer;border:1px solid '+(on?'var(--accent)':'#2a3a42')+';background:'+(on?'#16302a':'#0c1418')+';color:'+(on?'#bff3df':'#7fb8aa')+';';
+      b.onclick=()=>{ _modelTexCap=val; try{ localStorage.setItem('breach_model_texcap', String(val)); }catch(e){} renderGeneratePanel(); if(typeof toast==='function') toast(val?('New models capped at '+val+'px textures'):'Texture cap off (mobile still caps at 1024)'); };
+      row.appendChild(b); });
+    tc.appendChild(lab); tc.appendChild(row); host.appendChild(tc);
+    const nt=document.createElement('div'); nt.className='hint'; nt.style.cssText='font-size:10px;opacity:0.7;margin:2px 0 0;'; nt.textContent='Applies to newly loaded models. A 4K\u21921K map uses ~16\u00d7 less GPU memory.'; host.appendChild(nt);
+  }
   // generate
   const btn=document.createElement('button'); btn.textContent='\u2699 Generate '+(isMaze?'maze':'office'); btn.style.cssText='width:100%;background:var(--accent);color:#05070a;font-weight:700;border:none;padding:9px;border-radius:6px;margin:4px 0;cursor:pointer;';
   btn.onclick=()=>{ const o={ cells:_genCells, cover:_genCover, loot:_genLoot, tex:_genTex }; if(isMaze) generateMaze(o); else generateOffice(Object.assign(o,{ desc:_genDesc })); };
@@ -10319,7 +10651,14 @@ const NET = {
   deadChests:{},       // client only: chestId -> true, suppresses a crate we just bought until the host's snapshot drops it
   pendingLevel:null,   // client: host level data, applied at spawn
   sentProps:new Map(), // live prop sync: nid -> last transform tuple peers have been told about
+  _seen:{},            // build 578: host -> last time (ms) each client sent anything; used to detect silent drops
+  _hostSeen:0,         // build 578: client -> last time (ms) the host sent anything
+  _liveT:0,            // throttle for the liveness check
+  _lost:false,         // client: guards a one-time "host disconnected" teardown
 };
+const NET_TIMEOUT_MS = 8000;   // build 578: peers send ~20x/sec in-game; 8s of total silence = a real drop, not lag
+// Pure: given a map of id -> last-seen timestamp, return ids that have gone silent past the timeout.
+function _netTimedOut(seen, now, timeout){ const out=[]; if(seen) for(const k in seen){ if(now - (seen[k]||0) > timeout) out.push(+k); } return out; }
 // duel-only local state
 let duelDead = false, duelRespawnTimer = 0, duelInvuln = 0, lastDamagedBy = null;
 let _kcInit=false; const _kcLook=new THREE.Vector3(), _kcTarget=new THREE.Vector3();   // death-killcam pan state
@@ -11181,7 +11520,7 @@ function registerDuelKill(killerId, victimId){   // host only
   if(killerId==null || killerId===victimId) return;   // ignore self/unknown (e.g. fell to nothing)
   NET.duelScore[killerId] = (NET.duelScore[killerId]||0) + 1;
   // award credits so the loot crates + ammo station are usable in 1v1
-  if(killerId===NET.myId){ credits += DUEL_KILL_CREDITS; SFX.coin(); updateHUD(); }
+  if(killerId===NET.myId){ credits += DUEL_KILL_CREDITS; SFX.coin(); updateHUD(); registerLocalKill(); }
   else sendToPlayer(killerId, { t:'credit', v:DUEL_KILL_CREDITS });
   broadcastDuelScore();
   addKillFeed(killerId, victimId); broadcastFeed(killerId, victimId);
@@ -11890,6 +12229,26 @@ function ensureRemotePlayer(id, name){
   return rp;
 }
 function removeRemotePlayer(id){ const rp=NET.players[id]; if(rp){ scene.remove(rp.mesh); delete NET.players[id]; } }
+// build 578: host-side cleanup when a client leaves (clean close, error, or a liveness timeout). The next world
+// snapshot omits them, so every other client prunes the avatar automatically (see the snapshot handler).
+function dropClient(pid, why){
+  if(pid==null) return;
+  const rp=NET.players[pid]; const nm=(rp&&rp.name)||('P'+pid);
+  const c=NET.conns[pid]; if(c){ try{ c.close(); }catch(e){} }
+  removeRemotePlayer(pid);
+  delete NET.conns[pid];
+  if(NET._seen) delete NET._seen[pid];
+  if(NET.phase==='lobby' && typeof refreshLobby==='function') refreshLobby();
+  if(why==='timeout' && typeof toast==='function') toast(nm+' disconnected');
+}
+// build 578: client-side teardown when the host vanishes (clean close or a liveness timeout). Returns to the menu
+// rather than leaving the player stuck in a frozen world. Guarded so it runs once.
+function netHostLost(){
+  if(NET._lost) return; NET._lost=true;
+  if(typeof netStatus==='function') netStatus('Host disconnected — returning to menu…');
+  if(typeof toast==='function') toast('Host disconnected');
+  setTimeout(()=>{ NET.mode='off'; NET.gameMode='coop'; try{ location.reload(); }catch(e){} }, 1600);
+}
 function setRemoteState(id, msg){
   const rp=ensureRemotePlayer(id, msg.n);
   rp.posEye.set(msg.p[0], msg.p[1], msg.p[2]);
@@ -12141,11 +12500,22 @@ function netTick(dt){
   }
   netInterpolate(dt);
   reconcileProps(dt);   // emit any local prop add/move/delete to peers
+  // build 578: detect silently-dropped peers (ungraceful disconnects never fire 'close'). In-game only, where
+  // ~20Hz traffic makes silence meaningful; a generous timeout avoids false positives on lag spikes.
+  NET._liveT -= dt;
+  if(NET._liveT<=0){ NET._liveT=1;
+    if(typeof gameOn!=='undefined' && gameOn){
+      const now=performance.now();
+      if(NET.mode==='host'){ const dead=_netTimedOut(NET._seen, now, NET_TIMEOUT_MS); for(const pid of dead) dropClient(pid, 'timeout'); }
+      else if(NET.mode==='client' && NET._hostSeen && (now-NET._hostSeen)>NET_TIMEOUT_MS){ netHostLost(); }
+    }
+  }
 }
 
 // ---- message handlers ----
 function handleClientMsg(conn, msg){
   const id=conn._pid;
+  if(NET._seen) NET._seen[id]=performance.now();   // build 578: any message proves the client is alive
   if(msg.t==='st'){ setRemoteState(id, msg); }
   else if(msg.t==='hit'){ const en=enemies.find(e=>e.id===msg.e); if(en){ spark(en.mesh.position, 0xff6b6b); const _s=NET.players[id]; enemyHurt(en, msg.d, (_s&&_s.posEye)?_s.posEye.x:null, (_s&&_s.posEye)?_s.posEye.z:null); } }
   else if(msg.t==='ready'){ const rp=NET.players[id]; if(rp) rp.ready=!!msg.r; if(NET.phase==='lobby') refreshLobby(); }   // build 552: a client toggled ready in the lobby -> reflect it for everyone
@@ -12180,6 +12550,7 @@ function handleClientMsg(conn, msg){
   else if(msg.t==='rematchReq'){ if(gameOver) hostRematch(); }   // a client asked to replay; only honor it once the match has actually ended (so it can't force a mid-match restart)
 }
 function handleHostMsg(msg){
+  NET._hostSeen=performance.now();   // build 578: any message proves the host is alive
   if(msg.t==='welcome'){
     if(NET.joined) return; NET.joined=true;
     NET.myId=msg.id;
@@ -12247,6 +12618,7 @@ function hostStart(code, mode, killTarget){
     conn._pid = NET.nextId++;
     conn.on('open', ()=>{
       NET.conns[conn._pid]=conn;
+      if(NET._seen) NET._seen[conn._pid]=performance.now();   // build 578: start the liveness clock for this client
       if(pvpMode()) NET.duelScore[conn._pid] = NET.duelScore[conn._pid]||0;
       if(teamMode()) assignTeam(conn._pid);
       // hand the joiner the mode, the kill target, and the current level so their map matches
@@ -12261,8 +12633,8 @@ function hostStart(code, mode, killTarget){
       if(NET.phase==='lobby') refreshLobby();
     });
     conn.on('data', msg=>handleClientMsg(conn, msg));
-    conn.on('close', ()=>{ removeRemotePlayer(conn._pid); delete NET.conns[conn._pid]; if(NET.phase==='lobby') refreshLobby(); });
-    conn.on('error', ()=>{});
+    conn.on('close', ()=>dropClient(conn._pid));
+    conn.on('error', ()=>dropClient(conn._pid));   // build 578: an errored connection is a dropped one — clean it up too
   });
   NET.peer.on('error', e=>{ netStatus('Host error: '+(e&&e.type||e)); });
 }
@@ -12273,15 +12645,17 @@ function clientStart(code){
     netStatus('Connecting to '+code+'…');
     const conn=NET.peer.connect('breachfps-'+code, { reliable:true });
     NET.conn=conn;
-    conn.on('open', ()=>{ conn.send({t:'name', n:NET.name, char:myCharCfg()}); netStatus('Connected — waiting for host…'); });
+    conn.on('open', ()=>{ NET._hostSeen=performance.now(); NET._lost=false; conn.send({t:'name', n:NET.name, char:myCharCfg()}); netStatus('Connected — waiting for host…'); });
     conn.on('data', msg=>handleHostMsg(msg));   // 'welcome' triggers startGame once
-    conn.on('close', ()=>{ netStatus('Disconnected from host'); });
-    conn.on('error', ()=>{ netStatus('Connection error'); });
+    conn.on('close', ()=>{ if(gameOn) netHostLost(); else netStatus('Disconnected from host'); });
+    conn.on('error', ()=>{ if(gameOn) netHostLost(); else netStatus('Connection error'); });
   });
   NET.peer.on('error', e=>{ const ty=e&&e.type; netStatus(ty==='peer-unavailable' ? 'No game found for that code' : ('Error: '+ty)); });
 }
 function showRoomBadge(code){ const b=document.getElementById('roomBadge'); if(b){ b.textContent=(NET.gameMode==='ffa'?'FFA ':(NET.gameMode==='duel'?'DUEL ':'ROOM '))+code; b.style.display='block'; } }
 // ---------- Pre-game lobby: everyone gathers, then the host starts the match so all players begin together ----------
+// build 579: pure readiness summary for the lobby roster (host counts as ready). { all, waiting }.
+function _lobbyReadyState(roster){ const list=roster||[]; let waiting=0; for(const p of list){ if(!p.ready) waiting++; } return { all:waiting===0, waiting }; }
 function lobbyRoster(){
   const selfTint = (CHARACTERS[myCharIdx]?CHARACTERS[myCharIdx].color:null);
   const list=[{ id:NET.myId, name:(NET.name||'Host'), team:(teamMode()?(NET.teams[NET.myId]||0):null), tint:selfTint, host:true, ready:true }];   // build 552: the host is always "ready" (they press START)
@@ -12302,6 +12676,9 @@ function renderLobby(roster){
     wrap.appendChild(row);
   });
   const cnt=document.getElementById('lobbyCount'); if(cnt){ const n=(roster?roster.length:0), r=(roster||[]).filter(p=>p.ready).length; cnt.textContent=n+' in lobby · '+r+'/'+n+' ready'; }
+  // build 579: the host's START reflects readiness — it stays clickable (host keeps control) but shows who's waiting
+  const sb=document.getElementById('lobbyStart');
+  if(sb && NET.mode==='host'){ const st=_lobbyReadyState(roster); if(st.all){ sb.textContent='START'; sb.style.opacity=''; } else { sb.textContent='START · '+st.waiting+' not ready'; sb.style.opacity='0.78'; } }
 }
 function _lobbyTitle(){ return (pvpMode()?pvpLabel():'CO-OP')+' LOBBY'; }
 function enterLobby(){   // host
@@ -12346,8 +12723,19 @@ function setReady(v){   // client toggles ready and tells the host (who reflects
   _imReady=!!v; _updateReadyBtn();
   if(NET.conn){ try{ NET.conn.send({ t:'ready', r:_imReady?1:0 }); }catch(e){} }
 }
+let _startArmedT=0;   // build 579: host's "start anyway" two-press window when players aren't all ready
 function startMatch(){   // host presses START
   if(NET.mode!=='host') return;
+  const st=_lobbyReadyState(lobbyRoster());
+  if(!st.all){   // someone isn't ready — require a deliberate second press so the match never starts out from under a loading player by accident
+    const now=performance.now();
+    if(!_startArmedT || now-_startArmedT>3000){ _startArmedT=now;
+      if(typeof toast==='function') toast(st.waiting+' player'+(st.waiting>1?'s':'')+' not ready — press START again to begin anyway');
+      const sb=document.getElementById('lobbyStart'); if(sb) sb.textContent='START ANYWAY?';
+      return;
+    }
+  }
+  _startArmedT=0;
   const bn=document.getElementById('lobbyBotN');
   if(bn && !(pvpMode() && NET.gameMode==='duel')){ let v=parseInt(bn.value,10); if(v>=0 && v<=7) NET.botCount=v; }
   NET.phase='playing'; unannounceRoom();
@@ -13418,7 +13806,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 570 · 2026-06-19';
+const BUILD_VERSION = 'build 581 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14720,7 +15108,7 @@ function enemyHurt(en, dmg, sx, sz){
 function killEnemy(en){
   runKills++;
   spark(en.mesh.position, 0xff2d55); SFX.kill();
-  if(NET.mode==='off') hitStop = Math.max(hitStop, 0.07);   // brief impact freeze (solo only — avoids desyncing co-op)
+  if(NET.mode==='off'){ hitStop = Math.max(hitStop, 0.07); registerLocalKill(); }   // brief impact freeze + multi-kill tracking (solo only — avoids desyncing co-op)
   // drop 1-2 coins worth scaling slightly with wave
   const drops = Math.random()<0.35 ? 2 : 1;
   for(let i=0;i<drops;i++){
@@ -15004,6 +15392,34 @@ function showHitmarker(kill){
   hm.style.textShadow = kill ? '0 0 12px #ff4d6d' : '0 0 8px var(--accent)';
   hm.style.transition='none'; hm.style.opacity='1'; hm.style.transform='translate(-50%,-50%) scale('+(kill?1.4:1)+')';
   requestAnimationFrame(()=>{ hm.style.transition='all .25s'; hm.style.opacity='0'; hm.style.transform='translate(-50%,-50%) scale(.6)'; });
+}
+// build 580: multi-kill callouts — kills in quick succession escalate (DOUBLE/TRIPLE/...) with a rising hype sound,
+// and in solo a brief dramatic slow-mo on triple+. _multiKillCount is pure (unit-tested).
+const _killTimes=[]; const _MK_WIN=3200;
+const _MK_LABELS=['','','DOUBLE KILL','TRIPLE KILL','MULTI KILL','RAMPAGE','UNSTOPPABLE','GODLIKE'];
+function _multiKillCount(times, now, win){ let n=0; for(const t of (times||[])){ if(now-t<=win) n++; } return n; }
+function _mkLabel(n){ return n<2 ? '' : _MK_LABELS[Math.min(n, _MK_LABELS.length-1)]; }
+let _mkEl=null;
+function showMultiKill(n){
+  const label=_mkLabel(n); if(!label) return;
+  if(!_mkEl){ _mkEl=document.createElement('div'); _mkEl.id='multiKill';
+    _mkEl.style.cssText='position:fixed;left:50%;top:28%;transform:translate(-50%,-50%) scale(.6);pointer-events:none;z-index:60;font-weight:900;letter-spacing:2px;text-align:center;opacity:0;';
+    (document.body||document.documentElement).appendChild(_mkEl); }
+  const hue=Math.max(0, 50 - (n-2)*12);   // yellow -> orange -> red as the streak grows
+  _mkEl.textContent=label;
+  _mkEl.style.color='hsl('+hue+',100%,60%)';
+  _mkEl.style.textShadow='0 0 18px hsl('+hue+',100%,55%), 0 2px 4px rgba(0,0,0,.6)';
+  _mkEl.style.fontSize=Math.min(66, 32 + n*6)+'px';
+  _mkEl.style.transition='none'; _mkEl.style.opacity='1'; _mkEl.style.transform='translate(-50%,-50%) scale(1.18)';
+  requestAnimationFrame(()=>{ _mkEl.style.transition='all .5s cubic-bezier(.2,.9,.3,1)'; _mkEl.style.transform='translate(-50%,-50%) scale(1)'; });
+  clearTimeout(_mkEl._t); _mkEl._t=setTimeout(()=>{ _mkEl.style.transition='all .4s'; _mkEl.style.opacity='0'; _mkEl.style.transform='translate(-50%,-50%) scale(.7)'; }, 950);
+  try{ if(typeof tone==='function'){ const base=500+(n-2)*95; tone({freq:base, type:'square', dur:0.08, vol:0.17}); setTimeout(()=>tone({freq:base*1.5, type:'square', dur:0.12, vol:0.15}), 85); } }catch(e){}
+}
+function registerLocalKill(){   // call when the LOCAL player gets a kill
+  const now=performance.now(); _killTimes.push(now);
+  while(_killTimes.length && now-_killTimes[0]>_MK_WIN) _killTimes.shift();
+  const n=_killTimes.length;
+  if(n>=2){ showMultiKill(n); if(NET.mode==='off' && n>=3) hitStop=Math.max(hitStop, 0.2); }   // solo: dramatic slow-mo on triple+
 }
 // ---- Combat feel: floating damage numbers, enemy hit-flash, hitstop ----
 let hitStop = 0;                 // brief time-scale dip on a kill (solo only), counted down in real time
@@ -20620,7 +21036,7 @@ function startGame(){
   if(pvpMode()) credits = 150;   // starting stipend so the economy is usable from the first life
   buffs.damage=0; buffs.speed=0; buffs.shield=0;
   // reset aim/shake state
-  firing=false; ads=false; adsBlend=0; shake=0;
+  firing=false; ads=false; adsBlend=0; shake=0; if(typeof _killTimes!=='undefined') _killTimes.length=0;
   editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false;
   if(typeof updateGizmo==='function') updateGizmo();   // editorOpen now false -> updateGizmo hides the handles (it only hides when called, and nothing else calls it on this path)
   if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false;
@@ -21078,6 +21494,7 @@ function bindPauseMenu(){
   const x=document.getElementById('pauseExit'); if(x) x.onclick=exitToMenu;
   const pc=document.getElementById('pauseCredits'); if(pc) pc.onclick=openCredits;   // build 549: credits reachable mid-game from the pause menu
   const mc=document.getElementById('muteCb'); if(mc){ mc.checked=audioSettings.muted; mc.onchange=()=>{ audioSettings.muted=mc.checked; applyAudioSettings(); saveAudioSettings(); }; }
+  const pfx=document.getElementById('postFxCb'); if(pfx){ pfx.checked=_postOn; pfx.onchange=()=>{ _postOn=pfx.checked; _postFail=false; try{ localStorage.setItem('breach_postfx', _postOn?'on':'off'); }catch(e){} if(!_postOn && typeof disposePost==='function') disposePost(); if(typeof toast==='function') toast(_postOn?'Visual effects on':'Visual effects off'); }; }
   const vM=document.getElementById('volMaster'); if(vM){ vM.value=Math.round(audioSettings.master*100); vM.oninput=()=>{ audioSettings.master=(+vM.value)/100; applyAudioSettings(); saveAudioSettings(); }; }
   const vMu=document.getElementById('volMusic'); if(vMu){ vMu.value=Math.round(audioSettings.music*100); vMu.oninput=()=>{ audioSettings.music=(+vMu.value)/100; applyAudioSettings(); saveAudioSettings(); }; }
   const vS=document.getElementById('volSfx'); if(vS){ vS.value=Math.round(audioSettings.sfx*100); vS.oninput=()=>{ audioSettings.sfx=(+vS.value)/100; applyAudioSettings(); saveAudioSettings(); initAudio(); SFX.coin(); }; }   // tick so it's
