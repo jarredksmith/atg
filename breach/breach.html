@@ -7228,13 +7228,13 @@ function buildBoxProp(){
   const geo = new THREE.BoxGeometry(1,1,1); geo.translate(0, 0.5, 0);  // base at y=0 so it sits on the floor
   const m = new THREE.Mesh(
     geo,
-    new THREE.MeshStandardMaterial({ color:0x2a3a42, roughness:.65, metalness:.35, emissive:0x09231d, emissiveIntensity:.5 })
+    new THREE.MeshStandardMaterial({ color:0x2a3a42, roughness:.65, metalness:.35, emissive:0x000000, emissiveIntensity:0 })
   );
   return m;
 }
 // Shared material for the built-in primitives so they read as one family.
 const PRIM_DEFAULT_COLOR = 0x2a3a42;
-function primitiveMat(){ return new THREE.MeshStandardMaterial({ color:PRIM_DEFAULT_COLOR, roughness:.65, metalness:.35, emissive:0x09231d, emissiveIntensity:.5 }); }
+function primitiveMat(){ return new THREE.MeshStandardMaterial({ color:PRIM_DEFAULT_COLOR, roughness:.65, metalness:.35, emissive:0x000000, emissiveIntensity:0 }); }
 // Which primitives accept material edits (the pillar is a pre-built composite, so it's excluded).
 const SHAPE_PRIMS = { box:1, sphere:1, cylinder:1, cone:1 };
 function isShapePrimitive(src){ return SHAPE_PRIMS.hasOwnProperty(src); }
@@ -7301,7 +7301,7 @@ function applyPropTexture(obj, url){
   });
   // re-assert emissive (texture changes shouldn't wipe a glow setting)
   if(obj.userData.emit) applyPropEmissive(obj, obj.userData.emit.c, obj.userData.emit.i);
-  else if(!url){ eachPrimMesh(obj, o=>{ o.material.emissive.setHex(0x09231d); o.material.emissiveIntensity=.5; }); }
+  else if(!url){ eachPrimMesh(obj, o=>{ o.material.emissive.setHex(0x000000); o.material.emissiveIntensity=0; }); }
 }
 function applyPropTexRepeat(obj, u, v){
   if(!obj) return;
@@ -7419,7 +7419,7 @@ function clearPropEmissive(obj){
   obj.userData.emitLight = null;
   eachPrimMesh(obj, o=>{
     if(obj.userData.tex){ o.material.emissive.setHex(0x000000); o.material.emissiveIntensity = 0; }
-    else { o.material.emissive.setHex(0x09231d); o.material.emissiveIntensity = .5; }
+    else { o.material.emissive.setHex(0x000000); o.material.emissiveIntensity = 0; }
     o.material.needsUpdate = true;
   });
 }
@@ -13985,7 +13985,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 586 · 2026-06-19';
+const BUILD_VERSION = 'build 587 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14820,7 +14820,7 @@ function updateFragments(){
   const now0 = performance.now();
   for(const o of dynamicProps){
     if(o.userData._flash){ const a = now0 - o.userData._flash;
-      if(a > 140){ o.userData._flash = 0; o.traverse(m=>{ if(m.isMesh && m.material && m.material.emissive){ m.material.emissive.setHex(0x09231d); m.material.emissiveIntensity = 0.5; } }); }
+      if(a > 140){ o.userData._flash = 0; const _em=o.userData.emit; o.traverse(m=>{ if(m.isMesh && m.material && m.material.emissive){ if(_em){ m.material.emissive.setHex(_em.c); m.material.emissiveIntensity = _em.i; } else { m.material.emissive.setHex(0x000000); m.material.emissiveIntensity = 0; } } }); }
     }
   }
   if(!fragments.length) return;
@@ -15090,7 +15090,7 @@ function buildInstancing(){
     const list = groups[key];
     if(list.length < 2) continue;   // singletons aren't worth instancing
     const [shape, colStr] = key.split('|');
-    const mat = new THREE.MeshStandardMaterial({ color:parseInt(colStr,10), roughness:.65, metalness:.35, emissive:0x09231d, emissiveIntensity:.5 });
+    const mat = new THREE.MeshStandardMaterial({ color:parseInt(colStr,10), roughness:.65, metalness:.35, emissive:0x000000, emissiveIntensity:0 });
     const im = new THREE.InstancedMesh(instanceGeoFor(shape), mat, list.length);
     im.castShadow = true; im.receiveShadow = true;
     const m = new THREE.Matrix4();
