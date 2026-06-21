@@ -7373,6 +7373,32 @@ const PRIMITIVE_BUILDERS = { box:buildBoxProp, sphere:buildSphereProp, cylinder:
 function isPrimitive(src){ return PRIMITIVE_BUILDERS.hasOwnProperty(src); }
 // Cache loaded glTFs by URL so repeated/added props of the same model don't refetch.
 const gltfCache = {};
+// build 576: model cache eviction. Instances are clone(true), so all live copies + the cached master share GPU
+// geometry/textures. To free memory safely we ref-count per url: every loadGLTFCached resolve increments, and
+// only props release (on removeProp). Persistent objects (weapons, turrets, coins, the grenade) load once and
+// never release, so their count stays >=1 and they're never evicted. When the cache exceeds the cap, the
+// least-recently-used zero-ref models are disposed (freeing their VRAM); the bytes stay in IndexedDB so a later
+// reuse re-parses without re-downloading.
+const _modelRefs = {};       // url -> live reference count
+const _modelUsedAt = {};     // url -> recency clock
+let _modelClock = 0;
+const _MODEL_CACHE_CAP = 24; // keep this many recent models warm; evict zero-ref ones beyond it
+function _modelTouch(url){ _modelRefs[url]=(_modelRefs[url]||0)+1; _modelUsedAt[url]=++_modelClock; }
+function _modelRelease(url){ if(url!=null && _modelRefs[url]!=null) _modelRefs[url]=Math.max(0, _modelRefs[url]-1); }
+function _disposeGLTF(gltf){
+  if(!gltf || !gltf.scene || !gltf.scene.traverse) return;
+  const geos=new Set(), mats=new Set(), texs=new Set();
+  gltf.scene.traverse(o=>{ if(o.geometry) geos.add(o.geometry); const m=o.material; if(m){ (Array.isArray(m)?m:[m]).forEach(x=>{ if(x) mats.add(x); }); } });
+  mats.forEach(m=>{ for(const k in m){ const v=m[k]; if(v && v.isTexture) texs.add(v); } if(m.dispose) try{ m.dispose(); }catch(e){} });
+  texs.forEach(t=>{ if(t.dispose) try{ t.dispose(); }catch(e){} });
+  geos.forEach(g=>{ if(g.dispose) try{ g.dispose(); }catch(e){} });
+}
+function _enforceModelCacheCap(){
+  const urls=Object.keys(gltfCache); if(urls.length<=_MODEL_CACHE_CAP) return;
+  let over=urls.length-_MODEL_CACHE_CAP;
+  const evictable=urls.filter(u=>(_modelRefs[u]||0)<=0).sort((a,b)=>(_modelUsedAt[a]||0)-(_modelUsedAt[b]||0));   // oldest first
+  for(const u of evictable){ if(over<=0) break; try{ _disposeGLTF(gltfCache[u]); }catch(e){} delete gltfCache[u]; delete _modelRefs[u]; delete _modelUsedAt[u]; over--; }
+}
 // Optional CORS proxy (a Cloudflare Worker) for loading cross-origin models whose host blocks
 // cross-origin fetches (e.g. Poly Pizza). Same-origin loads are never proxied.
 // Baked-in defaults so Poly Pizza works out of the box; the editor fields still override these
@@ -7409,17 +7435,24 @@ const _glbQueue = []; let _glbActive = 0; const GLB_MAX_CONCURRENT = 3;
 function _glbPump(){ while(_glbActive < GLB_MAX_CONCURRENT && _glbQueue.length){ const task = _glbQueue.shift(); _glbActive++; task(); } }
 const _glbWaiters = {};   // url -> [{cb,errcb}] all riding a single in-flight load, so a model shared by several avatars (or a prewarm + the real build) is fetched once
 const _shrunkTex = (typeof WeakSet!=='undefined') ? new WeakSet() : null;   // each texture is shared via the cache; shrink once
-function _shrinkTexturesForMobile(root){
-  if(!IS_COARSE || !root || !root.traverse) return;
-  const MAXD = 1024;
+// build 575: downscale model textures on load to cap VRAM/RAM. Sketchfab models often ship 4K PBR maps (~64MB
+// each on the GPU); capping the longest side to e.g. 1024 cuts that ~16x. Runs once per cached master, so every
+// clone inherits the smaller maps. Configurable cap (0 = no cap on desktop); mobile is always capped at <=1024.
+let _modelTexCap = 1024; try{ const _v=parseInt(localStorage.getItem('breach_model_texcap'),10); if([0,512,1024,2048].indexOf(_v)>=0) _modelTexCap=_v; }catch(e){}
+function _modelTexCapEff(){ let cap=_modelTexCap; if(typeof IS_COARSE!=='undefined' && IS_COARSE) cap=(cap===0?1024:Math.min(cap,1024)); return cap; }
+function _shrinkTexturesForMobile(root){   // (name kept for call sites) downscale to the effective cap AND pre-upload, so first render never stalls
+  if(!root || !root.traverse) return;
+  const MAXD=_modelTexCapEff();   // 0 = no downscale (desktop "Off"); we still pre-warm the GPU upload
+  const canWarm = (typeof renderer!=='undefined' && renderer && renderer.initTexture);
+  if(!MAXD && !canWarm) return;
+  const SLOTS=['map','normalMap','roughnessMap','metalnessMap','aoMap','emissiveMap','alphaMap','bumpMap','displacementMap','specularMap','clearcoatMap','clearcoatNormalMap','clearcoatRoughnessMap','sheenColorMap','sheenRoughnessMap','lightMap'];
   root.traverse(o=>{
     const mats = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : null; if(!mats) return;
     for(const m of mats){ if(!m) continue;
-      for(const k of ['map','normalMap','roughnessMap','metalnessMap','aoMap','emissiveMap','alphaMap']){
-        const t=m[k]; if(!t || !t.image || (_shrunkTex && _shrunkTex.has(t))) continue;
+      for(const k of SLOTS){
+        const t=m[k]; if(!t || !t.image || t.isCompressedTexture || t.isDataTexture || (_shrunkTex && _shrunkTex.has(t))) continue;
         const im=t.image, w=im.width||0, h=im.height||0;
-        if(!(w>MAXD || h>MAXD)) { if(_shrunkTex) _shrunkTex.add(t); continue; }
-        if(typeof im.getContext==='function' || (typeof HTMLImageElement!=='undefined' && im instanceof HTMLImageElement) || (typeof ImageBitmap!=='undefined' && im instanceof ImageBitmap)){
+        if(MAXD && (w>MAXD || h>MAXD) && (typeof im.getContext==='function' || (typeof HTMLImageElement!=='undefined' && im instanceof HTMLImageElement) || (typeof ImageBitmap!=='undefined' && im instanceof ImageBitmap))){
           try{
             const sc=MAXD/Math.max(w,h), cw=Math.max(1,Math.round(w*sc)), ch=Math.max(1,Math.round(h*sc));
             const cv=document.createElement('canvas'); cv.width=cw; cv.height=ch;
@@ -7428,17 +7461,26 @@ function _shrinkTexturesForMobile(root){
             if(typeof im.close==='function') try{ im.close(); }catch(e){}   // free the ImageBitmap's backing store
           }catch(e){}
         }
+        if(canWarm) try{ renderer.initTexture(t); }catch(e){}   // build 577: upload to the GPU now (off the render loop) so the prop's first frame doesn't hitch
         if(_shrunkTex) _shrunkTex.add(t);
       } } });
 }
+// build 577: after a burst of model spawns settles, precompile their shader programs once, so turning to look at
+// a freshly furnished room doesn't stall while WebGL links shaders on first draw. Debounced + off the render loop.
+let _warmCompileT=0;
+function _scheduleWarmCompile(){
+  if(typeof renderer==='undefined' || !renderer || !renderer.compile || typeof scene==='undefined') return;
+  if(_warmCompileT) clearTimeout(_warmCompileT);
+  _warmCompileT=setTimeout(()=>{ _warmCompileT=0; try{ renderer.compile(scene, (typeof camera!=='undefined'?camera:null)); }catch(e){} }, 250);
+}
 function loadGLTFCached(url, cb, errcb){
-  if(gltfCache[url]){ cb(gltfCache[url]); return; }   // cached: synchronous, nothing to wait on
+  if(gltfCache[url]){ _modelTouch(url); cb(gltfCache[url]); return; }   // cached: synchronous, nothing to wait on
   if(_glbWaiters[url]){ _glbWaiters[url].push({cb:cb,errcb:errcb}); return; }   // a load for this url is already in flight; ride along instead of fetching again
   const waiters=[{cb:cb,errcb:errcb}]; _glbWaiters[url]=waiters;
   _glbPending++;
   let _fin=false; const _done=()=>{ if(_fin) return; _fin=true; _glbPending=Math.max(0,_glbPending-1); delete _glbWaiters[url]; };
   const _release=()=>{ _glbActive=Math.max(0,_glbActive-1); _glbPump(); };
-  const _cb=(g)=>{ _done(); _release(); try{ if(g && g.scene) _shrinkTexturesForMobile(g.scene); }catch(e){} for(const w of waiters){ try{ w.cb && w.cb(g); }catch(e){} } };
+  const _cb=(g)=>{ _done(); _release(); try{ if(g && g.scene) _shrinkTexturesForMobile(g.scene); }catch(e){} for(const w of waiters){ if(g) _modelTouch(url); try{ w.cb && w.cb(g); }catch(e){} } _enforceModelCacheCap(); };
   let _tries=0;
   const _ec=(e)=>{
     if(++_tries<=2){ _release(); setTimeout(()=>{ _glbQueue.push(start); _glbPump(); }, 500*_tries + Math.random()*400); return; }   // retry transient failures (429 rate-limit) with backoff
@@ -7664,7 +7706,7 @@ function spawnProp(src, t, onReady, slot, animMode, mat, onError, nid, animClip)
     return;
   }
   loadGLTFCached(src,
-    (gltf)=>{ const obj = finalizeProp(THREE.cloneSkinned(gltf.scene), src, t, gltf, slot, animMode, mat, nid, animClip); if(onReady) onReady(obj); },
+    (gltf)=>{ const obj = finalizeProp(THREE.cloneSkinned(gltf.scene), src, t, gltf, slot, animMode, mat, nid, animClip); if(typeof _scheduleWarmCompile==='function') _scheduleWarmCompile(); if(onReady) onReady(obj); },
     (err)=>{ console.warn('Prop load failed for', src, '-', err && err.message); if(onError) onError(err); }
   );
 }
@@ -7684,6 +7726,7 @@ function wipeScene(){
   if(editorTargets.props) editorTargets.props.idx=-1; if(editorTargets.lights) editorTargets.lights.idx=-1; if(editorTargets.spawns) editorTargets.spawns.idx=-1;
   if(typeof updateSelectionHighlight==='function') updateSelectionHighlight();
   if(typeof renderEditorFields==='function') renderEditorFields();
+  if(typeof _enforceModelCacheCap==='function') _enforceModelCacheCap();   // build 576: free VRAM from models with no instances left (recent ones stay warm under the cap)
 }
 function removeProp(idx){
   const obj = propModels[idx]; if(!obj) return;
@@ -7693,6 +7736,7 @@ function removeProp(idx){
   scene.remove(obj);
   const ci = colliders.indexOf(obj); if(ci>=0) colliders.splice(ci,1);
   if(obj.userData.mixer){ const mi = mixers.indexOf(obj.userData.mixer); if(mi>=0) mixers.splice(mi,1); }
+  if(obj.userData.src && typeof isModelSrc==='function' && isModelSrc(obj.userData.src)) _modelRelease(obj.userData.src);   // build 576: drop this instance's ref; the master is freed once no instance remains
   propModels.splice(idx,1);
 }
 function loadHostedProps(){
@@ -9731,8 +9775,8 @@ function _furnishExecute(placements, room, fopts){
       if(!cands.length){ proceed([]); return; }
       if(useVision){
         if(typeof toast==='function') toast('Claude is checking models for \u201c'+g.term+'\u201d ('+gi+'/'+glist.length+')\u2026');
-        _aiPickModel(g.term, fopts.context||'', cands, (good)=>{ const refs=(good&&good.length?good:[]).map(i=>cands[i]).filter(Boolean); proceed(refs.length?refs:[ _rankByTitle(cands,g.term)[0] ]); },
-                     ()=>{ proceed([ _rankByTitle(cands,g.term)[0] ]); });
+        _aiPickModel(g.term, fopts.context||'', cands, (good)=>{ proceed((good||[]).map(i=>cands[i]).filter(Boolean)); },   // vision rejected all -> skip (better empty than a wrong prop)
+                     ()=>{ proceed([ _rankByTitle(cands,g.term)[0] ]); });   // only on an API error, fall back to the best title match
       } else { proceed(_rankByTitle(cands, g.term).slice(0,3)); }   // no key: best title matches, rotate top 3 for variety
     });
   };
@@ -9769,9 +9813,11 @@ function _aiPlanScene(desc, roomInfos, cb, errcb){
     'You are furnishing a procedurally generated '+(desc?('"'+desc.replace(/"/g,'')+'"'):'building')+' for a 3D game level editor.\n'
     + 'There are '+roomInfos.length+' connected rooms. Sizes (and which one is the entrance the player walks in through):\n'
     + roomInfos.map((r,i)=>(i+1)+'. about '+r.w+'m by '+r.d+'m'+(r.entrance?' (ENTRANCE)':'')).join('\n') + '\n\n'
-    + 'Assign each room a role from the description, fitting the role to the room SIZE: put the conference room / open areas in the LARGEST rooms, '
+    + 'Assign each room ONE coherent role from the description, fitting the role to the room SIZE: put the conference room / open areas in the LARGEST rooms, '
     + 'small rooms become bathrooms, closets or single offices, and the reception/lobby should be the ENTRANCE room. Reuse a role (e.g. several offices) when the description implies it.\n'
-    + 'Then furnish each room with items that BELONG to its role. Each item: '
+    + 'Furnish each room ONLY with items that belong to THAT room\u2019s role. Keep role-specific fixtures in their own room: toilets and sinks go ONLY in a bathroom, '
+    + 'kitchen counters/sinks ONLY in a break room, reception desks ONLY in reception. Never scatter a bathroom or kitchen fixture into an office. An office gets a desk, chair(s), trash can, maybe a painting \u2014 nothing else.\n'
+    + 'Provide an entry for EVERY room listed above, in the same order. Each item: '
     + '"term" (a short concrete search query for a free 3D model library, e.g. "office chair", "vending machine", "reception desk", "potted plant"), '
     + '"size" (real-world length of its LONGEST side in metres), '
     + '"zone" (one of: "wall" = flush against a wall like desks/couches/counters/vending; "center" = free-standing like tables/conference tables; "corner" = plants/lamps/bins; "mount" = hung ON a wall at eye height like paintings/tv/clocks/whiteboards), '
@@ -9782,7 +9828,7 @@ function _aiPlanScene(desc, roomInfos, cb, errcb){
   fetch('https://api.anthropic.com/v1/messages', {
     method:'POST',
     headers:{ 'content-type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
-    body: JSON.stringify({ model:AI_MODEL, max_tokens:1500, messages:[{ role:'user', content:prompt }] })
+    body: JSON.stringify({ model:AI_MODEL, max_tokens:4096, messages:[{ role:'user', content:prompt }] })
   })
   .then(r=>{ if(!r.ok) return r.text().then(t=>{ throw new Error('HTTP '+r.status+(r.status===401?' — check your Anthropic key':'')); }); return r.json(); })
   .then(d=>{
@@ -9919,9 +9965,10 @@ function generateOffice(opts){
   const span=G*cell, half=span/2;
   const wall=[]; for(let i=0;i<G;i++) wall.push(new Array(G).fill(true));   // true = solid; carve rooms + corridors to false
   const rooms=[], roomRects=[];
+  const corr=[]; for(let i=0;i<G;i++) corr.push(new Array(G).fill(false));   // build 574: mark corridor cells so furniture never lands in a hallway / doorway / bend
   const inB=(r,c)=> (r>0 && c>0 && r<G-1 && c<G-1);   // keep a solid outer shell
   const carveRect=(r0,c0,r1,c1)=>{ for(let r=r0;r<r1;r++) for(let c=c0;c<c1;c++){ if(inB(r,c)) wall[r][c]=false; } };
-  const carveCorr=(r1,c1,r2,c2)=>{ let r=r1,c=c1; while(c!==c2){ if(inB(r,c)) wall[r][c]=false; c+=(c2>c?1:-1); } while(r!==r2){ if(inB(r,c)) wall[r][c]=false; r+=(r2>r?1:-1); } if(inB(r,c)) wall[r][c]=false; };   // L-shaped, 1 cell wide
+  const carveCorr=(r1,c1,r2,c2)=>{ let r=r1,c=c1; while(c!==c2){ if(inB(r,c)){ wall[r][c]=false; corr[r][c]=true; } c+=(c2>c?1:-1); } while(r!==r2){ if(inB(r,c)){ wall[r][c]=false; corr[r][c]=true; } r+=(r2>r?1:-1); } if(inB(r,c)){ wall[r][c]=false; corr[r][c]=true; } };   // L-shaped, 1 cell wide; cells flagged as corridor
   const MINSZ=4;
   const split=(r0,c0,r1,c1,depth)=>{
     const h=r1-r0, w=c1-c0, canV=(w>=2*MINSZ), canH=(h>=2*MINSZ);
@@ -9955,19 +10002,20 @@ function generateOffice(opts){
   for(let r=0;r<G;r++) for(let c=0;c<G;c++){ if(!isFloor(r,c)) continue; const x=cx(c), z=cz(r); if((x-sx)*(x-sx)+(z-sz)*(z-sz) < (cell*1.4)*(cell*1.4)) continue; floorSpots.push([x,z]);
     const n=isFloor(r-1,c), s2=isFloor(r+1,c), e=isFloor(r,c+1), w=isFloor(r,c-1);
     if((n?1:0)+(s2?1:0)+(e?1:0)+(w?1:0)>=3) coverSpots.push([x,z]);   // roomy = 3+ open neighbours -> not a 1-wide hallway
+    if(corr[r][c]) continue;   // build 574: never furnish a corridor cell (bends/junctions otherwise look like corner/edge spots)
     const zone=_sceneCellZone(n,s2,e,w);
-    if(zone!=='corridor'){ const ox=(e?1:0)-(w?1:0), oz=(s2?1:0)-(n?1:0); const spot={ x:+x.toFixed(2), z:+z.toFixed(2), yaw:((ox||oz)?Math.atan2(ox,oz):0), nx:-ox, nz:-oz };   // nx,nz = toward the wall (opposite the open side) -> used to hug the wall
+    if(zone!=='corridor'){ const ox=(e?1:0)-(w?1:0), oz=(s2?1:0)-(n?1:0); const spot={ x:+x.toFixed(2), z:+z.toFixed(2), yaw:((ox||oz)?Math.atan2(ox,oz):(rnd()*Math.PI*2)), nx:-ox, nz:-oz };   // nx,nz = toward the wall; free-standing (center) spots get a random facing
       if(zone==='center') zonePools.center.push(spot); else if(zone==='edge') zonePools.wall.push(spot); else zonePools.corner.push(spot); }
   }
   // build 571: per-room zone pools (same classification, scoped to each room's carved rect) so the AI scene
   // builder can furnish each room by its assigned role rather than from one global pool.
   const roomPools=[];
   for(const rc of roomRects){ const rp={ wall:[], corner:[], center:[] };
-    for(let r=rc[0];r<rc[2];r++) for(let c=rc[1];c<rc[3];c++){ if(!isFloor(r,c)) continue; const x=cx(c), z=cz(r);
+    for(let r=rc[0];r<rc[2];r++) for(let c=rc[1];c<rc[3];c++){ if(!isFloor(r,c) || corr[r][c]) continue; const x=cx(c), z=cz(r);
       if((x-sx)*(x-sx)+(z-sz)*(z-sz) < (cell*1.4)*(cell*1.4)) continue;
       const n=isFloor(r-1,c), s2=isFloor(r+1,c), e=isFloor(r,c+1), w=isFloor(r,c-1);
       const zone=_sceneCellZone(n,s2,e,w); if(zone==='corridor') continue;
-      const ox=(e?1:0)-(w?1:0), oz=(s2?1:0)-(n?1:0); const spot={ x:+x.toFixed(2), z:+z.toFixed(2), yaw:((ox||oz)?Math.atan2(ox,oz):0), nx:-ox, nz:-oz };
+      const ox=(e?1:0)-(w?1:0), oz=(s2?1:0)-(n?1:0); const spot={ x:+x.toFixed(2), z:+z.toFixed(2), yaw:((ox||oz)?Math.atan2(ox,oz):(rnd()*Math.PI*2)), nx:-ox, nz:-oz };
       if(zone==='center') rp.center.push(spot); else if(zone==='edge') rp.wall.push(spot); else rp.corner.push(spot);
     }
     roomPools.push(rp);
@@ -10050,6 +10098,18 @@ function renderGeneratePanel(){
     const sl=document.createElement('input'); sl.type='range'; sl.min='0.6'; sl.max='3'; sl.step='0.1'; sl.value=String(cur); sl.style.cssText='width:100%;accent-color:var(--accent);';
     sl.oninput=()=>{ const v=parseFloat(sl.value)||1.6; _furnishScale=v; try{ localStorage.setItem('breach_furnish_scale', String(v)); }catch(e){} const o=sc.querySelector('#edFurnScaleV'); if(o) o.textContent=v.toFixed(1)+'\u00d7'; };
     sc.appendChild(lab); sc.appendChild(sl); host.appendChild(sc);
+  }
+  // build 575: model texture memory cap (downscales big Sketchfab maps on load)
+  { const tc=document.createElement('div'); tc.style.cssText='margin:5px 0 2px;';
+    const lab=document.createElement('div'); lab.style.cssText='color:#9fe6cf;font-size:11px;margin-bottom:3px;'; lab.innerHTML='<b>Model texture cap</b> \u2014 shrinks oversized maps to save memory';
+    const row=document.createElement('div'); row.style.cssText='display:flex;gap:5px;';
+    const cur=(typeof _modelTexCap==='number'?_modelTexCap:1024);
+    [['Off',0],['512',512],['1024',1024],['2048',2048]].forEach(([txt,val])=>{ const b=document.createElement('button'); b.textContent=txt; const on=(cur===val);
+      b.style.cssText='flex:1;padding:4px 0;font-size:11px;border-radius:4px;cursor:pointer;border:1px solid '+(on?'var(--accent)':'#2a3a42')+';background:'+(on?'#16302a':'#0c1418')+';color:'+(on?'#bff3df':'#7fb8aa')+';';
+      b.onclick=()=>{ _modelTexCap=val; try{ localStorage.setItem('breach_model_texcap', String(val)); }catch(e){} renderGeneratePanel(); if(typeof toast==='function') toast(val?('New models capped at '+val+'px textures'):'Texture cap off (mobile still caps at 1024)'); };
+      row.appendChild(b); });
+    tc.appendChild(lab); tc.appendChild(row); host.appendChild(tc);
+    const nt=document.createElement('div'); nt.className='hint'; nt.style.cssText='font-size:10px;opacity:0.7;margin:2px 0 0;'; nt.textContent='Applies to newly loaded models. A 4K\u21921K map uses ~16\u00d7 less GPU memory.'; host.appendChild(nt);
   }
   // generate
   const btn=document.createElement('button'); btn.textContent='\u2699 Generate '+(isMaze?'maze':'office'); btn.style.cssText='width:100%;background:var(--accent);color:#05070a;font-weight:700;border:none;padding:9px;border-radius:6px;margin:4px 0;cursor:pointer;';
@@ -10504,7 +10564,14 @@ const NET = {
   deadChests:{},       // client only: chestId -> true, suppresses a crate we just bought until the host's snapshot drops it
   pendingLevel:null,   // client: host level data, applied at spawn
   sentProps:new Map(), // live prop sync: nid -> last transform tuple peers have been told about
+  _seen:{},            // build 578: host -> last time (ms) each client sent anything; used to detect silent drops
+  _hostSeen:0,         // build 578: client -> last time (ms) the host sent anything
+  _liveT:0,            // throttle for the liveness check
+  _lost:false,         // client: guards a one-time "host disconnected" teardown
 };
+const NET_TIMEOUT_MS = 8000;   // build 578: peers send ~20x/sec in-game; 8s of total silence = a real drop, not lag
+// Pure: given a map of id -> last-seen timestamp, return ids that have gone silent past the timeout.
+function _netTimedOut(seen, now, timeout){ const out=[]; if(seen) for(const k in seen){ if(now - (seen[k]||0) > timeout) out.push(+k); } return out; }
 // duel-only local state
 let duelDead = false, duelRespawnTimer = 0, duelInvuln = 0, lastDamagedBy = null;
 let _kcInit=false; const _kcLook=new THREE.Vector3(), _kcTarget=new THREE.Vector3();   // death-killcam pan state
@@ -11366,7 +11433,7 @@ function registerDuelKill(killerId, victimId){   // host only
   if(killerId==null || killerId===victimId) return;   // ignore self/unknown (e.g. fell to nothing)
   NET.duelScore[killerId] = (NET.duelScore[killerId]||0) + 1;
   // award credits so the loot crates + ammo station are usable in 1v1
-  if(killerId===NET.myId){ credits += DUEL_KILL_CREDITS; SFX.coin(); updateHUD(); }
+  if(killerId===NET.myId){ credits += DUEL_KILL_CREDITS; SFX.coin(); updateHUD(); registerLocalKill(); }
   else sendToPlayer(killerId, { t:'credit', v:DUEL_KILL_CREDITS });
   broadcastDuelScore();
   addKillFeed(killerId, victimId); broadcastFeed(killerId, victimId);
@@ -12075,6 +12142,26 @@ function ensureRemotePlayer(id, name){
   return rp;
 }
 function removeRemotePlayer(id){ const rp=NET.players[id]; if(rp){ scene.remove(rp.mesh); delete NET.players[id]; } }
+// build 578: host-side cleanup when a client leaves (clean close, error, or a liveness timeout). The next world
+// snapshot omits them, so every other client prunes the avatar automatically (see the snapshot handler).
+function dropClient(pid, why){
+  if(pid==null) return;
+  const rp=NET.players[pid]; const nm=(rp&&rp.name)||('P'+pid);
+  const c=NET.conns[pid]; if(c){ try{ c.close(); }catch(e){} }
+  removeRemotePlayer(pid);
+  delete NET.conns[pid];
+  if(NET._seen) delete NET._seen[pid];
+  if(NET.phase==='lobby' && typeof refreshLobby==='function') refreshLobby();
+  if(why==='timeout' && typeof toast==='function') toast(nm+' disconnected');
+}
+// build 578: client-side teardown when the host vanishes (clean close or a liveness timeout). Returns to the menu
+// rather than leaving the player stuck in a frozen world. Guarded so it runs once.
+function netHostLost(){
+  if(NET._lost) return; NET._lost=true;
+  if(typeof netStatus==='function') netStatus('Host disconnected — returning to menu…');
+  if(typeof toast==='function') toast('Host disconnected');
+  setTimeout(()=>{ NET.mode='off'; NET.gameMode='coop'; try{ location.reload(); }catch(e){} }, 1600);
+}
 function setRemoteState(id, msg){
   const rp=ensureRemotePlayer(id, msg.n);
   rp.posEye.set(msg.p[0], msg.p[1], msg.p[2]);
@@ -12326,11 +12413,22 @@ function netTick(dt){
   }
   netInterpolate(dt);
   reconcileProps(dt);   // emit any local prop add/move/delete to peers
+  // build 578: detect silently-dropped peers (ungraceful disconnects never fire 'close'). In-game only, where
+  // ~20Hz traffic makes silence meaningful; a generous timeout avoids false positives on lag spikes.
+  NET._liveT -= dt;
+  if(NET._liveT<=0){ NET._liveT=1;
+    if(typeof gameOn!=='undefined' && gameOn){
+      const now=performance.now();
+      if(NET.mode==='host'){ const dead=_netTimedOut(NET._seen, now, NET_TIMEOUT_MS); for(const pid of dead) dropClient(pid, 'timeout'); }
+      else if(NET.mode==='client' && NET._hostSeen && (now-NET._hostSeen)>NET_TIMEOUT_MS){ netHostLost(); }
+    }
+  }
 }
 
 // ---- message handlers ----
 function handleClientMsg(conn, msg){
   const id=conn._pid;
+  if(NET._seen) NET._seen[id]=performance.now();   // build 578: any message proves the client is alive
   if(msg.t==='st'){ setRemoteState(id, msg); }
   else if(msg.t==='hit'){ const en=enemies.find(e=>e.id===msg.e); if(en){ spark(en.mesh.position, 0xff6b6b); const _s=NET.players[id]; enemyHurt(en, msg.d, (_s&&_s.posEye)?_s.posEye.x:null, (_s&&_s.posEye)?_s.posEye.z:null); } }
   else if(msg.t==='ready'){ const rp=NET.players[id]; if(rp) rp.ready=!!msg.r; if(NET.phase==='lobby') refreshLobby(); }   // build 552: a client toggled ready in the lobby -> reflect it for everyone
@@ -12365,6 +12463,7 @@ function handleClientMsg(conn, msg){
   else if(msg.t==='rematchReq'){ if(gameOver) hostRematch(); }   // a client asked to replay; only honor it once the match has actually ended (so it can't force a mid-match restart)
 }
 function handleHostMsg(msg){
+  NET._hostSeen=performance.now();   // build 578: any message proves the host is alive
   if(msg.t==='welcome'){
     if(NET.joined) return; NET.joined=true;
     NET.myId=msg.id;
@@ -12432,6 +12531,7 @@ function hostStart(code, mode, killTarget){
     conn._pid = NET.nextId++;
     conn.on('open', ()=>{
       NET.conns[conn._pid]=conn;
+      if(NET._seen) NET._seen[conn._pid]=performance.now();   // build 578: start the liveness clock for this client
       if(pvpMode()) NET.duelScore[conn._pid] = NET.duelScore[conn._pid]||0;
       if(teamMode()) assignTeam(conn._pid);
       // hand the joiner the mode, the kill target, and the current level so their map matches
@@ -12446,8 +12546,8 @@ function hostStart(code, mode, killTarget){
       if(NET.phase==='lobby') refreshLobby();
     });
     conn.on('data', msg=>handleClientMsg(conn, msg));
-    conn.on('close', ()=>{ removeRemotePlayer(conn._pid); delete NET.conns[conn._pid]; if(NET.phase==='lobby') refreshLobby(); });
-    conn.on('error', ()=>{});
+    conn.on('close', ()=>dropClient(conn._pid));
+    conn.on('error', ()=>dropClient(conn._pid));   // build 578: an errored connection is a dropped one — clean it up too
   });
   NET.peer.on('error', e=>{ netStatus('Host error: '+(e&&e.type||e)); });
 }
@@ -12458,15 +12558,17 @@ function clientStart(code){
     netStatus('Connecting to '+code+'…');
     const conn=NET.peer.connect('breachfps-'+code, { reliable:true });
     NET.conn=conn;
-    conn.on('open', ()=>{ conn.send({t:'name', n:NET.name, char:myCharCfg()}); netStatus('Connected — waiting for host…'); });
+    conn.on('open', ()=>{ NET._hostSeen=performance.now(); NET._lost=false; conn.send({t:'name', n:NET.name, char:myCharCfg()}); netStatus('Connected — waiting for host…'); });
     conn.on('data', msg=>handleHostMsg(msg));   // 'welcome' triggers startGame once
-    conn.on('close', ()=>{ netStatus('Disconnected from host'); });
-    conn.on('error', ()=>{ netStatus('Connection error'); });
+    conn.on('close', ()=>{ if(gameOn) netHostLost(); else netStatus('Disconnected from host'); });
+    conn.on('error', ()=>{ if(gameOn) netHostLost(); else netStatus('Connection error'); });
   });
   NET.peer.on('error', e=>{ const ty=e&&e.type; netStatus(ty==='peer-unavailable' ? 'No game found for that code' : ('Error: '+ty)); });
 }
 function showRoomBadge(code){ const b=document.getElementById('roomBadge'); if(b){ b.textContent=(NET.gameMode==='ffa'?'FFA ':(NET.gameMode==='duel'?'DUEL ':'ROOM '))+code; b.style.display='block'; } }
 // ---------- Pre-game lobby: everyone gathers, then the host starts the match so all players begin together ----------
+// build 579: pure readiness summary for the lobby roster (host counts as ready). { all, waiting }.
+function _lobbyReadyState(roster){ const list=roster||[]; let waiting=0; for(const p of list){ if(!p.ready) waiting++; } return { all:waiting===0, waiting }; }
 function lobbyRoster(){
   const selfTint = (CHARACTERS[myCharIdx]?CHARACTERS[myCharIdx].color:null);
   const list=[{ id:NET.myId, name:(NET.name||'Host'), team:(teamMode()?(NET.teams[NET.myId]||0):null), tint:selfTint, host:true, ready:true }];   // build 552: the host is always "ready" (they press START)
@@ -12487,6 +12589,9 @@ function renderLobby(roster){
     wrap.appendChild(row);
   });
   const cnt=document.getElementById('lobbyCount'); if(cnt){ const n=(roster?roster.length:0), r=(roster||[]).filter(p=>p.ready).length; cnt.textContent=n+' in lobby · '+r+'/'+n+' ready'; }
+  // build 579: the host's START reflects readiness — it stays clickable (host keeps control) but shows who's waiting
+  const sb=document.getElementById('lobbyStart');
+  if(sb && NET.mode==='host'){ const st=_lobbyReadyState(roster); if(st.all){ sb.textContent='START'; sb.style.opacity=''; } else { sb.textContent='START · '+st.waiting+' not ready'; sb.style.opacity='0.78'; } }
 }
 function _lobbyTitle(){ return (pvpMode()?pvpLabel():'CO-OP')+' LOBBY'; }
 function enterLobby(){   // host
@@ -12531,8 +12636,19 @@ function setReady(v){   // client toggles ready and tells the host (who reflects
   _imReady=!!v; _updateReadyBtn();
   if(NET.conn){ try{ NET.conn.send({ t:'ready', r:_imReady?1:0 }); }catch(e){} }
 }
+let _startArmedT=0;   // build 579: host's "start anyway" two-press window when players aren't all ready
 function startMatch(){   // host presses START
   if(NET.mode!=='host') return;
+  const st=_lobbyReadyState(lobbyRoster());
+  if(!st.all){   // someone isn't ready — require a deliberate second press so the match never starts out from under a loading player by accident
+    const now=performance.now();
+    if(!_startArmedT || now-_startArmedT>3000){ _startArmedT=now;
+      if(typeof toast==='function') toast(st.waiting+' player'+(st.waiting>1?'s':'')+' not ready — press START again to begin anyway');
+      const sb=document.getElementById('lobbyStart'); if(sb) sb.textContent='START ANYWAY?';
+      return;
+    }
+  }
+  _startArmedT=0;
   const bn=document.getElementById('lobbyBotN');
   if(bn && !(pvpMode() && NET.gameMode==='duel')){ let v=parseInt(bn.value,10); if(v>=0 && v<=7) NET.botCount=v; }
   NET.phase='playing'; unannounceRoom();
@@ -13603,7 +13719,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 573 · 2026-06-19';
+const BUILD_VERSION = 'build 580 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -14905,7 +15021,7 @@ function enemyHurt(en, dmg, sx, sz){
 function killEnemy(en){
   runKills++;
   spark(en.mesh.position, 0xff2d55); SFX.kill();
-  if(NET.mode==='off') hitStop = Math.max(hitStop, 0.07);   // brief impact freeze (solo only — avoids desyncing co-op)
+  if(NET.mode==='off'){ hitStop = Math.max(hitStop, 0.07); registerLocalKill(); }   // brief impact freeze + multi-kill tracking (solo only — avoids desyncing co-op)
   // drop 1-2 coins worth scaling slightly with wave
   const drops = Math.random()<0.35 ? 2 : 1;
   for(let i=0;i<drops;i++){
@@ -15189,6 +15305,34 @@ function showHitmarker(kill){
   hm.style.textShadow = kill ? '0 0 12px #ff4d6d' : '0 0 8px var(--accent)';
   hm.style.transition='none'; hm.style.opacity='1'; hm.style.transform='translate(-50%,-50%) scale('+(kill?1.4:1)+')';
   requestAnimationFrame(()=>{ hm.style.transition='all .25s'; hm.style.opacity='0'; hm.style.transform='translate(-50%,-50%) scale(.6)'; });
+}
+// build 580: multi-kill callouts — kills in quick succession escalate (DOUBLE/TRIPLE/...) with a rising hype sound,
+// and in solo a brief dramatic slow-mo on triple+. _multiKillCount is pure (unit-tested).
+const _killTimes=[]; const _MK_WIN=3200;
+const _MK_LABELS=['','','DOUBLE KILL','TRIPLE KILL','MULTI KILL','RAMPAGE','UNSTOPPABLE','GODLIKE'];
+function _multiKillCount(times, now, win){ let n=0; for(const t of (times||[])){ if(now-t<=win) n++; } return n; }
+function _mkLabel(n){ return n<2 ? '' : _MK_LABELS[Math.min(n, _MK_LABELS.length-1)]; }
+let _mkEl=null;
+function showMultiKill(n){
+  const label=_mkLabel(n); if(!label) return;
+  if(!_mkEl){ _mkEl=document.createElement('div'); _mkEl.id='multiKill';
+    _mkEl.style.cssText='position:fixed;left:50%;top:28%;transform:translate(-50%,-50%) scale(.6);pointer-events:none;z-index:60;font-weight:900;letter-spacing:2px;text-align:center;opacity:0;';
+    (document.body||document.documentElement).appendChild(_mkEl); }
+  const hue=Math.max(0, 50 - (n-2)*12);   // yellow -> orange -> red as the streak grows
+  _mkEl.textContent=label;
+  _mkEl.style.color='hsl('+hue+',100%,60%)';
+  _mkEl.style.textShadow='0 0 18px hsl('+hue+',100%,55%), 0 2px 4px rgba(0,0,0,.6)';
+  _mkEl.style.fontSize=Math.min(66, 32 + n*6)+'px';
+  _mkEl.style.transition='none'; _mkEl.style.opacity='1'; _mkEl.style.transform='translate(-50%,-50%) scale(1.18)';
+  requestAnimationFrame(()=>{ _mkEl.style.transition='all .5s cubic-bezier(.2,.9,.3,1)'; _mkEl.style.transform='translate(-50%,-50%) scale(1)'; });
+  clearTimeout(_mkEl._t); _mkEl._t=setTimeout(()=>{ _mkEl.style.transition='all .4s'; _mkEl.style.opacity='0'; _mkEl.style.transform='translate(-50%,-50%) scale(.7)'; }, 950);
+  try{ if(typeof tone==='function'){ const base=500+(n-2)*95; tone({freq:base, type:'square', dur:0.08, vol:0.17}); setTimeout(()=>tone({freq:base*1.5, type:'square', dur:0.12, vol:0.15}), 85); } }catch(e){}
+}
+function registerLocalKill(){   // call when the LOCAL player gets a kill
+  const now=performance.now(); _killTimes.push(now);
+  while(_killTimes.length && now-_killTimes[0]>_MK_WIN) _killTimes.shift();
+  const n=_killTimes.length;
+  if(n>=2){ showMultiKill(n); if(NET.mode==='off' && n>=3) hitStop=Math.max(hitStop, 0.2); }   // solo: dramatic slow-mo on triple+
 }
 // ---- Combat feel: floating damage numbers, enemy hit-flash, hitstop ----
 let hitStop = 0;                 // brief time-scale dip on a kill (solo only), counted down in real time
@@ -20805,7 +20949,7 @@ function startGame(){
   if(pvpMode()) credits = 150;   // starting stipend so the economy is usable from the first life
   buffs.damage=0; buffs.speed=0; buffs.shield=0;
   // reset aim/shake state
-  firing=false; ads=false; adsBlend=0; shake=0;
+  firing=false; ads=false; adsBlend=0; shake=0; if(typeof _killTimes!=='undefined') _killTimes.length=0;
   editorOpen=false; _editorOpenFlag=false; editorAimPreview=false; editorFreeFly=false; editorTopView=false;
   if(typeof updateGizmo==='function') updateGizmo();   // editorOpen now false -> updateGizmo hides the handles (it only hides when called, and nothing else calls it on this path)
   if(typeof gizmo!=='undefined' && gizmo) gizmo.visible=false;
