@@ -8192,7 +8192,7 @@ const player = {
 };
 const EYE = 1.7;            // standing camera height above the surface the player stands on
 // ---- World movement settings (editable in the editor's World panel; saved with the level) ----
-const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, launchPower:1, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorRough:0.95, floorMetal:0.1, floorTex:'', floorTexN:'', floorTexR:'', floorTile:0, floorTileU:0, floorTileV:0, floorRot:0, wallColor:0x1a242b, wallRough:0.8, wallMetal:0.2, wallTex:'', wallTexN:'', wallTexR:'', wallTile:0, wallTileU:0, wallTileV:0, wallRot:0, sky_hdri:'', skyBright:1, skyRot:0, wallsVisible:true, fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4, terrain:null };
+const DEFAULT_WORLD = { walk:28, run:47, jump:13, grav:30, crouch:14, launchPower:1, sun:0.9, sunColor:0x9fd8ff, sky:0.55, ambient:0, arena:70, floorColor:0x141c22, floorRough:0.95, floorMetal:0.1, floorTex:'', floorTexN:'', floorTexR:'', floorTile:0, floorTileU:0, floorTileV:0, floorRot:0, wallColor:0x1a242b, wallRough:0.8, wallMetal:0.2, wallTex:'', wallTexN:'', wallTexR:'', wallTile:0, wallTileU:0, wallTileV:0, wallRot:0, sky_hdri:'', skyBright:1, skyRot:0, wallsVisible:true, fov:78, viewDist:400, fogDensity:0.018, fogColor:0x070b10, grid:true, dof:false, dofFocus:18, dofRange:14, dofStrength:1.4, postBloom:0.65, postMotion:0.62, postVig:0.42, postGrain:0.05, postSat:1.08, postCon:1.05, postThresh:0.62, terrain:null };
 let worldCfg = Object.assign({}, DEFAULT_WORLD, (savedLevel && savedLevel.world) || {});
 
 // Apply (or clear) a tiling texture on a shared material. Stores the current url on the material under
@@ -8443,6 +8443,14 @@ function applyWorldCfg(){
     dofFocus    = Math.max(2,   Math.min(300, worldCfg.dofFocus    == null ? DEFAULT_WORLD.dofFocus    : +worldCfg.dofFocus));
     dofRange    = Math.max(1,   Math.min(200, worldCfg.dofRange    == null ? DEFAULT_WORLD.dofRange    : +worldCfg.dofRange));
     dofStrength = Math.max(0.1, Math.min(4,   worldCfg.dofStrength == null ? DEFAULT_WORLD.dofStrength : +worldCfg.dofStrength));
+    // build 582: post-processing look (saved per level; master on/off is the global pause-menu toggle)
+    _postBloom  = Math.max(0,   Math.min(2,    worldCfg.postBloom  == null ? DEFAULT_WORLD.postBloom  : +worldCfg.postBloom));
+    _postMotion = Math.max(0,   Math.min(0.95, worldCfg.postMotion == null ? DEFAULT_WORLD.postMotion : +worldCfg.postMotion));
+    _postVig    = Math.max(0,   Math.min(1,    worldCfg.postVig    == null ? DEFAULT_WORLD.postVig    : +worldCfg.postVig));
+    _postGrain  = Math.max(0,   Math.min(0.3,  worldCfg.postGrain  == null ? DEFAULT_WORLD.postGrain  : +worldCfg.postGrain));
+    _postSat    = Math.max(0,   Math.min(2,    worldCfg.postSat    == null ? DEFAULT_WORLD.postSat    : +worldCfg.postSat));
+    _postCon    = Math.max(0.5, Math.min(2,    worldCfg.postCon    == null ? DEFAULT_WORLD.postCon    : +worldCfg.postCon));
+    _postThresh = Math.max(0,   Math.min(1,    worldCfg.postThresh == null ? DEFAULT_WORLD.postThresh : +worldCfg.postThresh));
   }
   // HDRI / equirectangular sky
   if(typeof applySkyHdri==='function'){ try{ applySkyHdri(worldCfg.sky_hdri||''); }catch(e){ console.warn('sky apply failed', e); } }
@@ -13806,7 +13814,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 581 · 2026-06-19';
+const BUILD_VERSION = 'build 582 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -18557,7 +18565,17 @@ function renderEditorFields(){
       dofCb.onchange=()=>{ pushUndoSnapshot(); worldCfg.dof=dofCb.checked; applyWorldCfg(); renderEditorFields(); };
       const dofSp=document.createElement('span'); dofSp.innerHTML='<b>Depth of field</b> \u2014 blur by distance'; dofRow.appendChild(dofCb); dofRow.appendChild(dofSp); b.appendChild(dofRow);
       if(worldCfg.dof===true){ slider(b,'Focus distance','dofFocus',2,120,1); slider(b,'In-focus range','dofRange',1,80,1); slider(b,'Blur strength','dofStrength',0.1,4,0.1);
-        hint(b,'','0 0 4px').textContent='Focus distance = how far away stays sharp. In-focus range = depth kept sharp around it. Everything else blurs.'; } }
+        hint(b,'','0 0 4px').textContent='Focus distance = how far away stays sharp. In-focus range = depth kept sharp around it. Everything else blurs.'; }
+      // build 582: post-processing look (bloom / motion blur / grade). Master on/off is the global toggle (also in the pause menu); the look values save with the level.
+      const pfxRow=document.createElement('label'); pfxRow.style.cssText='display:flex;align-items:center;gap:7px;color:#9fe6cf;font-size:12px;margin:10px 0 4px;cursor:pointer;';
+      const pfxCb=document.createElement('input'); pfxCb.type='checkbox'; pfxCb.checked=(typeof _postOn!=='undefined' && _postOn); pfxCb.style.cssText='width:15px;height:15px;accent-color:var(--accent);cursor:pointer;';
+      pfxCb.onchange=()=>{ _postOn=pfxCb.checked; _postFail=false; try{ localStorage.setItem('breach_postfx', _postOn?'on':'off'); }catch(e){} if(!_postOn && typeof disposePost==='function') disposePost(); renderEditorFields(); };
+      const pfxSp=document.createElement('span'); pfxSp.innerHTML='<b>Post-processing</b> \u2014 bloom, motion blur, grade'; pfxRow.appendChild(pfxCb); pfxRow.appendChild(pfxSp); b.appendChild(pfxRow);
+      if(typeof _postOn!=='undefined' && _postOn){
+        slider(b,'Bloom','postBloom',0,2,0.05); slider(b,'Motion blur','postMotion',0,0.95,0.02); slider(b,'Vignette','postVig',0,1,0.02);
+        slider(b,'Film grain','postGrain',0,0.3,0.01); slider(b,'Saturation','postSat',0,2,0.02); slider(b,'Contrast','postCon',0.5,2,0.02); slider(b,'Bloom threshold','postThresh',0,1,0.02);
+        hint(b,'','0 0 4px').textContent='Motion blur = trail strength. Bloom threshold = how bright a surface must be to glow. These save with the level; the on/off switch is a global preference.';
+      } }
     { const b=subSec('Sky','sky',true);
       hint(b,'Equirectangular panorama: <b>.hdr</b> (full HDR lighting) or .jpg/.png. Lights reflections too. Blank = flat color.','2px 0 4px');
       const phBtn=document.createElement('button'); phBtn.textContent='\ud83d\udd2d Browse Poly Haven HDRIs'; phBtn.style.cssText='width:100%;padding:6px;font-size:12px;margin:0 0 5px;'; phBtn.onclick=openHdriBrowser; b.appendChild(phBtn);
