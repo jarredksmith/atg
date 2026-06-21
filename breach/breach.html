@@ -251,6 +251,7 @@
   body.touch #prompt { pointer-events:auto; z-index:45; cursor:pointer; bottom:150px; }
   body.touch #prompt b { background:rgba(var(--accent-rgb),.32); }
   body.editing #tFire, body.editing #tAim, body.editing #tJump, body.editing #tReload, body.editing #tNade, body.editing #tWeapon, body.editing #tUse { display:none !important; }
+  body.editing #stats { display:none !important; }   /* the integrity box is gameplay-only; hide it so it never sits over the camera-preview window */
   body.editing #tLook { left:0; right:330px; }   /* keep look-drag off the right-side editor panel */
   body.touch #wavePanel { top: calc(30px + env(safe-area-inset-top)); transform: translateX(-50%) scale(.82); transform-origin:top center; padding:2px 12px; min-width:170px; }
   body.touch #waveNum { font-size:16px; }
@@ -14165,7 +14166,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 614 · 2026-06-19';
+const BUILD_VERSION = 'build 615 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -16598,6 +16599,7 @@ addEventListener('pointerdown', ()=>{ if(_cineActive) endCinematic(); });
 // with the main renderer into a scissored viewport (no second context), behind a DOM frame + scrubber.
 let _cinePvOn=true; try{ if(localStorage.getItem('breach_cinepv')==='off') _cinePvOn=false; }catch(e){}
 let _cinePvT=0, _cinePvCam=null, _cinePvPanel=null, _cinePvFrame=null, _cinePvSlider=null;
+let _cinePvPos=null; try{ const s=localStorage.getItem('breach_cinepvpos'); if(s){ const o=JSON.parse(s); if(o && typeof o.left==='number' && typeof o.top==='number') _cinePvPos=o; } }catch(e){}   // build 615: user-dragged position (px from top-left); null = auto-corner
 function _cinePvShot(){   // the editor-selected shot, if it has a path worth framing
   if(!editorOpen) return null;
   const all=cineAllShots(); if(!all || !all.length) return null;
@@ -16634,6 +16636,12 @@ function _ensureCinePvPanel(){
   const sld=document.createElement('input'); sld.type='range'; sld.min=0; sld.max=1; sld.step=0.001; sld.value=_cinePvT; sld.title='Scrub through the shot'; sld.style.cssText='flex:1;accent-color:var(--accent);min-width:80px;'; sld.oninput=()=>{ _cinePvT=+sld.value; }; _cinePvSlider=sld;
   const x=document.createElement('button'); x.textContent='\u2715'; x.title='Hide camera preview'; x.style.cssText='flex:0 0 auto;background:none;border:none;color:#9fe6cf;font-size:13px;line-height:1;cursor:pointer;padding:0 2px;'; x.onclick=()=>{ _cinePvOn=false; try{ localStorage.setItem('breach_cinepv','off'); }catch(e){} if(typeof renderEditorFields==='function') renderEditorFields(); };
   hdr.appendChild(lab); hdr.appendChild(sld); hdr.appendChild(x);
+  // build 615: drag the window by its header (anywhere but the scrubber / close button)
+  hdr.style.cursor='grab'; lab.style.cursor='grab'; let _drag=null;
+  hdr.addEventListener('pointerdown', (e)=>{ if(e.target===sld || e.target===x) return; const r=p.getBoundingClientRect(); _drag={ dx:e.clientX-r.left, dy:e.clientY-r.top }; try{ hdr.setPointerCapture(e.pointerId); }catch(_e){} hdr.style.cursor='grabbing'; e.preventDefault(); });
+  hdr.addEventListener('pointermove', (e)=>{ if(!_drag) return; const W=p.offsetWidth, H=p.offsetHeight; let left=Math.max(0, Math.min(innerWidth-W, e.clientX-_drag.dx)), top=Math.max(0, Math.min(innerHeight-H, e.clientY-_drag.dy)); _cinePvPos={ left, top }; p.style.left=left+'px'; p.style.top=top+'px'; p.style.right='auto'; p.style.bottom='auto'; });
+  const _endDrag=()=>{ if(_drag){ _drag=null; hdr.style.cursor='grab'; try{ localStorage.setItem('breach_cinepvpos', JSON.stringify(_cinePvPos)); }catch(_e){} } };
+  hdr.addEventListener('pointerup', _endDrag); hdr.addEventListener('pointercancel', _endDrag);
   const fr=document.createElement('div'); fr.style.cssText='pointer-events:none;width:240px;height:135px;border:1px solid rgba(var(--accent-rgb),0.45);border-top:none;box-sizing:border-box;background:transparent;box-shadow:0 6px 18px rgba(0,0,0,.5);'; _cinePvFrame=fr;
   p.appendChild(hdr); p.appendChild(fr); document.body.appendChild(p); _cinePvPanel=p;
 }
@@ -16671,19 +16679,28 @@ function _renderCinePvWindow(){
   if(!_cinePvFrameAt(shot, _cinePvT)) return;
   const size=renderer.getSize(new THREE.Vector2());
   const W=Math.max(180, Math.min(320, Math.round(size.x*0.26))), H=Math.round(W*9/16), M=20;
-  const dockLeft = !!(editorEl && editorEl.classList.contains('dockLeft'));
-  const X = dockLeft ? (size.x - W - M) : M;   // sit opposite the editor panel
-  _cinePvPanel.style.left = dockLeft ? 'auto' : M+'px'; _cinePvPanel.style.right = dockLeft ? M+'px' : 'auto';
-  _cinePvPanel.style.bottom=M+'px'; _cinePvPanel.style.width=W+'px'; _cinePvFrame.style.width=W+'px'; _cinePvFrame.style.height=H+'px';
+  _cinePvPanel.style.width=W+'px'; _cinePvFrame.style.width=W+'px'; _cinePvFrame.style.height=H+'px';
+  if(_cinePvPos){   // user-placed: clamp into view (in case the window shrank) and use top-left coords
+    const ph=_cinePvPanel.offsetHeight||(H+34);
+    const L=Math.max(0, Math.min(innerWidth-W, _cinePvPos.left)), T=Math.max(0, Math.min(innerHeight-ph, _cinePvPos.top));
+    _cinePvPanel.style.left=L+'px'; _cinePvPanel.style.top=T+'px'; _cinePvPanel.style.right='auto'; _cinePvPanel.style.bottom='auto';
+  } else {   // auto: sit in the bottom corner opposite the editor dock
+    const dockLeft = !!(editorEl && editorEl.classList.contains('dockLeft'));
+    _cinePvPanel.style.left = dockLeft ? 'auto' : M+'px'; _cinePvPanel.style.right = dockLeft ? M+'px' : 'auto';
+    _cinePvPanel.style.bottom=M+'px'; _cinePvPanel.style.top='auto';
+  }
+  // the scissor rect tracks the frame wherever the panel ended up (CSS px; scissor Y measured from the bottom)
+  const fr=_cinePvFrame.getBoundingClientRect();
+  const X=Math.round(fr.left), Yb=Math.round(size.y - fr.bottom), Wr=Math.max(2,Math.round(fr.width)), Hr=Math.max(2,Math.round(fr.height));
   // hide editor-only overlays so the framing reads clean
   const hid=[]; for(const o of [_cinePreviewGroup, (typeof gizmo!=='undefined'?gizmo:null), (typeof selBox!=='undefined'?selBox:null)]){ if(o && o.visible){ o.visible=false; hid.push(o); } }
   const sbh=[]; if(typeof selBoxes!=='undefined' && selBoxes) for(const b of selBoxes){ if(b && b.visible){ b.visible=false; sbh.push(b); } }
-  _cinePvCam.aspect=W/H; _cinePvCam.updateProjectionMatrix();
+  _cinePvCam.aspect=Wr/Hr; _cinePvCam.updateProjectionMatrix();
   const sa=renderer.shadowMap.autoUpdate; renderer.shadowMap.autoUpdate=false;   // sun shadows were already built by the main render this frame
   if(_pvDofOn && !IS_COARSE && typeof ensureDof==='function' && ensureDof()){
-    try{ _renderPvDof(X, M, W, H); }catch(e){ renderer.setRenderTarget(null); renderer.setScissorTest(true); renderer.setViewport(X,M,W,H); renderer.setScissor(X,M,W,H); try{ renderer.render(scene, _cinePvCam); }catch(_e){} }
+    try{ _renderPvDof(X, Yb, Wr, Hr); }catch(e){ renderer.setRenderTarget(null); renderer.setScissorTest(true); renderer.setViewport(X,Yb,Wr,Hr); renderer.setScissor(X,Yb,Wr,Hr); try{ renderer.render(scene, _cinePvCam); }catch(_e){} }
   } else {
-    renderer.setScissorTest(true); renderer.setViewport(X, M, W, H); renderer.setScissor(X, M, W, H);
+    renderer.setScissorTest(true); renderer.setViewport(X, Yb, Wr, Hr); renderer.setScissor(X, Yb, Wr, Hr);
     try{ renderer.render(scene, _cinePvCam); }catch(e){}
   }
   renderer.setScissorTest(false); renderer.setViewport(0,0,size.x,size.y); renderer.setScissor(0,0,size.x,size.y); renderer.setRenderTarget(null);
@@ -16733,7 +16750,8 @@ function loop(){
     player.pitch  = Math.max(-1.5, Math.min(1.5, player.pitch - touchLookDY * tsens));
   }
   touchLookDX = 0; touchLookDY = 0;
-  if(isTouch){ const tu=document.getElementById('touchUI'); if(tu){ const d=(gameOn && !shopOpen && !choosingUpgrade)?'block':'none'; if(tu.style.display!==d) tu.style.display=d; } document.body.classList.toggle('editing', !!editorOpen); }
+  if(isTouch){ const tu=document.getElementById('touchUI'); if(tu){ const d=(gameOn && !shopOpen && !choosingUpgrade)?'block':'none'; if(tu.style.display!==d) tu.style.display=d; } }
+  document.body.classList.toggle('editing', !!editorOpen);   // build 615: editor-state class for all platforms (hides the integrity HUD so it can't sit over the camera preview)
   updateColliderViz(dt);   // debug overlay of collision boxes (toggle in editor)
 
   // advance any model animations (terminal/gun/prop idle loops, etc.) with distance-based LOD: skinned-mesh
