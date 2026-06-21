@@ -8958,17 +8958,20 @@ function _resolveAtt(weaponKey, loadout, catalog){   // pure: aggregate equipped
 // off the authored muzzle point (so the muzzle-slot device lands exactly right; others use per-slot offsets the
 // author can tune). _attMountTransform is pure (unit-tested). Mounts rebuild on weapon switch / equip / muzzle move.
 const _MOUNT_DEFAULT = {
-  optic:    { x:0,    y:0.10,  z:0.30,  s:1 },
-  muzzle:   { x:0,    y:0,     z:-0.10, s:1 },
-  magazine: { x:0,    y:-0.14, z:0.42,  s:1 },
-  tactical: { x:0.05, y:-0.08, z:0.05,  s:1 },
+  optic:    { x:0,    y:0.10,  z:0.30,  rx:0, ry:0, rz:0, s:1 },
+  muzzle:   { x:0,    y:0,     z:-0.10, rx:0, ry:0, rz:0, s:1 },
+  magazine: { x:0,    y:-0.14, z:0.42,  rx:0, ry:0, rz:0, s:1 },
+  tactical: { x:0.05, y:-0.08, z:0.05,  rx:0, ry:0, rz:0, s:1 },
 };
 let mountByWep = {};
 try{ if(savedLevel && savedLevel.mountWep && typeof savedLevel.mountWep==='object') mountByWep=savedLevel.mountWep; }catch(e){}
+let attModels = {};   // build 591: attachment id -> custom GLB url (a scope model is the same scope on any gun; the per-weapon MOUNT positions it)
+try{ if(savedLevel && savedLevel.attModels && typeof savedLevel.attModels==='object') attModels=savedLevel.attModels; }catch(e){}
 function getMount(wep, slot){ mountByWep[wep]=mountByWep[wep]||{}; if(!mountByWep[wep][slot]) mountByWep[wep][slot]=Object.assign({}, _MOUNT_DEFAULT[slot]||{x:0,y:0,z:0,s:1}); return mountByWep[wep][slot]; }
-function _attMountTransform(muzzle, mount){   // pure: gun-space position from the muzzle point + per-slot offset
-  return { x:(muzzle.x||0)+(mount.x||0), y:(muzzle.y||0)+(mount.y||0), z:(muzzle.z||0)+(mount.z||0), s:(mount.s||1) };
+function _attMountTransform(muzzle, mount){   // pure: gun-space transform from the muzzle point + per-slot offset (rotation in degrees)
+  return { x:(muzzle.x||0)+(mount.x||0), y:(muzzle.y||0)+(mount.y||0), z:(muzzle.z||0)+(mount.z||0), rx:(mount.rx||0), ry:(mount.ry||0), rz:(mount.rz||0), s:(mount.s||1) };
 }
+function _applyMountTo(obj, t){ obj.position.set(t.x, t.y, t.z); obj.rotation.set((t.rx||0)*RAD, (t.ry||0)*RAD, (t.rz||0)*RAD); obj.scale.multiplyScalar(t.s||1); }
 function _buildAttMesh(id){
   const a=ATTACHMENTS[id]; if(!a || typeof THREE==='undefined') return null;
   const dark=new THREE.MeshStandardMaterial({ color:0x161b20, roughness:0.55, metalness:0.5 });
@@ -8989,17 +8992,32 @@ function _buildAttMesh(id){
   }
   return g;
 }
-let _attMountGroup=null;
+let _attMountGroup=null, _attMountToken=0;
 function rebuildAttMounts(wep){
   try{
     if(typeof gun==='undefined' || !gun || typeof vmMuzzle==='undefined') return;
     if(!_attMountGroup){ _attMountGroup=new THREE.Group(); gun.add(_attMountGroup); }
     while(_attMountGroup.children.length){ const c=_attMountGroup.children.pop(); _attMountGroup.remove(c); try{ c.traverse(o=>{ if(o.geometry)o.geometry.dispose(); if(o.material&&o.material.dispose)o.material.dispose(); }); }catch(e){} }
+    const myToken=++_attMountToken;   // async GLB loads check this so a newer rebuild discards stale arrivals
     const lo=_attLoadout[wep]||{}, mz=vmMuzzle.position;
-    for(const slot of ATT_SLOTS){ const id=lo[slot]; if(!id) continue; const mesh=_buildAttMesh(id); if(!mesh) continue;
+    for(const slot of ATT_SLOTS){ const id=lo[slot]; if(!id) continue;
       const t=_attMountTransform(mz, getMount(wep, slot));
-      mesh.position.set(t.x, t.y, t.z); mesh.scale.setScalar(t.s);
-      _attMountGroup.add(mesh);
+      const url=(attModels && attModels[id]) ? attModels[id] : '';
+      if(url && typeof loadGLTFCached==='function'){
+        loadGLTFCached(url,
+          (gltf)=>{ if(myToken!==_attMountToken) return;   // a newer rebuild superseded this load
+            try{ const m=THREE.cloneSkinned(gltf.scene);
+              const bb=new THREE.Box3().setFromObject(m), sz=new THREE.Vector3(); bb.getSize(sz); const maxd=Math.max(sz.x,sz.y,sz.z)||1; m.scale.setScalar(0.18/maxd);   // normalize arbitrary units to a sane base size; the mount scale fine-tunes
+              m.traverse(o=>{ if(o.isMesh){ o.castShadow=false; o.frustumCulled=false; o.renderOrder=999; if(o.material) o.material.depthTest=true; } });
+              _applyMountTo(m, t); _attMountGroup.add(m);
+            }catch(e){ const pm=_buildAttMesh(id); if(pm){ _applyMountTo(pm,t); _attMountGroup.add(pm); } }
+          },
+          (err)=>{ if(myToken!==_attMountToken) return; const pm=_buildAttMesh(id); if(pm){ _applyMountTo(pm,t); _attMountGroup.add(pm); }   // load failed -> procedural fallback
+            if(typeof console!=='undefined') console.warn('attachment model load failed for', id, '-', err&&err.message); }
+        );
+      } else {
+        const mesh=_buildAttMesh(id); if(!mesh) continue; _applyMountTo(mesh, t); _attMountGroup.add(mesh);
+      }
     }
   }catch(e){ if(typeof console!=='undefined') console.warn('attachment mounts skipped:', e&&e.message); }
 }
@@ -13800,13 +13818,14 @@ function renderLoadout(){
         +'<div style="flex:1;"><div style="color:#e8fff6;font-size:13px;font-weight:600;">'+a.name+'</div><div style="color:#7fa99c;font-size:11px;">'+a.desc+'</div></div>'
         +'<div style="font-size:12px;font-weight:700;color:'+tc+';">'+tag+'</div></div>');
     }
-    if(_devOn && lo[slot]){ const mm=getMount(wk, slot);
+    if(_devOn && lo[slot]){ const mm=getMount(wk, slot); const _aid=lo[slot];
       c.push('<div style="margin:-2px 0 9px;padding:6px 8px;border:1px dashed #3a4a52;border-radius:6px;background:#0c1418;">');
-      c.push('<div style="font-size:9px;color:#7fa99c;letter-spacing:1px;margin-bottom:3px;">MOUNT \u00b7 '+ATTACHMENTS[lo[slot]].name+'  (offset from muzzle, saves with the level)</div>');
-      for(const ax of [['x','X',-0.6,0.6,0.005],['y','Y',-0.6,0.6,0.005],['z','Z',-0.8,0.8,0.005],['s','Scale',0.2,3,0.05]]){ const val=(mm[ax[0]]!=null?mm[ax[0]]:(ax[0]==='s'?1:0));
+      c.push('<div style="font-size:9px;color:#7fa99c;letter-spacing:1px;margin-bottom:3px;">MOUNT \u00b7 '+ATTACHMENTS[_aid].name+'  (offset from muzzle, saves with the level)</div>');
+      c.push('<div style="display:flex;gap:5px;margin:2px 0 5px;"><input type="text" data-amurl="'+_aid+'" value="'+String(attModels[_aid]||'').replace(/"/g,'&quot;')+'" placeholder="custom model URL (.glb) \u2014 blank = built-in shape" style="flex:1;min-width:0;font-size:10px;padding:3px 5px;background:#0a1116;border:1px solid #2a3a42;border-radius:4px;color:#cfeee2;"><button data-amset="'+_aid+'" style="padding:3px 8px;font-size:10px;border-radius:4px;border:1px solid #3a6a52;background:#13251c;color:#9fe6cf;cursor:pointer;">Set</button><button data-amclear="'+_aid+'" style="padding:3px 7px;font-size:10px;border-radius:4px;border:1px solid #2a3a42;background:#16242b;color:#7fa99c;cursor:pointer;">Clear</button></div>');
+      for(const ax of [['x','X',-0.6,0.6,0.005],['y','Y',-0.6,0.6,0.005],['z','Z',-0.8,0.8,0.005],['rx','Rot X',-180,180,1],['ry','Rot Y',-180,180,1],['rz','Rot Z',-180,180,1],['s','Scale',0.05,5,0.05]]){ const val=(mm[ax[0]]!=null?mm[ax[0]]:(ax[0]==='s'?1:0));
         c.push('<div style="display:flex;align-items:center;gap:6px;margin:2px 0;"><span style="width:40px;font-size:10px;color:#9fe6cf;">'+ax[1]+'</span>'
           +'<input type="range" data-ms="'+slot+'" data-ma="'+ax[0]+'" min="'+ax[2]+'" max="'+ax[3]+'" step="'+ax[4]+'" value="'+val+'" style="flex:1;">'
-          +'<span data-mv="'+slot+'-'+ax[0]+'" style="width:46px;font-size:10px;color:#7fa99c;text-align:right;">'+(+val).toFixed(3)+'</span></div>');
+          +'<span data-mv="'+slot+'-'+ax[0]+'" style="width:46px;font-size:10px;color:#7fa99c;text-align:right;">'+(+val).toFixed(ax[0]==='s'?2:(ax[0][0]==='r'?0:3))+'</span></div>');
       }
       c.push('<button data-mreset="'+slot+'" style="margin-top:3px;padding:3px 8px;font-size:10px;border-radius:5px;border:1px solid #2a3a42;background:#16242b;color:#9fe6cf;cursor:pointer;">Reset to default</button>');
       c.push('</div>');
@@ -13820,6 +13839,8 @@ function renderLoadout(){
   const dg=_loadoutEl.querySelector('#devGive'); if(dg) dg.onclick=()=>{ if(typeof giveCredits==='function') giveCredits(1000); };
   _loadoutEl.querySelectorAll('input[data-ms]').forEach(el=>el.oninput=()=>{ const slot=el.dataset.ms, ax=el.dataset.ma, v=parseFloat(el.value); const mm=getMount(_loadoutWep, slot); mm[ax]=v; const lbl=_loadoutEl.querySelector('[data-mv="'+slot+'-'+ax+'"]'); if(lbl) lbl.textContent=v.toFixed(3); if(typeof rebuildAttMounts==='function') rebuildAttMounts(_loadoutWep); });
   _loadoutEl.querySelectorAll('[data-mreset]').forEach(el=>el.onclick=()=>{ const slot=el.dataset.mreset; if(mountByWep[_loadoutWep]) mountByWep[_loadoutWep][slot]=Object.assign({}, _MOUNT_DEFAULT[slot]); if(typeof rebuildAttMounts==='function') rebuildAttMounts(_loadoutWep); renderLoadout(); });
+  _loadoutEl.querySelectorAll('[data-amset]').forEach(el=>el.onclick=()=>{ const id=el.dataset.amset; const inp=_loadoutEl.querySelector('[data-amurl="'+id+'"]'); const u=(inp&&inp.value||'').trim(); if(u) attModels[id]=u; else delete attModels[id]; if(typeof rebuildAttMounts==='function') rebuildAttMounts(_loadoutWep); });
+  _loadoutEl.querySelectorAll('[data-amclear]').forEach(el=>el.onclick=()=>{ const id=el.dataset.amclear; delete attModels[id]; if(typeof rebuildAttMounts==='function') rebuildAttMounts(_loadoutWep); renderLoadout(); });
 }
 // build 588: testing helpers for the attachment economy. From the browser console:
 //   giveCredits(5000)  -> add credits instantly (updates the HUD + the open loadout screen)
@@ -14012,7 +14033,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 590 · 2026-06-19';
+const BUILD_VERSION = 'build 591 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -17730,6 +17751,7 @@ function serializeLevel(){
     aim:     { state: Object.assign({}, editorTargets.aim.state) },
     aimWep:  JSON.parse(JSON.stringify(aimByWep)),
     mountWep: (typeof mountByWep!=='undefined') ? JSON.parse(JSON.stringify(mountByWep)) : {},
+    attModels: (typeof attModels!=='undefined') ? JSON.parse(JSON.stringify(attModels)) : {},
     station: { url: stationModelUrl, state: Object.assign({}, editorTargets.station.state) },
     player:  { url: playerModelCfg.url, thumb: playerModelCfg.thumb||'', state: Object.assign({}, editorTargets.player.state), clips: Object.assign({}, playerModelCfg.clips), clipSpeed: Object.assign({}, playerModelCfg.clipSpeed||{}), clipHold: Object.assign({}, playerModelCfg.clipHold||{}), clipInPlace: Object.assign({}, playerModelCfg.clipInPlace||{}) },
     world:   Object.assign({}, worldCfg),
