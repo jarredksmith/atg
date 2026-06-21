@@ -9512,7 +9512,7 @@ let _puId = 1;
 // Editor-placed pickups (weapons/ammo/health/buffs). The live pads are built from these at deploy; if a
 // level has none, spawnPowerups() falls back to the auto buff layout. Markers are an editor-only preview.
 let selPickup = -1;   // editor: index of the pickup spot grabbed by the gizmo (-1 = none)
-let pickupSpots = (savedLevel && Array.isArray(savedLevel.pickups)) ? savedLevel.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health', item:s.item, y:+s.y||0, rx:+s.rx||0, ry:+s.ry||0, rz:+s.rz||0, scale:(s.scale!=null?+s.scale:1) })) : [];
+let pickupSpots = (savedLevel && Array.isArray(savedLevel.pickups)) ? savedLevel.pickups.map(s=>({ x:+s.x||0, z:+s.z||0, kind:s.kind||'health', item:s.item, y:+s.y||0, rx:+s.rx||0, ry:+s.ry||0, rz:+s.rz||0, scale:(s.scale!=null?+s.scale:1), interact:!!s.interact })) : [];
 let audioZones = (savedLevel && Array.isArray(savedLevel.audioZones)) ? savedLevel.audioZones.map(z=>({ x:+z.x||0, z:+z.z||0, r:+z.r||14, url:z.url||'', vol:(z.vol!=null?+z.vol:0.8), loop:z.loop!==false })) : [];
 // DEATH zones: stepping inside kills the player (lava, pits, out-of-bounds). { x,z,r, y, h }. The zone is a
 // horizontal LETHAL PLANE at height y (the surface where placed) with a band h tall above it — so you can jump
@@ -10769,7 +10769,7 @@ function spawnPowerups(){
   const spots = (pickupSpots && pickupSpots.length) ? pickupSpots : powerupLayout();
   for(const spot of spots){
     const mesh = buildPowerupMesh(spot.kind, spot.item); _applyPickupXform(mesh, spot); scene.add(mesh);
-    powerups.push({ id:_puId++, x:spot.x, z:spot.z, kind:spot.kind, item:spot.item, ready:true, cd:0, mesh });
+    powerups.push({ id:_puId++, x:spot.x, z:spot.z, kind:spot.kind, item:spot.item, interact:!!spot.interact, ready:true, cd:0, mesh });
   }
 }
 function applyPowerupLocal(kind, item){
@@ -10796,7 +10796,7 @@ function updatePowerups(dt){
     if(p.mesh){ p.mesh.visible=true; _animatePickup(p.mesh, dt); }
     let near=null, nd=1e9;
     for(const pl of players){ const d=Math.hypot(pl.pos.x-p.x, pl.pos.z-p.z); if(d<nd){ nd=d; near=pl; } }
-    if(near && nd < 2.0){ grantPowerup(near, p.kind, p.item); p.ready=false; p.cd=((POWERUP_KINDS[p.kind]&&POWERUP_KINDS[p.kind].key)||p.kind==='item')?1e9:POWERUP_COOLDOWN; if(p.mesh) p.mesh.visible=false; }   // keys are one-shot
+    if(near && nd < 2.0 && !(p.interact && near.id===NET.myId)){ grantPowerup(near, p.kind, p.item); p.ready=false; p.cd=((POWERUP_KINDS[p.kind]&&POWERUP_KINDS[p.kind].key)||p.kind==='item')?1e9:POWERUP_COOLDOWN; if(p.mesh) p.mesh.visible=false; }   // keys are one-shot; interact pickups wait for the local player's E (remotes still auto-collect)
   }
 }
 
@@ -13678,6 +13678,13 @@ function turretFire(){
   tracer(origin,endPoint); muzzleFlashAt(origin);
 }
 let nearTarget = null;    // what the player is standing next to
+function _pickupLabel(p){   // build 616: human-readable name for an interact-pickup prompt
+  if(!p) return 'item';
+  if(p.kind==='item'){ const it=(typeof invCatalog!=='undefined') && invCatalog[p.item]; return (it && it.name) || 'item'; }
+  if(typeof WEAPONS!=='undefined' && WEAPONS[p.kind]) return WEAPONS[p.kind].name || p.kind;
+  const k=POWERUP_KINDS[p.kind]; if(k) return k.key ? keyDisplayName(k.key) : (k.label || p.kind);
+  return p.kind;
+}
 
 function checkProximity(){
   if(shopOpen) return;
@@ -13727,6 +13734,11 @@ function checkProximity(){
     for(const g of turretModels){ const d=Math.hypot(player.pos.x-g.position.x, player.pos.z-g.position.z); if(d<bd){ bd=d; best=g; } }
     if(best) nearTarget = { type:'turret', turret:best };
   }
+  if(!nearTarget){   // build 616: pickups flagged "require interact" wait here for E instead of auto-collecting
+    let best=null, bd=2.2;
+    for(const p of powerups){ if(!p || !p.interact || !p.ready) continue; const d=Math.hypot(player.pos.x-p.x, player.pos.z-p.z); if(d<bd){ bd=d; best=p; } }
+    if(best) nearTarget = { type:'pickup', pu:best };
+  }
   const prompt = $('prompt');
   if(nearTarget){
     if(nearTarget.type==='station'){
@@ -13738,6 +13750,8 @@ function checkProximity(){
       else prompt.innerHTML = `<b>E</b> Activate`;
     } else if(nearTarget.type==='turret'){
       prompt.innerHTML = `<b>E</b> Man the turret`;
+    } else if(nearTarget.type==='pickup'){
+      prompt.innerHTML = `<b>E</b> Pick up \u2014 ${_pickupLabel(nearTarget.pu)}`;
     } else {
       prompt.innerHTML = `SUPPLY CACHE — <b>E</b> Open`;
     }
@@ -13752,6 +13766,11 @@ function interact(){
   if(heldProp){ releaseHeld(); return; }   // carrying a prop -> drop it
   if(shopOpen){ closeShop(); return; }
   if(!nearTarget){ tryGrabProp(); return; }   // nothing to use -> try to pick up a prop
+  if(nearTarget.type==='pickup'){
+    const p=nearTarget.pu;
+    if(p && p.ready){ grantPowerup({ id:NET.myId }, p.kind, p.item); p.ready=false; p.cd=((POWERUP_KINDS[p.kind]&&POWERUP_KINDS[p.kind].key)||p.kind==='item')?1e9:POWERUP_COOLDOWN; if(p.mesh) p.mesh.visible=false; nearTarget=null; const pr=$('prompt'); if(pr) pr.style.display='none'; }
+    return;
+  }
   if(nearTarget.type==='station'){
     // direct purchase, no menu
     const w=W();
@@ -14166,7 +14185,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 615 · 2026-06-19';
+const BUILD_VERSION = 'build 616 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -18046,7 +18065,7 @@ function serializeLevel(){
     turrets: turretModels.map(_turretOpts),
     spawns:  spawnMarkers.map(g=>{ const m=g.userData.mark; return { t:[g.position.x, g.position.z], mode:m.mode, radius:m.radius, detect:m.detect, face:m.face, route:m.route.map(p=>[p.x,p.z]), loop:m.routeLoop, type:m.type, wave:m.wave }; }),
     pickupsOn: pickupsOn,
-    pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind, ...(s.item!=null?{item:s.item}:{}), ...(s.y?{y:s.y}:{}), ...(s.rx?{rx:s.rx}:{}), ...(s.ry?{ry:s.ry}:{}), ...(s.rz?{rz:s.rz}:{}), ...(s.scale!=null&&s.scale!==1?{scale:s.scale}:{}) })),
+    pickups: pickupSpots.map(s=>({ x:+s.x, z:+s.z, kind:s.kind, ...(s.item!=null?{item:s.item}:{}), ...(s.y?{y:s.y}:{}), ...(s.rx?{rx:s.rx}:{}), ...(s.ry?{ry:s.ry}:{}), ...(s.rz?{rz:s.rz}:{}), ...(s.scale!=null&&s.scale!==1?{scale:s.scale}:{}), ...(s.interact?{interact:1}:{}) })),
     loot: lootSpots.map(s=>({ x:+s.x, y:+(s.y||0), z:+s.z, items:(s.items||[]).slice(), glowColor:(s.glowColor!=null?+s.glowColor:0xffd166), glowI:(s.glowI!=null?+s.glowI:8) })),
     extractFx: { color: extractFxCfg.color, opacity: extractFxCfg.opacity, height: extractFxCfg.height, pillar: extractFxCfg.pillar },
     audioZones: audioZones.map(z=>({ x:+z.x, z:+z.z, r:+z.r, url:z.url||'', vol:+z.vol, loop:!!z.loop })),
@@ -19053,6 +19072,10 @@ function _pickupXformPanel(host, sp, i){
   mkXZ('X', ()=>sp.x, v=>sp.x=v); mkXZ('Z', ()=>sp.z, v=>sp.z=v);
   const reset=document.createElement('button'); reset.textContent='Reset transform'; reset.style.cssText='font-size:10px;padding:2px 8px;margin-left:auto;'; reset.onclick=()=>{ if(typeof pushUndoSnapshot==='function') pushUndoSnapshot(); sp.y=0; sp.rx=0; sp.ry=0; sp.rz=0; sp.scale=1; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers(); renderEditorFields(); };
   xzRow.appendChild(reset); panel.appendChild(xzRow);
+  { const r=document.createElement('label'); r.style.cssText='grid-column:1/4;display:flex;align-items:center;gap:7px;font-size:11px;color:#9fe6cf;margin-top:3px;cursor:pointer;';
+    const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!!sp.interact; cb.style.cssText='width:14px;height:14px;accent-color:var(--accent);cursor:pointer;';
+    cb.onchange=()=>{ if(typeof pushUndoSnapshot==='function') pushUndoSnapshot(); sp.interact=cb.checked; };
+    r.appendChild(cb); r.appendChild(document.createTextNode('Require interact (press E to pick up)')); panel.appendChild(r); }
   host.appendChild(panel);
 }
 function renderInvItems(host){
