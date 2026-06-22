@@ -358,28 +358,28 @@ const SERVICES = [
   {
     id:'stack', num:'02', name:'Stack Testing', featured:true,
     short:'Stack Testing',
-    tagline:'The largest stack testing firm in North America, on every genset on this campus.',
+    tagline:'The largest stack testing firm in North America, on every stack on this campus, the generators and the combustion turbine alike.',
     bullets:[
-      'Commissioning and compliance testing for the entire generator fleet, with crews run in parallel so testing never becomes the critical path.',
-      'NSPS Subpart IIII and RICE NESHAP (Subpart ZZZZ) programs for emergency and non-emergency engines.',
+      'Reference-method source testing on the generator and turbine stacks: M1-4, M7E NOx, M10 CO, M25A VOC, and M5 / 202 PM.',
+      'Combustion turbine emissions testing under NSPS Subpart KKKK on simple and combined cycle units.',
       'Crews mobilize from the nearest of 60+ offices across the US and Canada. Capacity scales with your build schedule.'
     ],
-    tags:['EPA M1-4','M7E NOx','M10 CO','M25A VOC','M5/202 PM'],
-    anchor:[28, 11, -2],
-    cam:{ target:[29, 5, 0], theta:1.55, phi:1.12, radius:52 }
+    tags:['EPA M1-4','M7E NOx','M10 CO','M25A VOC','NSPS KKKK'],
+    anchor:[24, 14, -30],
+    cam:{ target:[24, 7, -28], theta:1.42, phi:1.03, radius:68 }
   },
   {
-    id:'turbine', num:'03', name:'Engine & Turbine Testing',
-    short:'Engine & Turbine',
-    tagline:'Source and performance testing across every prime mover on site, from backup gensets to the turbines bringing primary power online.',
+    id:'generator', num:'03', name:'Generator Testing',
+    short:'Generator Testing',
+    tagline:'The backup generator fleet is the prime mover at a data center. We commission and clear it so testing never becomes the critical path.',
     bullets:[
-      'Combustion turbine emissions testing under NSPS Subpart KKKK, covering NOx, CO, and SO2 on simple and combined cycle units.',
-      'Performance and commissioning testing, including power output, heat rate, and emissions verification before a unit carries load.',
-      'One crew for the full fleet, reciprocating engines and turbines alike, so primary and backup power clear compliance on the same schedule.'
+      'Commissioning and compliance testing for the entire generator fleet, with crews run in parallel and built around your energization date.',
+      'NSPS Subpart IIII and RICE NESHAP (Subpart ZZZZ) programs for emergency and non-emergency engines.',
+      'Performance verification, power output, and emissions cleared before a unit carries load.'
     ],
-    tags:['NSPS KKKK','Turbine NOx','CO / SO2','Performance','Commissioning'],
-    anchor:[21, 11, -54],
-    cam:{ target:[21, 6, -54], theta:0.95, phi:1.10, radius:50 }
+    tags:['NSPS IIII','RICE ZZZZ','Commissioning','Speed to Power'],
+    anchor:[28, 11, 6],
+    cam:{ target:[29, 5, 4], theta:1.58, phi:1.14, radius:46 }
   },
   {
     id:'cems', num:'04', name:'CEMS & DAS',
@@ -447,7 +447,8 @@ const INTRO = {
 
 /* extra markers that point at the same service from another spot */
 const EXTRA_MARKERS = [
-  { id:'ldar', label:'SF6 / OGI', anchor:[-75, 9, 45] }
+  { id:'ldar', label:'SF6 / OGI', anchor:[-75, 9, 45] },
+  { id:'stack', label:'Combustion Turbine', anchor:[20, 8, -58] }
 ];
 
 /* =========================================================================
@@ -556,19 +557,27 @@ for(let i=0;i<8;i++){
   cyl(0.72, 0.72, 0.5, 0x6e7a86, 26.6, 10.2, z);                 // rain cap
 }
 
-/* ---------- combustion turbine package (primary power) ---------- */
-box(22, 0.25, 30, 0x1f2d3c, 22, 0.13, -54);                     // concrete pad
-box(8, 5, 17, 0x46586a, 21, 2.6, -54);                          // acoustic enclosure
-box(8.3, 0.7, 17.3, 0x3a4a5c, 21, 5.25, -54);                   // enclosure roof cap
-box(0.4, 4, 3, 0xdd6e0c, 16.8, 2.5, -54,                        // ATG accent door, west face
+/* ---------- combustion turbine package (a source under Stack Testing) ---------- */
+box(34, 0.25, 16, 0x1f2d3c, 18, 0.13, -58);                     // concrete pad
+/* inlet air filter house (west, elevated + louvered) */
+box(7, 4, 9, 0x2f3e4e, 4, 6.2, -58);                            // filter house body
+box(7.3, 0.7, 9.3, 0x263340, 4, 8.5, -58);                      // filter house cap
+for(let i=0;i<4;i++) box(0.4, 0.7, 8, 0x55677a, 0.6, 5.0 + i*1.0, -58, { shadow:false }); // louvers (straddle face)
+[[1.6,-62],[1.6,-54],[6.4,-62],[6.4,-54]].forEach(p => box(1.0, 4.2, 1.0, 0x33414f, p[0], 2.1, p[1])); // legs
+box(4, 3, 5, 0x3a4c5f, 10, 5.5, -58);                           // inlet transition duct
+/* turbine + generator enclosure (long acoustic hall) */
+box(16, 5.5, 8, 0x46586a, 20, 2.75, -58);                       // enclosure
+box(16.3, 0.8, 8.3, 0x3a4a5c, 20, 5.65, -58);                   // roof cap
+box(4, 4, 0.4, 0xdd6e0c, 20, 2.5, -54,                          // accent door straddles south face
     { mat:{ emissive:0x8a4206, emissiveIntensity:0.3 }, shadow:false });
-box(6, 8, 6, 0x3a4c5f, 21, 4, -65);                             // inlet filter house
-box(6.3, 0.7, 6.3, 0x2f3e4e, 21, 8.35, -65);                    // filter house cap
-cyl(1.2, 1.4, 15, 0xb9c4ce, 21, 9.5, -43);                      // exhaust stack
-cyl(1.6, 1.6, 0.6, 0x6e7a86, 21, 17.3, -43);                    // stack cap
-box(4.5, 3.2, 4.5, 0x39495b, 31, 1.6, -54);                     // step-up transformer
-cyl(0.16, 0.16, 2.2, 0xb9c4ce, 30, 4.3, -55, 8);                // bushings
-cyl(0.16, 0.16, 2.2, 0xb9c4ce, 32, 4.3, -53, 8);
+/* exhaust: collector -> silencer -> stack (east) */
+box(5, 4.5, 6, 0x4a5a6a, 30, 5, -58);                           // exhaust collector
+cyl(2.3, 2.5, 6, 0x55677a, 33, 9, -58, 16);                     // exhaust silencer
+cyl(1.3, 1.5, 17, 0xb9c4ce, 33, 20, -58, 16);                   // exhaust stack
+cyl(1.7, 1.7, 0.5, 0x6e7a86, 33, 28.4, -58, 16);                // stack cap
+box(4.5, 3.2, 4.5, 0x39495b, 20, 1.6, -49);                     // step-up transformer
+cyl(0.16, 0.16, 2.2, 0xb9c4ce, 19, 4.3, -49, 8);                // bushings
+cyl(0.16, 0.16, 2.2, 0xb9c4ce, 21, 4.3, -49, 8);
 
 /* ---------- exhaust plumes (shown when the matching source service is active) ---------- */
 const smokeTex = (function(){
@@ -643,7 +652,7 @@ function makeSmoke(emitters, opts){
 const gensetEmitters = [];
 for(let s = 0; s < 8; s++) gensetEmitters.push({ x: 26.6, y: 10.6, z: -33 + s * 9.5 });
 const gensetSmoke  = makeSmoke(gensetEmitters, { per: 7, rise: 9.5, peak: 0.30 });
-const turbineSmoke = makeSmoke([{ x: 21, y: 17.6, z: -43 }],
+const turbineSmoke = makeSmoke([{ x: 33, y: 28.5, z: -58 }],
   { per: 11, rise: 15, peak: 0.26, startScale: [1.0, 0.5], endScale: [4.5, 1.8], driftX: [2.0, 2.5] });
 
 /* ---------- wind field: horizontal wisps drifting across a point (ambient monitoring) ---------- */
@@ -952,8 +961,8 @@ function selectService(id, userClick){
   renderService(s);
   syncUI();
   expandCard();
-  gensetSmoke.active  = (id === 'stack');
-  turbineSmoke.active = (id === 'turbine');
+  gensetSmoke.active  = (id === 'stack' || id === 'generator');
+  turbineSmoke.active = (id === 'stack');
   windAmbient.active  = (id === 'ambient');
   if(userClick && tour.on){
     tour.idx = SERVICES.indexOf(s);
