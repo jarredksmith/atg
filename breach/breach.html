@@ -10716,7 +10716,7 @@ function buildPowerupMesh(kind, itemId){
   const pad = new THREE.Mesh(new THREE.CylinderGeometry(1.15,1.15,0.12,20), new THREE.MeshStandardMaterial({ color:k.c, emissive:k.c, emissiveIntensity:0.6, transparent:true, opacity:0.55, roughness:0.4 }));
   pad.position.y=0.06; g.add(pad); g.userData.pad=pad; pad.visible=(typeof worldCfg==='undefined' || worldCfg.pickupBase!==false);   // build 595: base disc is toggleable
   const pm = pickupModels[kind];
-  if(pm && pm.url){
+  if(pm && pm.url && kind!=='item'){   // build 618: inventory-item pickups use each item's OWN model (invCatalog), never a kind-wide override
     // a scaled custom GLB instead of the default icon (bobs/spins via g.userData.icon)
     const holder=new THREE.Group(); holder.position.y=1.1; g.add(holder); g.userData.icon=holder;
     if(typeof loadGLTFCached==='function') loadGLTFCached(pm.url, (gltf)=>{ try{ const m=(THREE.cloneSkinned?THREE.cloneSkinned(gltf.scene):gltf.scene.clone(true)); m.scale.setScalar(pm.scale||1); m.traverse(o=>{ if(o.isMesh) o.castShadow=true; o.raycast=()=>{}; }); holder.clear(); holder.add(m); if(typeof playModelAnimations==='function') playModelAnimations(m, gltf); }catch(e){} }, ()=>{});
@@ -14185,7 +14185,7 @@ function pickGamepad(pads){
   return (best && bestScore>-1e8) ? best : null;
 }
 // === BUILD VERSION — bumped every iteration so you can confirm you're on the latest file ===
-const BUILD_VERSION = 'build 617 · 2026-06-19';
+const BUILD_VERSION = 'build 618 · 2026-06-19';
 // Live diagnostic — toggle with `, switch active pad with ]. Lists every device the browser reports.
 function updatePadDebug(pads, gp){
   const el = $('padDebug'); if(!el || el.style.display==='none') return;
@@ -19744,7 +19744,7 @@ function renderEditorFields(){
       ninp.onchange=()=>{ pushUndoSnapshot(); const v=ninp.value.trim(); if(v) keyNames[kc]=v; else delete keyNames[kc]; };
       nrow.appendChild(nsp); nrow.appendChild(ninp); pkHost.appendChild(nrow);
     }
-    { const pm = pickupModels[newPickupKind] || (pickupModels[newPickupKind]={ url:'', scale:1 });
+    if(newPickupKind!=='item'){ const pm = pickupModels[newPickupKind] || (pickupModels[newPickupKind]={ url:'', scale:1 });
       const mrow=document.createElement('div'); mrow.style.cssText='display:flex;gap:6px;margin-top:6px;align-items:center;';
       const url=document.createElement('input'); url.type='text'; url.placeholder=newPickupKind+' model .glb URL (optional)'; url.value=pm.url||''; url.style.cssText='flex:1;min-width:0;background:#0c1418;border:1px solid #2a3a42;color:#cfeee2;border-radius:4px;padding:3px 6px;font-size:12px;';
       url.onchange=()=>{ pushUndoSnapshot(); pm.url=url.value.trim(); if(typeof refreshPickupMarkers==='function') refreshPickupMarkers(); };
@@ -19755,6 +19755,8 @@ function renderEditorFields(){
       const pkPsHead=document.createElement('div'); pkPsHead.className='hint'; pkPsHead.style.margin='8px 0 3px'; pkPsHead.innerHTML='<b>\ud83d\udd0d Search free models</b> \u2014 Poly Pizza / Sketchfab, click to use for this pickup'; pkHost.appendChild(pkPsHead);
       const pkPsHost=document.createElement('div'); pkHost.appendChild(pkPsHost);
       renderModelSearch(pkPsHost, (m, st)=>{ url.value=m.glb; pushUndoSnapshot(); pm.url=m.glb; if(typeof refreshPickupMarkers==='function') refreshPickupMarkers(); if(typeof creditAsset==='function') creditAsset(m.attribution); if(st) st.textContent='Using "'+m.title+'" \u2014 credit: '+(m.attribution||''); }, { placeholder:'e.g. medkit, ammo box, battery' });
+    } else {
+      hint(pkHost,'','6px 0 2px').innerHTML='Inventory-item pads use <b>each item\u2019s own model</b> \u2014 set it per item in the <b>Inventory items</b> section. Choose which item this pad grants below; different items can look different.';
     }
     if(pickupSpots.length){
       hint(pkHost,'','3px 0 2px').textContent = pickupSpots.length+' placed:';
