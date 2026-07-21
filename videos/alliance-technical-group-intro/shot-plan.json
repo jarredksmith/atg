@@ -1,0 +1,36 @@
+{
+  "category": "kinetic-type",
+  "duration_s": 10,
+  "fps": 30,
+  "canvas": { "w": 1920, "h": 1080, "aspect": "16:9" },
+  "style": "Calm, premium, confident. Typographic minimalism on a deep blue-black field: a single all-caps letterspaced lockup, cinematic blur-to-sharp emergence, one hairline-rule accent; no photos or stock visuals; subtle vignette acceptable. Dark-bg optical compensation applies (light-on-dark reads heavier; add slight letter-spacing).",
+  "palette": ["#EDF1F6", "#8FA8C8", "#566170", "#0B0E13"],
+  "font": "Montserrat",
+  "beats": [0.5, 5.0, 8.8],
+  "export": "mp4",
+  "brief": "Over a deep blue-black field, ALLIANCE TECHNICAL GROUP materializes as a single letterspaced all-caps lockup: a cinematic fade_blur entrance whose first glimmer lands by ~0.5s, sharpening as the tracking settles until fully readable by ~2s, then holding with a barely perceptible hold_breath drift while a subtle ambient music bed plays underneath; at ~5.0s the one pattern-interrupt arrives — a hairline rule sweeps beneath the name (underline_sweep) with a faint glow lift on ALLIANCE — and from ~8.8s type and music resolve together in a quiet fade to black. The single dominant motion idea is emergence-into-focus: one continuous blur-to-sharp fade-and-settle; the music is a bed, not a beat-grid driver, so the beats (0.5s / 5.0s / 8.8s, in seconds) are gentle accents only. Decisions resolved autonomously for this headless run, per BRIEF.md and defaults: kinetic-type over logo-reveal (no logo asset exists and the brief mandates a purely typographic dark treatment); 1920x1080 @ 30fps for 10s in English per BRIEF.md; Montserrat from the HF embed list for a deterministic offline render; the name rendered as an all-caps lockup of 'Alliance Technical Group' (BRIEF.md title-cases the message; the user's prose was lowercase); and the subtle BGM bed emitted as an audio asset_need for media-use resolve — kind 'audio' extends the IR's illustrative kind list per this run's dispatch instructions.",
+  "asset_needs": [
+    {
+      "role": "bgm",
+      "kind": "audio",
+      "query": "subtle ambient minimal music bed, calm premium confident, soft pads, no drums",
+      "treatment": "none",
+      "usable_length_s": 10,
+      "notes": "Background bed only, mixed low under an unnarrated title piece; ~10s usable length (loop or trim with fades is fine); subtle/ambient/minimal mood; NOT a beat-grid driver, so avoid hard rhythmic hits; gentle fade-out at the tail to land with the closing fade."
+    }
+  ],
+  "content": {
+    "scenes": [
+      {
+        "id": "title",
+        "start": 0,
+        "end": 10,
+        "text": "Alliance Technical Group",
+        "emphasis_words": ["Alliance"],
+        "emotion": "calm, premium confidence",
+        "motion": "fade_blur entrance with slow letter-spacing settle, first glimmer by ~0.5s, fully readable by ~2s; hold_breath micro-drift through the hold; pattern-interrupt at ~5.0s: underline_sweep hairline beneath the lockup plus a faint glow lift on the emphasis word; fade_out over the final ~1.2s",
+        "beats": [0.5, 5.0, 8.8]
+      }
+    ]
+  }
+}
