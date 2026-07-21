@@ -3,8 +3,41 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=1920, height=1080" />
-    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <title>Alliance Technical Group — Intro</title>
+    <!-- GSAP 3.14.2 vendored locally (deterministic, no render-time network) -->
+    <script src="assets/vendor/gsap.min.js"></script>
     <style>
+      /*
+        Deterministic Montserrat: local frozen woff2 (variable font, latin subset).
+        The HF pre-bundle ships Montserrat 400/700/900 only; the plan locks the
+        lockup at weights 600 vs 300, so the true cuts are embedded locally
+        (offline, no render-time network) per the builder contract's
+        "prefer local @font-face (.woff2)" path.
+      */
+      @font-face {
+        font-family: "Montserrat";
+        font-style: normal;
+        font-weight: 300;
+        font-display: block;
+        src: url("assets/fonts/montserrat-vf-latin.woff2") format("woff2");
+      }
+      @font-face {
+        font-family: "Montserrat";
+        font-style: normal;
+        font-weight: 600;
+        font-display: block;
+        src: url("assets/fonts/montserrat-vf-latin.woff2") format("woff2");
+      }
+
+      /* Palette (single source of truth — envelope) */
+      :root {
+        --ink: #edf1f6;
+        --accent: #8fa8c8; /* rgb(143, 168, 200) */
+        --secondary: #566170;
+        --bg: #0b0e13;
+        --lift: #131a24;
+      }
+
       * {
         margin: 0;
         padding: 0;
@@ -16,15 +49,162 @@
         width: 1920px;
         height: 1080px;
         overflow: hidden;
-        background: #000;
+        background: var(--bg);
       }
       body {
-        font-family: "Inter", sans-serif;
+        font-family: "Montserrat", sans-serif;
       }
-      code,
-      pre,
-      .monospace {
-        font-family: "JetBrains Mono", monospace;
+
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--bg);
+      }
+
+      /* ── Static dark field (frame 0 → 10.0s, never animated) ─────────── */
+      #field {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        background: var(--bg);
+      }
+      /* barely perceptible depth pool behind the lockup */
+      #field-lift {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(
+          ellipse 62% 48% at 50% 47%,
+          var(--lift) 0%,
+          rgba(19, 26, 36, 0) 62%
+        );
+        opacity: 0.35;
+      }
+
+      /* ── Title clip: full-duration flex-centered stage ────────────────
+         Lockup optical center at x 50% / y 47% (≈507.6px from top):
+         content box = 1080 − 64.8 bottom padding → its center = 507.6px. */
+      #title {
+        position: absolute;
+        inset: 0;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 130px 64.8px; /* 130px safe margin; bottom offset → 47% */
+      }
+
+      /* breath-scale target (shrink-wraps the type; underline hangs below) */
+      #lockup-wrap {
+        position: relative;
+      }
+
+      /* Settled end-state is the CSS ground truth: 62px, tracking 0.22em.
+         padding-left balances the trailing letter-space so the glyphs sit
+         optically centered. Fit: settled width ≈ 1250px ≤ 1660px safe. */
+      #lockup {
+        font-family: "Montserrat", sans-serif;
+        font-size: 62px;
+        font-weight: 300;
+        line-height: 1;
+        white-space: nowrap;
+        letter-spacing: 0.22em;
+        padding-left: 0.22em;
+        color: var(--ink);
+      }
+      .word {
+        display: inline-block;
+        filter: blur(0px);
+      }
+      /* per-glyph spans (built synchronously at init) — the tracking settle is
+         a per-glyph x-spread converging to 0, per the lint contract (animating
+         letter-spacing itself snaps to device pixels under seek-by-frame). */
+      .ch {
+        display: inline-block;
+      }
+      #word-alliance {
+        font-weight: 600;
+        opacity: 1;
+        /* glow ground state: accent halo at alpha 0 (tween raises it 5.0–6.6s) */
+        text-shadow: 0 0 32px rgba(143, 168, 200, 0);
+      }
+      #word-technical,
+      #word-group {
+        font-weight: 300;
+        opacity: 0.85;
+      }
+
+      /* 2px gradient hairline, 60% of the settled lockup width, centered,
+         26px below the type; swept scaleX 0→1 from the left at 4.90s. */
+      #underline {
+        position: absolute;
+        top: calc(100% + 26px);
+        left: 20%;
+        width: 60%;
+        height: 2px;
+        background: linear-gradient(90deg, transparent, var(--accent) 50%, transparent);
+        opacity: 0.9;
+        transform: scaleX(0);
+        transform-origin: left center;
+      }
+
+      /* ── Polish: vignette (registry component `vignette`, intensity 0.25) ── */
+      #hf-vignette {
+        --vignette-color: rgba(0, 0, 0, 0.25);
+        background: radial-gradient(
+          var(--vignette-shape, ellipse) at center,
+          transparent var(--vignette-size, 45%),
+          var(--vignette-color, rgba(0, 0, 0, 0.7)) var(--vignette-edge, 100%)
+        );
+      }
+
+      /* ── Polish: film grain (registry component `grain-overlay`, opacity 0.05;
+             anti-banding on the near-black field). Customized: iteration count
+             made FINITE (20 × 0.5s = exactly 10.0s) per the HF determinism
+             contract — the registry snippet ships `infinite`. ── */
+      @keyframes hf-grain-noise {
+        0%,
+        100% {
+          transform: translate(0, 0);
+        }
+        10% {
+          transform: translate(-5%, -5%);
+        }
+        20% {
+          transform: translate(-10%, 5%);
+        }
+        30% {
+          transform: translate(5%, -10%);
+        }
+        40% {
+          transform: translate(-5%, 15%);
+        }
+        50% {
+          transform: translate(-10%, 5%);
+        }
+        60% {
+          transform: translate(15%, 0);
+        }
+        70% {
+          transform: translate(0, 10%);
+        }
+        80% {
+          transform: translate(-15%, 0);
+        }
+        90% {
+          transform: translate(10%, 5%);
+        }
+      }
+      #grain-overlay .grain-texture {
+        position: absolute;
+        top: -50%;
+        left: -50%;
+        width: 200%;
+        height: 200%;
+        background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+        opacity: 0.05;
+        animation: hf-grain-noise 0.5s steps(1) 20 both;
       }
     </style>
   </head>
@@ -34,26 +214,172 @@
       data-composition-id="main"
       data-start="0"
       data-duration="10"
+      data-fps="30"
       data-width="1920"
       data-height="1080"
     >
-      
-      
+      <!-- static field: bg + radial lift (non-clip → visible frame 0 → 10.0s) -->
+      <div id="field">
+        <div id="field-lift"></div>
+      </div>
 
-      <!--
-        Add your clips here. Example:
-        <div id="title" class="clip" data-start="0" data-duration="5" data-track-index="1"
-             style="font-size: 64px; color: #fff; padding: 40px">
-          Hello World
+      <!-- the single kinetic-type scene: one full-duration clip -->
+      <section id="title" class="clip" data-start="0" data-duration="10" data-track-index="1">
+        <div id="lockup-wrap">
+          <h1 id="lockup">
+            <span id="word-alliance" class="word">ALLIANCE</span>
+            <span id="word-technical" class="word">TECHNICAL</span>
+            <span id="word-group" class="word">GROUP</span>
+          </h1>
+          <div id="underline"></div>
         </div>
-      -->
+      </section>
+
+      <!-- polish overlays (registry components; static, above content) -->
+      <div
+        id="hf-vignette"
+        style="
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          pointer-events: none;
+          z-index: 90;
+        "
+      ></div>
+      <div
+        id="grain-overlay"
+        style="
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          pointer-events: none;
+          z-index: 100;
+        "
+      >
+        <div class="grain-texture"></div>
+      </div>
+
+      <!-- BGM: framework-owned playback (first 10s of the 30s WAV).
+           Base volume 0.55; fades are volume keyframes on the timeline. -->
+      <audio
+        id="bgm"
+        src="assets/bgm/track.wav"
+        data-start="0"
+        data-duration="10"
+        data-track-index="10"
+        data-volume="0.55"
+      ></audio>
     </div>
 
     <script>
+      // Single paused timeline — deterministic, seek-driven (no clocks, no
+      // randomness, no network). All entrances are explicit fromTo()s whose
+      // end values equal the CSS ground state.
       window.__timelines = window.__timelines || {};
+
+      // Split the words into per-glyph spans (synchronous, deterministic).
+      // Glyph positions are indexed INCLUDING the inter-word spaces so a
+      // uniform per-gap spread exactly reproduces uniform letter-spacing.
+      const glyphs = []; // { el, idx }
+      let glyphIdx = 0;
+      gsap.utils.toArray(".word").forEach((word, wi) => {
+        if (wi > 0) glyphIdx += 1; // the literal space between word spans
+        const text = word.textContent;
+        word.textContent = "";
+        for (const ch of text) {
+          const s = document.createElement("span");
+          s.className = "ch";
+          s.textContent = ch;
+          word.appendChild(s);
+          glyphs.push({ el: s, idx: glyphIdx });
+          glyphIdx += 1;
+        }
+      });
+      const glyphCenter = (glyphIdx - 1) / 2;
+      // Extra tracking at entry: (0.30em − 0.22em) × 62px per gap, spread
+      // symmetrically about the line's optical center (stays centered).
+      const SPREAD_PX = 0.08 * 62;
+
       const tl = gsap.timeline({ paused: true });
-      // Example: tl.from("#title", { opacity: 0, y: -50, duration: 1 }, 0);
+
+      // ── emerge (0.0–2.6): per-word fade_blur, starts 0.30 / 0.40 / 0.50 ──
+      // first glimmer on the 0.5s beat, readable ~2.0s, fully sharp 2.40s
+      const wordEnter = { duration: 1.9, ease: "power2.out" };
+      tl.fromTo(
+        "#word-alliance",
+        { autoAlpha: 0, filter: "blur(14px)" },
+        { autoAlpha: 1, filter: "blur(0px)", ...wordEnter },
+        0.3
+      );
+      tl.fromTo(
+        "#word-technical",
+        { autoAlpha: 0, filter: "blur(14px)" },
+        { autoAlpha: 0.85, filter: "blur(0px)", ...wordEnter },
+        0.4
+      );
+      tl.fromTo(
+        "#word-group",
+        { autoAlpha: 0, filter: "blur(14px)" },
+        { autoAlpha: 0.85, filter: "blur(0px)", ...wordEnter },
+        0.5
+      );
+
+      // tracking settle 0.30em → 0.22em (0.30–2.60s), expressed as per-glyph
+      // x-spread → 0 (transform-safe equivalent of animating letter-spacing;
+      // static CSS letter-spacing 0.22em is the settled ground truth)
+      glyphs.forEach((g) => {
+        tl.fromTo(
+          g.el,
+          { x: SPREAD_PX * (g.idx - glyphCenter) },
+          { x: 0, duration: 2.3, ease: "power3.out" },
+          0.3
+        );
+      });
+
+      // ── hold (2.6–8.8): hold_breath — one slow swell, scale 1 → 1.015 ──
+      tl.fromTo(
+        "#lockup-wrap",
+        { scale: 1 },
+        { scale: 1.015, duration: 6.2, ease: "sine.inOut" },
+        2.6
+      );
+
+      // underline_sweep (4.90–5.80): anticipates the 5.0s beat by 0.1s
+      tl.fromTo(
+        "#underline",
+        { scaleX: 0 },
+        { scaleX: 1, duration: 0.9, ease: "power3.out" },
+        4.9
+      );
+
+      // glow on ALLIANCE (5.0–6.6): accent halo 0.8s out + 0.8s back (yoyo)
+      tl.fromTo(
+        "#word-alliance",
+        { textShadow: "0 0 32px rgba(143, 168, 200, 0)" },
+        {
+          textShadow: "0 0 32px rgba(143, 168, 200, 0.55)",
+          duration: 0.8,
+          ease: "sine.inOut",
+          yoyo: true,
+          repeat: 1,
+        },
+        5.0
+      );
+
+      // ── resolve (8.8–9.9): fade_out of lockup + underline (wrap covers both);
+      //    field, vignette and grain remain to 10.0s exactly ──
+      tl.to("#lockup-wrap", { opacity: 0, duration: 1.1, ease: "power2.in" }, 8.8);
+
+      // ── BGM mix: base 0.55, fade-in 0→0.8s, fade-out 8.6s → silent by 9.9s ──
+      tl.fromTo("#bgm", { volume: 0 }, { volume: 0.55, duration: 0.8, ease: "sine.out" }, 0);
+      tl.to("#bgm", { volume: 0, duration: 1.3, ease: "sine.in" }, 8.6);
+
       window.__timelines["main"] = tl;
+      tl.seek(0);
     </script>
   </body>
 </html>
