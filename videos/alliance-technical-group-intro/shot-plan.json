@@ -8,7 +8,7 @@
   "font": "Montserrat",
   "beats": [0.5, 5.0, 8.8],
   "export": "mp4",
-  "brief": "Over a deep blue-black field, ALLIANCE TECHNICAL GROUP materializes as a single letterspaced all-caps lockup: a cinematic fade_blur entrance whose first glimmer lands by ~0.5s, sharpening as the tracking settles until fully readable by ~2s, then holding with a barely perceptible hold_breath drift while a subtle ambient music bed plays underneath; at ~5.0s the one pattern-interrupt arrives — a hairline rule sweeps beneath the name (underline_sweep) with a faint glow lift on ALLIANCE — and from ~8.8s type and music resolve together in a quiet fade to black. The single dominant motion idea is emergence-into-focus: one continuous blur-to-sharp fade-and-settle; the music is a bed, not a beat-grid driver, so the beats (0.5s / 5.0s / 8.8s, in seconds) are gentle accents only. Decisions resolved autonomously for this headless run, per BRIEF.md and defaults: kinetic-type over logo-reveal (no logo asset exists and the brief mandates a purely typographic dark treatment); 1920x1080 @ 30fps for 10s in English per BRIEF.md; Montserrat from the HF embed list for a deterministic offline render; the name rendered as an all-caps lockup of 'Alliance Technical Group' (BRIEF.md title-cases the message; the user's prose was lowercase); and the subtle BGM bed emitted as an audio asset_need for media-use resolve — kind 'audio' extends the IR's illustrative kind list per this run's dispatch instructions.",
+  "brief": "Over a deep blue-black field, ALLIANCE TECHNICAL GROUP materializes as one letterspaced all-caps line: a cinematic fade_blur entrance (opacity+blur, whisper of per-word stagger) whose first glimmer lands on the 0.5s beat, readable by ~2.0s, letter-spacing settling 0.30em to 0.22em by 2.6s; the lockup then holds with a barely perceptible hold_breath swell while the ambient bed plays low underneath; the single pattern-interrupt lands on the 5.0s beat - a gradient hairline sweeps beneath the name (underline_sweep, anticipated at 4.9s) with a faint glow lift on ALLIANCE - and on the 8.8s beat type, rule, and music resolve together in a quiet fade, resting on the empty dark field at 10.0s exactly. Dominant motion idea: emergence-into-focus, one continuous blur-to-sharp fade-and-settle; the music is a bed, not a beat-grid driver - beats (seconds) are gentle accents only. Part 2 design decisions (headless, autonomous): hand-author the lockup per the kinetic-type module else-path - none of the 18 caption-* catalog blocks cover a 10s single-lockup cinematic emergence (they are word-sequence caption engines; the nearest in mood, caption-editorial-emphasis, would need its entrance/timing wholly replaced), so content.block is null and reuse is applied where blocks genuinely fit: polish blocks vignette (0.25) + grain-overlay (0.05, anti-banding on the near-black field); emphasis on ALLIANCE expressed as weight contrast (600 vs 300) inside the single line, not color; BGM assets/bgm/track.wav is resolved (30.0s WAV landed, first 10s used) and mixed at base volume 0.55 - overriding audio_meta.json's 0.9 default because the user asked for SUBTLE - with a 0.8s fade-in and a fade-out from 8.6s (0.2s ahead of the visual beat so the audio decay lands with the type fade), silent by 9.9s. Part 1 decisions retained: kinetic-type over logo-reveal (no logo asset; purely typographic dark treatment), 1920x1080 @ 30fps for 10.0s in English per BRIEF.md, Montserrat from the HF embed list, title-case source copy 'Alliance Technical Group' rendered uppercase.",
   "asset_needs": [
     {
       "role": "bgm",
@@ -16,10 +16,91 @@
       "query": "subtle ambient minimal music bed, calm premium confident, soft pads, no drums",
       "treatment": "none",
       "usable_length_s": 10,
-      "notes": "Background bed only, mixed low under an unnarrated title piece; ~10s usable length (loop or trim with fades is fine); subtle/ambient/minimal mood; NOT a beat-grid driver, so avoid hard rhythmic hits; gentle fade-out at the tail to land with the closing fade."
+      "notes": "Background bed only, mixed low under an unnarrated title piece; ~10s usable length (loop or trim with fades is fine); subtle/ambient/minimal mood; NOT a beat-grid driver, so avoid hard rhythmic hits; gentle fade-out at the tail to land with the closing fade.",
+      "status": "resolved",
+      "resolved_path": "assets/bgm/track.wav",
+      "resolved_notes": "MusicGen local generation complete: 30.0s mono 16-bit PCM WAV @ 32kHz (12s seed crossfade-looped x3), subtle dark ambient pads, no drums. Only the first 10.0s are used. Mix per content.customize.audio (base 0.55 with fades), overriding audio_meta.json's 0.9 default."
     }
   ],
   "content": {
+    "block": null,
+    "customize": {
+      "build": {
+        "approach": "hand-author",
+        "why_no_caption_block": "The 18 caption-* blocks are word-sequence caption engines (slam / glitch / karaoke / decode...); none cover a 10s single-lockup blur-to-sharp emergence with tracking settle, a ~6s breathing hold, and a synchronized audio+visual resolve. Nearest-mood caption-editorial-emphasis would need its entrance, timing, and motion wholly replaced - costlier and riskier than the module's compact hand-author recipe.",
+        "recipe": "Per kinetic-type module: one full-duration .clip (data-start 0, data-duration 10); one flex-centered .group; words as spans; explicit gsap.fromTo() entrances per the motion spec; seek-safe autoAlpha only on inner non-clip elements; single paused timeline registered on window.__timelines; GSAP default adapter; deterministic only. Honor references/builder-contract.md.",
+        "reference_impl": "prototype v0-text-motion-demo + pipeline-demo",
+        "rules": ["fade_blur", "word_reveal (micro-stagger, 0.1s each)", "hold_breath", "underline_sweep", "glow", "fade_out"]
+      },
+      "polish_blocks": [
+        { "block": "vignette", "customize": { "intensity": 0.25 }, "note": "style spec allows 'subtle vignette'; keep barely-there" },
+        { "block": "grain-overlay", "customize": { "intensity": 0.05 }, "note": "very low film grain to prevent gradient banding on the near-black field in mp4; drop if npm run check flags noise/contrast" }
+      ],
+      "layout": {
+        "canvas_px": [1920, 1080],
+        "lockup_anchor": "centered at x 50%, y 47% (optical center, ~507px from top)",
+        "safe_margin_x_px": 130,
+        "underline_offset_below_type_px": 26
+      },
+      "lockup": {
+        "text_rendered": "ALLIANCE TECHNICAL GROUP",
+        "lines": 1,
+        "font": "Montserrat",
+        "case": "uppercase",
+        "font_size_px": 62,
+        "fit_rule": "Builder may adjust size +/-10% so the SETTLED lockup width fits <= 1660px safe width; the wider 0.30em entrance state may transiently reach ~1790px but must never clip the 1920px frame",
+        "tracking_em": { "enter": 0.3, "settle": 0.22 },
+        "words": [
+          { "text": "ALLIANCE", "weight": 600, "color": "#EDF1F6", "opacity": 1.0, "emphasis": true },
+          { "text": "TECHNICAL", "weight": 300, "color": "#EDF1F6", "opacity": 0.85 },
+          { "text": "GROUP", "weight": 300, "color": "#EDF1F6", "opacity": 0.85 }
+        ],
+        "hierarchy_note": "Emphasis via weight contrast only (600 vs 300) and full vs 0.85 ink opacity - no color change, single line, one lockup"
+      },
+      "field": {
+        "bg": "#0B0E13",
+        "radial_lift": "radial-gradient(ellipse 62% 48% at 50% 47%, #131A24 0%, rgba(19,26,36,0) 62%) at opacity 0.35 - a barely perceptible depth pool behind the lockup; static (no animation)",
+        "note": "No photos, no stock; the field is color + vignette + grain only"
+      },
+      "underline": {
+        "height_px": 2,
+        "width": "60% of the settled lockup width, horizontally centered under it",
+        "fill": "linear-gradient(90deg, transparent, #8FA8C8 50%, transparent), peak opacity 0.9",
+        "motion": "underline_sweep: scaleX 0 -> 1, transformOrigin left center, start 4.90s, duration 0.90s, ease power3.out (onset anticipates the 5.0s beat by 0.1s; full extension at 5.80s)",
+        "exit": "fades with the lockup in the 8.8s fade_out"
+      },
+      "phases": [
+        {
+          "id": "emerge",
+          "start_s": 0.0,
+          "end_s": 2.6,
+          "design": "Field, vignette, grain visible from frame 0. Lockup entrance: per-word fade_blur (opacity 0->1, blur 14px->0), word starts 0.30 / 0.40 / 0.50s, each 1.9s, ease power2.out - first glimmer perceptible on the 0.5s beat, readable by ~2.0s, fully sharp by 2.40s. Letter-spacing settles 0.30em -> 0.22em over 0.30-2.60s, ease power3.out."
+        },
+        {
+          "id": "hold",
+          "start_s": 2.6,
+          "end_s": 8.8,
+          "design": "hold_breath on the lockup group: scale 1 -> 1.015 over 2.6-8.8s, ease sine.inOut (one slow swell). Pattern-interrupt (the one change) on the 5.0s beat: underline_sweep per customize.underline + faint glow on ALLIANCE - textShadow '0 0 32px rgba(143,168,200,0.55)', 0.8s out + 0.8s back (yoyo), 5.0-6.6s. Legibility hold: sharp and static-readable 2.6-8.8s (6.2s >= 0.3s minimum)."
+        },
+        {
+          "id": "resolve",
+          "start_s": 8.8,
+          "end_s": 10.0,
+          "design": "On the 8.8s beat: fade_out - lockup + underline opacity -> 0 over 8.8-9.9s, ease power2.in. Frame rests on the empty dark field (bg + vignette + grain remain) until 10.0s exactly. Audio is already decaying (started 8.6s) and is silent by 9.9s, so picture and sound land together."
+        }
+      ],
+      "audio": {
+        "role": "bgm",
+        "path": "assets/bgm/track.wav",
+        "use_segment_s": [0, 10],
+        "base_volume": 0.55,
+        "volume_note": "OVERRIDES audio_meta.json's default 0.9 - the user asked for SUBTLE music under an unnarrated title; mix as a low bed",
+        "fade_in": { "start_s": 0.0, "end_s": 0.8, "note": "avoids a hard attack at frame 0; sits under the visual emergence" },
+        "fade_out": { "start_s": 8.6, "silent_by_s": 9.9, "note": "starts 0.2s ahead of the 8.8s visual beat because audio decay reads slower than visual fade - both land together by 9.9s" },
+        "character": "subtle dark ambient pads, no drums, ~70 BPM minor; 30.0s WAV (12s seed crossfade-looped), only the first 10.0s used",
+        "playback": "framework-owned <audio> per the HF contract; deterministic, no autoplay logic"
+      }
+    },
     "scenes": [
       {
         "id": "title",
@@ -28,7 +109,7 @@
         "text": "Alliance Technical Group",
         "emphasis_words": ["Alliance"],
         "emotion": "calm, premium confidence",
-        "motion": "fade_blur entrance with slow letter-spacing settle, first glimmer by ~0.5s, fully readable by ~2s; hold_breath micro-drift through the hold; pattern-interrupt at ~5.0s: underline_sweep hairline beneath the lockup plus a faint glow lift on the emphasis word; fade_out over the final ~1.2s",
+        "motion": "fade_blur entrance: the single all-caps lockup emerges opacity 0->1 + blur 14px->0 with per-word starts at 0.30/0.40/0.50s (1.9s each, power2.out), first glimmer landing on the 0.5s beat, readable by ~2.0s, sharp by 2.4s; letter-spacing settles 0.30em->0.22em over 0.3-2.6s (power3.out); hold_breath scale 1->1.015 across 2.6-8.8s (sine.inOut); pattern-interrupt on the 5.0s beat: underline_sweep - a 2px gradient hairline (transparent -> #8FA8C8 -> transparent, 60% lockup width) scales scaleX 0->1 from 4.90s over 0.9s (power3.out, origin left) - plus faint glow on ALLIANCE (textShadow 0 0 32px rgba(143,168,200,0.55), 0.8s yoyo, 5.0-6.6s); resolve on the 8.8s beat: fade_out of lockup + rule over 8.8-9.9s (power2.in), resting on the empty dark field to 10.0s",
         "beats": [0.5, 5.0, 8.8]
       }
     ]
